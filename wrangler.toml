@@ -1,0 +1,5 @@
+name = "gestion-future-api" 
+main = "src/index.ts" 
+compatibility\_date = "2024-01-01" 
+[vars] 
+ENVIRONMENT = "production"
