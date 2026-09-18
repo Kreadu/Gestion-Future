@@ -1,233 +1,256 @@
+/**
+ * TIPOS Y INTERFACES PARA API DE NÓMINA COLOMBIA 2026
+ */
+
+// ============================================
+// INPUT: Datos del Empleado
+// ============================================
 export interface ColombiaEmployeeInput {
-  employeeId: string;
-  firstName: string;
-  lastName: string;
-  taxId: string; // Cédula o NIT
-  baseSalaryMonthly: number;
-  daysWorked: number; // Típicamente 30 días para liquidación mensual
-  overtimeHours?: {
-    extraDiurna?: number;          // +25% (x1.25)
-    extraNocturna?: number;        // +75% (x1.75)
-    extraDiurnaDominical?: number; // +115% (x2.15)
-    extraNocturnaDominical?: number; // +165% (x2.65)
-    recargoNocturno?: number;      // +35% (x0.35)
-    recargoDominicalDiurno?: number; // +90% (x0.90)
-    recargoDominicalNocturno?: number; // +125% (x1.25)
-  };
-  otherTaxableEarnings?: number;
-  otherNonTaxableEarnings?: number;
-  isExempt114_1?: boolean; // Exoneración de Salud (8.5%), SENA (2%) e ICBF (3%)
-  arlRiskLevel?: 1 | 2 | 3 | 4 | 5; // Nivel de riesgo ARL I (0.522%) a V (6.960%)
+  employeeId: string; // ID único del empleado (ej: EMP-001)
+  firstName: string; // Nombre
+  lastName: string; // Apellido
+  taxId: string; // Cédula / NIT (ej: 1098765432)
+  baseSalaryMonthly: number; // Salario base mensual en COP
+  daysWorked: number; // Días trabajados en el período (1-30)
+  extraDiurna: number; // Horas extras diurnas (+25%)
+  extraNocturna: number; // Horas extras nocturnas (+75%)
+  recargoNocturno: number; // Recargo nocturno en horas (+35%)
+  isExempt114_1?: boolean; // Exención Art. 114-1 LFT (opcional)
 }
 
-export interface ColombiaPayrollResult {
-  country: 'Colombia';
-  year: number;
+// ============================================
+// OUTPUT: Resultado de Cálculo de Nómina
+// ============================================
+export interface PayrollResult {
   employeeId: string;
   employeeName: string;
   taxId: string;
+  periodDate: string; // ISO date
   daysWorked: number;
-  
-  // Devengados
-  baseSalaryEarned: number;
-  hourlyRate: number;
-  qualifiesAuxTransporte: boolean;
-  earnedAuxTransporte: number;
-  overtimeTotal: number;
-  overtimeBreakdown: Array&lt;{ type: string; hours: number; rateApplied: number; amount: number }&gt;;
-  otherTaxableEarnings: number;
-  otherNonTaxableEarnings: number;
-  grossEarnings: number; // Total Devengado Bruto
 
-  // IBC (Ingreso Base de Cotización)
-  ibcSecuritySocial: number;
+  // DEVENGOS (Percepciones)
+  baseSalaryEarned: number; // Sueldo básico devengado
+  auxTransporte: number; // Auxilio de transporte
+  extraDiurnaValue: number; // Valor horas extras diurnas
+  extraNocturnaValue: number; // Valor horas extras nocturnas
+  recargoNocturnoValue: number; // Valor recargo nocturno
+  otherBenefits: number; // Otros beneficios
+  grossEarnings: number; // Total devengado
 
-  // Deducciones del Empleado
-  employeeDeductions: {
-    health4pct: number;
-    pension4pct: number;
-    fsp: number; // Fondo de Solidaridad Pensional
-    totalDeductions: number;
-  };
+  // IBC Y APORTES
+  ibc: number; // Ingreso Base de Cotización
+  healthContribution: number; // Aporte salud (4%)
+  pensionContribution: number; // Aporte pensión (4%)
+  totalEmployeeDeductions: number; // Total deducciones empleado
 
-  // Neto a Pagar
-  netPay: number;
+  // NETO
+  netPay: number; // Neto a pagar
 
-  // Cargas Patronales (Aportes y Parafiscales)
-  employerContributions: {
-    pension12pct: number;
-    health8_5pct: number; // \$0 si aplica Art. 114-1 ET
-    arl: number;
-    cajaCompensacion4pct: number;
-    sena2pct: number; // \$0 si aplica Art. 114-1 ET
-    icbf3pct: number; // \$0 si aplica Art. 114-1 ET
-    isExempt114_1: boolean;
-    totalEmployerContributions: number;
-  };
-
-  // Provisiones para Prestaciones Sociales
-  provisions: {
-    cesantias: number;
-    interesesCesantias: number;
-    primaServicios: number;
-    vacaciones: number;
-    totalProvisions: number;
-  };
-
-  // Costo Total Empleador
-  totalEmployerCost: number;
+  // COSTOS EMPLEADOR
+  employerHealthContribution: number; // Aporte salud empleador (8.5%)
+  employerPensionContribution: number; // Aporte pensión empleador (12%)
+  senaContribution: number; // Aporte SENA (0.522%)
+  icbfContribution: number; // Aporte ICBF (4%)
+  provisionsDeduction: number; // Provisión de cesantías, prima, vacaciones
+  totalEmployerCost: number; // Costo total empleador
 }
 
-export class ColombiaPayrollEngine {
-  // Parámetros Oficiales Colombia 2026
-  public static readonly SMMLV_2026 = 1750905.0;
-  public static readonly AUX_TRANSPORTE_2026 = 249095.0;
-  public static readonly MONTHLY_HOURS = 210.0; // 42 horas semanales (Ley 2101)
-
-  // Porcentajes ARL según Nivel de Riesgo
-  public static readonly ARL_RATES: Record<number, number> = {
-    1: 0.00522, // Riesgo I (Financiero / Administrativo)
-    2: 0.01044, // Riesgo II 
-    3: 0.02436, // Riesgo III 
-    4: 0.04350, // Riesgo IV 
-    5: 0.06960 // Riesgo V 
+// ============================================
+// DIAN: Información del Empleador
+// ============================================
+export interface DianEmployerInfo {
+  companyName: string; // Razón social
+  nit: string; // NIT (sin dígito verificador)
+  nitVerifier: string; // Dígito verificador NIT
+  address: string; // Dirección
+  city: string; // Ciudad
+  department: string; // Departamento
+  country: string; // País (ej: CO)
+  email: string; // Email
+  phone?: string; // Teléfono
+  industryCode?: string; // Código CIIU
+  softwareProvider: {
+    nit: string; // NIT del proveedor de software
+    name: string; // Nombre proveedor
+    pin: string; // PIN del software
   };
+}
 
-  public static calculate(input: ColombiaEmployeeInput): ColombiaPayrollResult { 
-    const daysWorked = Math.min(Math.max(input.daysWorked, 0), 30); 
-    const baseSalaryMonthly = input.baseSalaryMonthly; 
-    
-    // 1\. Valor Hora Ordinaria 
-    const hourlyRate = baseSalaryMonthly / this.MONTHLY\_HOURS;
-    
-    // 2\. Salario Proporcional Devengado 
-    const baseSalaryEarned = (baseSalaryMonthly / 30.0) \* daysWorked;
-    
-    // 3\. Auxilio de Transporte (Aplica hasta 2 SMMLV = \\$3.501.810 COP)
-    const qualifiesAuxTransporte = baseSalaryMonthly &lt;= (this.SMMLV\_2026 \* 2.0); 
-    const earnedAuxTransporte = qualifiesAuxTransporte ? (this.AUX\_TRANSPORTE\_2026 / 30.0) \* daysWorked : 0.0; 
-    
-    // 4\. Cálculo de Horas Extras y Recargos 
-    const ot = input.overtimeHours || {};
-    const overtimeBreakdown = [ 
-      { type: 'Extra Diurna (+25%)', hours: ot.extraDiurna || 0, rateApplied: 1.25 }, 
-      { type: 'Extra Nocturna (+75%)', hours: ot.extraNocturna || 0, rateApplied: 1.75 }, 
-      { type: 'Extra Diurna Dominical (+115%)', hours: ot.extraDiurnaDominical || 0, rateApplied: 2.15 }, 
-      { type: 'Extra Nocturna Dominical (+165%)', hours: ot.extraNocturnaDominical || 0, rateApplied: 2.65 },
-      { type: 'Recargo Nocturno (+35%)', hours: ot.recargoNocturno || 0, rateApplied: 0.35 }, 
-      { type: 'Recargo Dominical Diurno (+90%)', hours: ot.recargoDominicalDiurno || 0, rateApplied: 0.90 },
-      { type: 'Recargo Dominical Nocturno (+125%)', hours: ot.recargoDominicalNocturno || 0, rateApplied: 1.25 }
-    ].map(item =&gt; ({
-      type: item.type,
-      hours: item.hours,
-      rateApplied: item.rateApplied,
-      amount: Math.round(item.hours * hourlyRate * item.rateApplied * 100) / 100
-    })).filter(item =&gt; item.hours &gt; 0);
+// ============================================
+// DIAN: Información Adicional del Empleado
+// ============================================
+export interface DianEmployeeExtraInfo {
+  departmentCode: string; // Código DANE del departamento
+  municipalityCode: string; // Código DANE del municipio
+  bank?: string; // Banco para transferencia
+  bankAccountType?: 'Ahorros' | 'Corriente'; // Tipo de cuenta
+  bankAccountNumber?: string; // Número de cuenta
+  contractType:
+    | 'Indefinido'
+    | 'Fijo'
+    | 'Obra o Labor'
+    | 'Aprendizaje'
+    | 'Por Horas';
+  workPosition: string; // Cargo del empleado
+  startDate: string; // Fecha de inicio (ISO)
+  departmentName: string; // Nombre del departamento interno
+  entitlement?: {
+    // Derecho a prestaciones sociales
+    vacationDays?: number;
+    bonusMonths?: number;
+  };
+}
 
-    const overtimeTotal = overtimeBreakdown.reduce((sum, item) =&gt; sum + item.amount, 0);
+// ============================================
+// DIAN: Resultado XML de Nómina Electrónica
+// ============================================
+export interface DianNominaXmlResult {
+  success: boolean;
+  xml: string; // XML completo en formato string
+  cune: string; // CUNE (SHA-384 de referencia)
+  consecutiveNumber: number; // Número consecutivo
+  validationErrors: string[]; // Array de errores de validación
+  generatedAt: string; // ISO timestamp
+  filename: string; // Nombre sugerido del archivo
+  fileSize: number; // Tamaño en bytes
+}
 
-    const otherTaxable = input.otherTaxableEarnings || 0;
-    const otherNonTaxable = input.otherNonTaxableEarnings || 0;
+// ============================================
+// EJEMPLOS DE REQUESTS/RESPONSES
+// ============================================
 
-    // Total Devengado Bruto
-    const grossEarnings = baseSalaryEarned + earnedAuxTransporte + overtimeTotal + otherTaxable + otherNonTaxable;
+export const EXAMPLE_EMPLOYEE_INPUT: ColombiaEmployeeInput = {
+  employeeId: 'EMP-001',
+  firstName: 'Juan',
+  lastName: 'Pérez García',
+  taxId: '1234567890',
+  baseSalaryMonthly: 1750905, // 1 SMMLV 2026
+  daysWorked: 30,
+  extraDiurna: 4,
+  extraNocturna: 2,
+  recargoNocturno: 10,
+  isExempt114_1: false,
+};
 
-    // 5. IBC (Excluye el Auxilio de Transporte)
-    const ibcSecuritySocial = baseSalaryEarned + overtimeTotal + otherTaxable;
+export const EXAMPLE_EMPLOYER_INFO: DianEmployerInfo = {
+  companyName: 'Empresa Ejemplo S.A.S.',
+  nit: '900123456',
+  nitVerifier: '1',
+  address: 'Cra. 10 # 20-30',
+  city: 'Bogotá',
+  department: 'Cundinamarca',
+  country: 'CO',
+  email: 'nominaelectronica@empresa.com',
+  phone: '+57 1 2345678',
+  industryCode: '6209',
+  softwareProvider: {
+    nit: '800123456',
+    name: 'Gestión-Future Software',
+    pin: 'gf-2024-001',
+  },
+};
 
-    // 6. Deducciones del Empleado (Salud 4%, Pensión 4%)
-    const health4pct = Math.round(ibcSecuritySocial * 0.04 * 100) / 100;
-    const pension4pct = Math.round(ibcSecuritySocial * 0.04 * 100) / 100;
+export const EXAMPLE_EMPLOYEE_EXTRA_INFO: DianEmployeeExtraInfo = {
+  departmentCode: '08001', // Bogotá
+  municipalityCode: '08001000', // Bogotá
+  bank: 'Banco Colombiano',
+  bankAccountType: 'Corriente',
+  bankAccountNumber: '123456789',
+  contractType: 'Indefinido',
+  workPosition: 'Desarrollador Senior',
+  startDate: '2023-01-15',
+  departmentName: 'Tecnología',
+  entitlement: {
+    vacationDays: 15,
+    bonusMonths: 2,
+  },
+};
 
-    // Fondo de Solidaridad Pensional (FSP)
-    let fspRate = 0.0;
-    if (ibcSecuritySocial &gt;= (this.SMMLV_2026 * 4.0)) {
-      if (ibcSecuritySocial &lt; (this.SMMLV_2026 * 16.0)) fspRate = 0.01;
-      else if (ibcSecuritySocial &lt; (this.SMMLV_2026 * 17.0)) fspRate = 0.012;
-      else if (ibcSecuritySocial &lt; (this.SMMLV_2026 * 18.0)) fspRate = 0.014;
-      else if (ibcSecuritySocial &lt; (this.SMMLV_2026 * 19.0)) fspRate = 0.016;
-      else if (ibcSecuritySocial &lt; (this.SMMLV_2026 * 20.0)) fspRate = 0.018;
-      else fspRate = 0.02;
-    }
-    const fsp = Math.round(ibcSecuritySocial * fspRate * 100) / 100;
+// ============================================
+// HELPERS Y UTILIDADES
+// ============================================
 
-    const totalDeductions = health4pct + pension4pct + fsp;
+/**
+ * Calcula el dígito verificador del NIT según algoritmo DIAN
+ */
+export function calculateNitVerifier(nit: string): string {
+  const weights = [3, 7, 13, 17, 19, 23, 29, 31, 37];
+  const reversedNit = nit.split('').reverse();
+  let sum = 0;
 
-    // 7. Neto a Pagar al Trabajador
-    const netPay = grossEarnings - totalDeductions;
-
-    // 8. Cargas Patronales
-    const isExempt = input.isExempt114_1 ?? true;
-    const pension12pct = Math.round(ibcSecuritySocial * 0.12 * 100) / 100;
-    const health8_5pct = isExempt ? 0 : Math.round(ibcSecuritySocial * 0.085 * 100) / 100;
-
-    const arlRate = this.ARL_RATES[input.arlRiskLevel || 1];
-    const arl = Math.round(ibcSecuritySocial * arlRate * 100) / 100;
-
-    const cajaCompensacion4pct = Math.round(ibcSecuritySocial * 0.04 * 100) / 100;
-    const sena2pct = isExempt ? 0 : Math.round(ibcSecuritySocial * 0.02 * 100) / 100;
-    const icbf3pct = isExempt ? 0 : Math.round(ibcSecuritySocial * 0.03 * 100) / 100;
-
-    const totalEmployerContributions = pension12pct + health8_5pct + arl + cajaCompensacion4pct + sena2pct + icbf3pct;
-
-    // 9. Provisiones de Prestaciones Sociales
-    const baseCesantiasPrima = ibcSecuritySocial + earnedAuxTransporte;
-    const cesantias = Math.round(baseCesantiasPrima * 0.0833 * 100) / 100;
-    const interesesCesantias = Math.round(cesantias * 0.12 * (daysWorked / 30.0) * 100) / 100;
-    const primaServicios = Math.round(baseCesantiasPrima * 0.0833 * 100) / 100;
-
-    // Vacaciones: Base IBC sin auxilio de transporte
-    const vacaciones = Math.round(ibcSecuritySocial * 0.0417 * 100) / 100;
-
-    const totalProvisions = cesantias + interesesCesantias + primaServicios + vacaciones;
-
-    // Costo Total Empleador
-    const totalEmployerCost = grossEarnings + totalEmployerContributions + totalProvisions;
-
-    return {
-      country: 'Colombia',
-      year: 2026,
-      employeeId: input.employeeId,
-      employeeName: `${input.firstName} ${input.lastName}`,
-      taxId: input.taxId,
-      daysWorked,
-      baseSalaryEarned: Math.round(baseSalaryEarned * 100) / 100,
-      hourlyRate: Math.round(hourlyRate * 100) / 100,
-      qualifiesAuxTransporte,
-      earnedAuxTransporte: Math.round(earnedAuxTransporte * 100) / 100,
-      overtimeTotal,
-      overtimeBreakdown,
-      otherTaxableEarnings: otherTaxable,
-      otherNonTaxableEarnings: otherNonTaxable,
-      grossEarnings: Math.round(grossEarnings * 100) / 100,
-      ibcSecuritySocial: Math.round(ibcSecuritySocial * 100) / 100,
-      employeeDeductions: {
-        health4pct,
-        pension4pct,
-        fsp,
-        totalDeductions: Math.round(totalDeductions * 100) / 100
-      },
-      netPay: Math.round(netPay * 100) / 100,
-      employerContributions: {
-        pension12pct,
-        health8_5pct,
-        arl,
-        cajaCompensacion4pct,
-        sena2pct,
-        icbf3pct,
-        isExempt114_1: isExempt,
-        totalEmployerContributions: Math.round(totalEmployerContributions * 100) / 100
-      },
-      provisions: {
-        cesantias,
-        interesesCesantias,
-        primaServicios,
-        vacaciones,
-        totalProvisions: Math.round(totalProvisions * 100) / 100
-      },
-      totalEmployerCost: Math.round(totalEmployerCost * 100) / 100
-    };
+  for (let i = 0; i < reversedNit.length; i++) {
+    sum += parseInt(reversedNit[i]) * weights[i];
   }
+
+  const remainder = sum % 11;
+  const verifier = remainder === 0 ? '0' : remainder === 1 ? '9' : String(11 - remainder);
+
+  return verifier;
 }
 
-```
+/**
+ * Valida formato de NIT
+ */
+export function validateNit(nit: string): boolean {
+  return /^\d{8,11}$/.test(nit);
+}
+
+/**
+ * Valida formato de cédula de identidad
+ */
+export function validateTaxId(taxId: string): boolean {
+  return /^\d{8,12}$/.test(taxId);
+}
+
+/**
+ * Calcula CUNE (Código Único de Nómina Electrónica)
+ * Basado en SHA-384 del documento
+ */
+export async function calculateCUNE(xmlContent: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(xmlContent);
+  const hashBuffer = await crypto.subtle.digest('SHA-384', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hashHex.substring(0, 40); // Primeros 40 caracteres
+}
+
+/**
+ * Genera fecha en formato ISO
+ */
+export function getCurrentDate(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+/**
+ * Formatea número a moneda COP
+ */
+export function formatCOP(amount: number): string {
+  return new Intl.NumberFormat('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    minimumFractionDigits: 0,
+  }).format(amount);
+}
+
+/**
+ * Valida input de empleado
+ */
+export function validateEmployeeInput(input: ColombiaEmployeeInput): string[] {
+  const errors: string[] = [];
+
+  if (!input.employeeId) errors.push('employeeId es requerido');
+  if (!input.firstName) errors.push('firstName es requerido');
+  if (!input.lastName) errors.push('lastName es requerido');
+  if (!input.taxId) errors.push('taxId es requerido');
+  if (input.baseSalaryMonthly <= 0)
+    errors.push('baseSalaryMonthly debe ser mayor a 0');
+  if (input.daysWorked < 1 || input.daysWorked > 30)
+    errors.push('daysWorked debe estar entre 1 y 30');
+  if (input.extraDiurna < 0) errors.push('extraDiurna no puede ser negativo');
+  if (input.extraNocturna < 0) errors.push('extraNocturna no puede ser negativo');
+  if (input.recargoNocturno < 0)
+    errors.push('recargoNocturno no puede ser negativo');
+
+  return errors;
+}
