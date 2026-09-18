@@ -271,3 +271,44 @@ return (
             </div>
           </div>
                
+          <button
+            type="submit" 
+            disabled={loading} 
+            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all shadow-lg shadow-indigo-600/30"
+          >
+            {loading ? 'Calculando...' : '⚡ Calcular Liquidación de Nómina'}
+          </button>
+         </form> 
+        </div>
+
+        {/\* RESULTADOS / VISTA DE COMPROBANTE \*/}
+        <div className="lg:col-span-7">
+          {payrollResult ? (
+            <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-700/60">
+                <div>
+                 <h3 className="text-lg font-bold text-white">{payrollResult.employeeName}</h3>
+                 <p className="text-xs text-slate-400">C.C. {payrollResult.taxId} | {payrollResult.daysWorked} Días Laborados</p>
+                </div>
+
+                <button
+                  onClick={handleEmitDian} 
+                  disabled={dianStatus.emitted}
+                  className={\`px-4 py-2 rounded-lg text-xs font-bold transition-all ${ 
+                    dianStatus.emitted
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-default'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20'
+
+                    }`}
+                >
+                     {dianStatus.emitted ? '✓ Nómina Transmitida a DIAN' : '🏛️ Transmitir a DIAN (XML)'}
+                 </button>
+               </div>
+
+               {/\* CUNE DIAN BANNER \*/}
+    
+                 
+            
+
+
+            
