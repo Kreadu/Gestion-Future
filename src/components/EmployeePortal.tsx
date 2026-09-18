@@ -46,10 +46,6 @@ export interface Paystub {
 
 /**
  * Datos temporales del empleado.
- *
- * Estos datos son únicamente para desarrollo.
- * Posteriormente serán reemplazados por información
- * obtenida desde Firebase.
  */
 const employee: Employee = {
   id: 'EMP-001',
@@ -65,8 +61,6 @@ const employee: Employee = {
 
 /**
  * Datos temporales de desprendibles.
- *
- * Posteriormente deberán obtenerse desde Firestore.
  */
 const paystubs: Paystub[] = [
   {
@@ -86,10 +80,8 @@ const paystubs: Paystub[] = [
 
     netPay: 1_934_716,
 
-    cune:
-      'cune_9874a65f123bc45d678e90123456789a',
+    cune: 'cune_9874a65f123bc45d678e90123456789a',
   },
-
   {
     id: 'PAY-2026-09-1',
     period: 'Septiembre 2026 (Quincena 1)',
@@ -107,10 +99,8 @@ const paystubs: Paystub[] = [
 
     netPay: 929_964,
 
-    cune:
-      'cune_1234a56b789cd01ef234567890abcdef',
+    cune: 'cune_1234a56b789cd01ef234567890abcdef',
   },
-
   {
     id: 'PAY-2026-08-2',
     period: 'Agosto 2026 (Quincena 2)',
@@ -128,17 +118,14 @@ const paystubs: Paystub[] = [
 
     netPay: 1_898_567,
 
-    cune:
-      'cune_5555b666c777d888e999f00011122233',
+    cune: 'cune_5555b666c777d888e999f00011122233',
   },
 ];
 
 /**
  * Formateador de moneda colombiana.
  */
-const formatCurrency = (
-  value: number
-): string => {
+const formatCurrency = (value: number): string => {
   return new Intl.NumberFormat('es-CO', {
     style: 'currency',
     currency: 'COP',
@@ -149,12 +136,8 @@ const formatCurrency = (
 /**
  * Formateador de fechas.
  */
-const formatDate = (
-  date: string
-): string => {
-  const parsedDate = new Date(
-    `${date}T00:00:00`
-  );
+const formatDate = (date: string): string => {
+  const parsedDate = new Date(`${date}T00:00:00`);
 
   if (Number.isNaN(parsedDate.getTime())) {
     return date;
@@ -171,28 +154,20 @@ const formatDate = (
  * Portal de Autoservicio del Empleado.
  */
 export const EmployeePortal: React.FC = () => {
-  const [selectedPaystubId, setSelectedPaystubId] =
-    useState<string | null>(
-      paystubs[0]?.id ?? null
-    );
+  const [selectedPaystubId, setSelectedPaystubId] = useState<string | null>(
+    paystubs[0]?.id ?? null
+  );
 
   /**
    * Obtiene el desprendible seleccionado.
    */
   const selectedPaystub = useMemo(
-    () =>
-      paystubs.find(
-        (paystub) =>
-          paystub.id === selectedPaystubId
-      ) ?? null,
+    () => paystubs.find((paystub) => paystub.id === selectedPaystubId) ?? null,
     [selectedPaystubId]
   );
 
   /**
    * Imprime el comprobante.
-   *
-   * El navegador permite seleccionar
-   * "Guardar como PDF".
    */
   const handlePrint = (): void => {
     window.print();
@@ -200,51 +175,13 @@ export const EmployeePortal: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 p-4 sm:p-6 font-sans">
-
       {/* =====================================================
           ENCABEZADO
       ====================================================== */}
-
-      <header
-        className="
-          max-w-5xl
-          mx-auto
-          mb-6
-          sm:mb-8
-          flex
-          flex-col
-          md:flex-row
-          md:items-center
-          md:justify-between
-          gap-5
-          bg-slate-800/60
-          border
-          border-slate-700/60
-          p-5
-          sm:p-6
-          rounded-2xl
-        "
-      >
+      <header className="print:hidden max-w-5xl mx-auto mb-6 sm:mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-5 bg-slate-800/60 border border-slate-700/60 p-5 sm:p-6 rounded-2xl">
         <div className="flex items-center gap-4">
-
           {/* Avatar */}
-          <div
-            className="
-              h-12
-              w-12
-              shrink-0
-              rounded-xl
-              bg-indigo-600
-              flex
-              items-center
-              justify-center
-              font-bold
-              text-white
-              text-xl
-              shadow-lg
-              shadow-indigo-500/30
-            "
-          >
+          <div className="h-12 w-12 shrink-0 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-white text-xl shadow-lg shadow-indigo-500/30">
             {employee.fullName
               .split(' ')
               .slice(0, 2)
@@ -257,44 +194,20 @@ export const EmployeePortal: React.FC = () => {
             <h1 className="text-xl font-bold text-white">
               {employee.fullName}
             </h1>
-
             <p className="text-xs text-slate-400 mt-1">
-              C.C. {employee.identification}
-              {' · '}
-              Cargo: {employee.position}
+              C.C. {employee.identification} · Cargo: {employee.position}
             </p>
-
-            <span
-              className="
-                inline-block
-                mt-2
-                bg-emerald-500/20
-                text-emerald-400
-                text-[11px]
-                font-semibold
-                px-2
-                py-0.5
-                rounded
-                border
-                border-emerald-500/30
-              "
-            >
-              {employee.contractType}
-              {' · '}
-              {employee.companyName}
+            <span className="inline-block mt-2 bg-emerald-500/20 text-emerald-400 text-[11px] font-semibold px-2 py-0.5 rounded border border-emerald-500/30">
+              {employee.contractType} · {employee.companyName}
             </span>
           </div>
         </div>
 
         <div className="text-left md:text-right">
-          <span className="text-xs text-slate-400 block">
-            Empresa
-          </span>
-
+          <span className="text-xs text-slate-400 block">Empresa</span>
           <span className="text-sm font-bold text-indigo-400">
             {employee.companyName}
           </span>
-
           <span className="text-[11px] text-slate-500 block mt-1">
             NIT: {employee.companyNit}
           </span>
@@ -304,31 +217,14 @@ export const EmployeePortal: React.FC = () => {
       {/* =====================================================
           CONTENIDO PRINCIPAL
       ====================================================== */}
-
-      <main
-        className="
-          max-w-5xl
-          mx-auto
-          grid
-          grid-cols-1
-          lg:grid-cols-12
-          gap-6
-          lg:gap-8
-        "
-      >
-
-        {/* ===================================================
-            LISTADO DE DESPRENDIBLES
-        ==================================================== */}
-
-        <section className="lg:col-span-5">
-
+      <main className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+        {/* LISTADO DE DESPRENDIBLES */}
+        <section className="print:hidden lg:col-span-5">
           <div className="mb-4">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <span aria-hidden="true">📄</span>
               Mis Desprendibles de Pago
             </h2>
-
             <p className="text-xs text-slate-500 mt-1">
               Consulta tus comprobantes de nómina.
             </p>
@@ -340,47 +236,19 @@ export const EmployeePortal: React.FC = () => {
             aria-label="Desprendibles de pago"
           >
             {paystubs.map((paystub) => {
-
-              const isSelected =
-                selectedPaystubId ===
-                paystub.id;
+              const isSelected = selectedPaystubId === paystub.id;
 
               return (
                 <button
                   key={paystub.id}
                   type="button"
-                  onClick={() =>
-                    setSelectedPaystubId(
-                      paystub.id
-                    )
-                  }
+                  onClick={() => setSelectedPaystubId(paystub.id)}
                   className={`
-                    w-full
-                    text-left
-                    p-4
-                    rounded-xl
-                    border
-                    cursor-pointer
-                    transition-all
-                    focus:outline-none
-                    focus:ring-2
-                    focus:ring-indigo-500
+                    w-full text-left p-4 rounded-xl border cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500
                     ${
                       isSelected
-                        ? `
-                          bg-indigo-600/20
-                          border-indigo-500
-                          text-white
-                          shadow-lg
-                          shadow-indigo-600/10
-                        `
-                        : `
-                          bg-slate-800/40
-                          border-slate-700/60
-                          hover:bg-slate-800
-                          hover:border-slate-600
-                          text-slate-300
-                        `
+                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg shadow-indigo-600/10'
+                        : 'bg-slate-800/40 border-slate-700/60 hover:bg-slate-800 hover:border-slate-600 text-slate-300'
                     }
                   `}
                 >
@@ -388,11 +256,8 @@ export const EmployeePortal: React.FC = () => {
                     <span className="text-xs font-bold text-indigo-400">
                       {paystub.period}
                     </span>
-
                     <span className="text-[11px] text-slate-500 whitespace-nowrap">
-                      {formatDate(
-                        paystub.issueDate
-                      )}
+                      {formatDate(paystub.issueDate)}
                     </span>
                   </div>
 
@@ -401,11 +266,8 @@ export const EmployeePortal: React.FC = () => {
                       <span className="text-[11px] text-slate-400 block">
                         Neto Pagado
                       </span>
-
                       <span className="text-base font-extrabold text-emerald-400">
-                        {formatCurrency(
-                          paystub.netPay
-                        )}
+                        {formatCurrency(paystub.netPay)}
                       </span>
                     </div>
 
@@ -419,54 +281,23 @@ export const EmployeePortal: React.FC = () => {
           </div>
         </section>
 
-        {/* ===================================================
-            DETALLE DEL DESPRENDIBLE
-        ==================================================== */}
-
-        <section className="lg:col-span-7">
-
+        {/* DETALLE DEL DESPRENDIBLE */}
+        <section className="lg:col-span-7 print:col-span-12 print:w-full">
           {selectedPaystub ? (
-            <article
-              className="
-                bg-slate-800/50
-                border
-                border-slate-700/60
-                rounded-2xl
-                p-5
-                sm:p-6
-                space-y-6
-              "
-            >
-
+            <article className="bg-slate-800/50 border border-slate-700/60 rounded-2xl p-5 sm:p-6 space-y-6 print:bg-white print:text-slate-900 print:border-none print:p-0">
               {/* ENCABEZADO DEL RECIBO */}
-
-              <div
-                className="
-                  flex
-                  flex-col
-                  sm:flex-row
-                  sm:items-start
-                  sm:justify-between
-                  gap-4
-                  border-b
-                  border-slate-700/60
-                  pb-4
-                "
-              >
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 border-b border-slate-700/60 print:border-slate-200 pb-4">
                 <div>
-                  <h3 className="text-base font-bold text-white">
+                  <h3 className="text-base font-bold text-white print:text-slate-900">
                     {selectedPaystub.period}
                   </h3>
-
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-slate-400 print:text-slate-600 mt-1">
                     {employee.companyName}
                   </p>
-
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 print:text-slate-500">
                     NIT: {employee.companyNit}
                   </p>
-
-                  <p className="text-xs text-indigo-400 font-medium mt-2">
+                  <p className="text-xs text-indigo-400 print:text-indigo-700 font-medium mt-2">
                     Comprobante de Pago
                   </p>
                 </div>
@@ -474,74 +305,38 @@ export const EmployeePortal: React.FC = () => {
                 <button
                   type="button"
                   onClick={handlePrint}
-                  className="
-                    bg-indigo-600
-                    hover:bg-indigo-500
-                    text-white
-                    text-xs
-                    font-bold
-                    px-3
-                    py-2
-                    rounded-lg
-                    transition-all
-                    shadow-md
-                    shadow-indigo-600/20
-                    flex
-                    items-center
-                    justify-center
-                    gap-1.5
-                    whitespace-nowrap
-                  "
+                  className="print:hidden bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 whitespace-nowrap"
                 >
-                  <span aria-hidden="true">
-                    🖨️
-                  </span>
+                  <span aria-hidden="true">🖨️</span>
                   Imprimir / Descargar PDF
                 </button>
               </div>
 
               {/* DATOS DEL EMPLEADO */}
-
-              <div
-                className="
-                  grid
-                  grid-cols-1
-                  sm:grid-cols-2
-                  gap-4
-                  bg-slate-900/60
-                  p-4
-                  rounded-xl
-                  border
-                  border-slate-700/50
-                  text-xs
-                "
-              >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-900/60 print:bg-slate-50 p-4 rounded-xl border border-slate-700/50 print:border-slate-200 text-xs">
                 <div>
-                  <span className="text-slate-400 block">
+                  <span className="text-slate-400 print:text-slate-500 block">
                     Empleado:
                   </span>
-
-                  <span className="font-bold text-white">
+                  <span className="font-bold text-white print:text-slate-900">
                     {employee.fullName}
                   </span>
                 </div>
 
                 <div>
-                  <span className="text-slate-400 block">
+                  <span className="text-slate-400 print:text-slate-500 block">
                     Identificación:
                   </span>
-
-                  <span className="font-bold text-white">
+                  <span className="font-bold text-white print:text-slate-900">
                     {employee.identification}
                   </span>
                 </div>
 
                 <div>
-                  <span className="text-slate-400 block">
+                  <span className="text-slate-400 print:text-slate-500 block">
                     Banco destino:
                   </span>
-
-                  <span className="font-bold text-white">
+                  <span className="font-bold text-white print:text-slate-900">
                     {employee.bankName
                       ? `${employee.bankName} (*${employee.bankAccountLast4 ?? '----'})`
                       : 'No registrado'}
@@ -549,157 +344,126 @@ export const EmployeePortal: React.FC = () => {
                 </div>
 
                 <div>
-                  <span className="text-slate-400 block">
+                  <span className="text-slate-400 print:text-slate-500 block">
                     Fecha de emisión:
                   </span>
-
-                  <span className="font-bold text-white">
-                    {formatDate(
-                      selectedPaystub.issueDate
-                    )}
+                  <span className="font-bold text-white print:text-slate-900">
+                    {formatDate(selectedPaystub.issueDate)}
                   </span>
                 </div>
               </div>
 
               {/* DEVENGADOS */}
-
               <section>
-                <h4
-                  className="
-                    text-xs
-                    font-bold
-                    text-indigo-400
-                    uppercase
-                    tracking-wider
-                    mb-2
-                  "
-                >
+                <h4 className="text-xs font-bold text-indigo-400 print:text-indigo-800 uppercase tracking-wider mb-2">
                   Percepciones (Devengado)
                 </h4>
 
-                <div className="space-y-1.5 text-xs text-slate-300">
-
-                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800">
+                <div className="space-y-1.5 text-xs text-slate-300 print:text-slate-700">
+                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800 print:border-slate-200">
                     <span>Sueldo Básico</span>
-
                     <span className="font-mono whitespace-nowrap">
-                      {formatCurrency(
-                        selectedPaystub.baseSalary
-                      )}
+                      {formatCurrency(selectedPaystub.baseSalary)}
                     </span>
                   </div>
 
-                  {selectedPaystub.auxTransporte >
-                    0 && (
-                    <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800">
-                      <span>
-                        Auxilio de Transporte
-                      </span>
-
+                  {selectedPaystub.auxTransporte > 0 && (
+                    <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800 print:border-slate-200">
+                      <span>Auxilio de Transporte</span>
                       <span className="font-mono whitespace-nowrap">
-                        {formatCurrency(
-                          selectedPaystub.auxTransporte
-                        )}
+                        {formatCurrency(selectedPaystub.auxTransporte)}
                       </span>
                     </div>
                   )}
 
-                  {selectedPaystub.overtime >
-                    0 && (
-                    <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800">
-                      <span>
-                        Horas Extras y Recargos
-                      </span>
-
+                  {selectedPaystub.overtime > 0 && (
+                    <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800 print:border-slate-200">
+                      <span>Horas Extras y Recargos</span>
                       <span className="font-mono whitespace-nowrap">
-                        {formatCurrency(
-                          selectedPaystub.overtime
-                        )}
+                        {formatCurrency(selectedPaystub.overtime)}
                       </span>
                     </div>
                   )}
 
-                  <div className="flex justify-between gap-4 font-bold text-white pt-2">
-                    <span>
-                      Total Devengado Bruto
-                    </span>
-
+                  <div className="flex justify-between gap-4 font-bold text-white print:text-slate-900 pt-2">
+                    <span>Total Devengado Bruto</span>
                     <span className="font-mono whitespace-nowrap">
-                      {formatCurrency(
-                        selectedPaystub.grossEarnings
-                      )}
+                      {formatCurrency(selectedPaystub.grossEarnings)}
                     </span>
                   </div>
                 </div>
               </section>
 
               {/* DEDUCCIONES */}
-
               <section>
-                <h4
-                  className="
-                    text-xs
-                    font-bold
-                    text-rose-400
-                    uppercase
-                    tracking-wider
-                    mb-2
-                  "
-                >
+                <h4 className="text-xs font-bold text-rose-400 print:text-rose-800 uppercase tracking-wider mb-2">
                   Deducciones de Ley
                 </h4>
 
-                <div className="space-y-1.5 text-xs text-slate-300">
-
-                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800">
-                    <span>
-                      Aporte Salud (4%)
-                    </span>
-
+                <div className="space-y-1.5 text-xs text-slate-300 print:text-slate-700">
+                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800 print:border-slate-200">
+                    <span>Aporte Salud (4%)</span>
                     <span className="font-mono whitespace-nowrap">
-                      -
-                      {formatCurrency(
-                        selectedPaystub.healthDeduction
-                      )}
+                      - {formatCurrency(selectedPaystub.healthDeduction)}
                     </span>
                   </div>
 
-                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800">
-                    <span>
-                      Aporte Pensión (4%)
-                    </span>
-
+                  <div className="flex justify-between gap-4 py-1.5 border-b border-slate-800 print:border-slate-200">
+                    <span>Aporte Pensión (4%)</span>
                     <span className="font-mono whitespace-nowrap">
-                      -
-                      {formatCurrency(
-                        selectedPaystub.pensionDeduction
-                      )}
+                      - {formatCurrency(selectedPaystub.pensionDeduction)}
                     </span>
                   </div>
 
-                  <div className="flex justify-between gap-4 font-bold text-rose-300 pt-2">
-                    <span>
-                      Total Deducciones
-                    </span>
-
+                  <div className="flex justify-between gap-4 font-bold text-rose-300 print:text-rose-700 pt-2">
+                    <span>Total Deducciones</span>
                     <span className="font-mono whitespace-nowrap">
-                      -
-                      {formatCurrency(
-                        selectedPaystub.totalDeductions
-                      )}
+                      - {formatCurrency(selectedPaystub.totalDeductions)}
                     </span>
                   </div>
                 </div>
               </section>
 
-              {/* NETO */}
+              {/* NETO A PAGAR */}
+              <div className="p-4 bg-emerald-950/30 print:bg-emerald-50 border border-emerald-500/30 print:border-emerald-200 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs text-slate-400 print:text-slate-600 block">
+                    Total Neto Pagado
+                  </span>
+                  <span className="text-xl font-black text-emerald-400 print:text-emerald-700">
+                    {formatCurrency(selectedPaystub.netPay)}
+                  </span>
+                </div>
 
-              <div
-                className="
-                  p-4
-                  bg-emerald-950/30
-                  border
-                  border-emerald-500/30
-                  rounded-xl
-                  flex
-                  flex-col
+                <div className="text-right sm:text-right">
+                  <span className="text-[10px] text-slate-500 print:text-slate-400 block uppercase tracking-wider">
+                    Estado
+                  </span>
+                  <span className="text-xs font-semibold text-emerald-400 print:text-emerald-700">
+                    Depositado / Pagado
+                  </span>
+                </div>
+              </div>
+
+              {/* CUNE (Nómina Electrónica DIAN) */}
+              {selectedPaystub.cune && (
+                <div className="pt-2 border-t border-slate-800 print:border-slate-200 text-[10px] text-slate-500 print:text-slate-400 break-all">
+                  <span className="font-bold block text-slate-400 print:text-slate-600 mb-0.5">
+                    CUNE (Código Único de Nómina Electrónica):
+                  </span>
+                  <code className="font-mono bg-slate-900/50 print:bg-slate-100 p-1.5 rounded block text-slate-400 print:text-slate-600">
+                    {selectedPaystub.cune}
+                  </code>
+                </div>
+              )}
+            </article>
+          ) : (
+            <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-8 text-center text-slate-400">
+              Selecciona un comprobante de la lista para ver sus detalles.
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+};
