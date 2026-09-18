@@ -1,4 +1,3 @@
-```ts
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 
@@ -236,4 +235,3 @@ export class FirebaseAuthService {
     return requiredRoles.includes(userRole);
   }
 }
-```
