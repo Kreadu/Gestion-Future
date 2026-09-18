@@ -176,6 +176,62 @@ return (
      <span className="text-xs text-slate-400 mt-1 inline-block">Próximo límite: Día 10 del mes</span>
     </div>
   </div>
-    
-    
- 
+
+    {/\* CONTENIDO DE LA PESTAÑA \*/}
+    {activeTab === 'payroll' &amp;&amp; (
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/\* FORMULARIO DE LIQUIDACIÓN \*/}
+        <div className="lg:col-span-5 bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
+          <h2 className="text-lg font-bold text-white mb-4"&gt;Liquidador Exprés (Colombia 2026)>
+          
+          <form onSubmit={handleCalculatePayroll} className="space-y-4">
+           <div className="grid grid-cols-2 gap-4">
+             <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1"&gt;Nombre>
+              <input
+              type="text"
+              value={form.firstName} onChange={(e) =>; setForm({ ...form, firstName: e.target.value })}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+          <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1">Apellido</label>
+          <input
+            type="text" 
+            value={form.lastName}
+            onChange={(e) =&gt; setForm({ ...form, lastName: e.target.value })}
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+           />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          </div>
+           <label className="block text-xs font-semibold text-slate-300 mb-1">Cédula / Tax ID</label>
+           <input
+             type="text" 
+             value={form.taxId} 
+             onChange={(e) =>; setForm({ ...form, taxId: e.target.value })}
+             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+           />
+          </div>
+          <div>
+           <label className="block text-xs font-semibold text-slate-300 mb-1">Días Laborados</label>
+           <input
+             type="number" 
+             value={form.daysWorked} 
+             onChange={(e) =>; setForm({ ...form, daysWorked: Number(e.target.value) })} 
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+           />
+          </div>
+         <div>
+
+         <div>
+           <label className="block text-xs font-semibold text-slate-300 mb-1"&gt;Salario Mensual Base (COP)>
+           <input
+           type="number" 
+           value={form.baseSalaryMonthly} 
+           onChange={(e) =>; setForm({ ...form, baseSalaryMonthly: Number(e.target.value) })}
+           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+          />
+         </div>
