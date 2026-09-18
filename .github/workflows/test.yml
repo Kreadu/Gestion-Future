@@ -18,20 +18,18 @@ jobs:
       - name: Clonar Repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js (v20)
+      - name: Configurar Node.js (v24)
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '24'
 
       - name: Configurar Python (v3.12)
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # Activa cache si usas requirements.txt
 
       - name: Instalar Dependencias de Node.js
-        run: npm ci
+        run: npm install
 
       - name: Instalar Dependencias de Python
         run: |
@@ -47,7 +45,6 @@ jobs:
       - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
         run: npx ts-node tests/payrollAndDian.test.ts
 
-      # Solo se ejecuta si los pasos anteriores aprueban Y la rama es 'main' en un evento 'push'
       - name: Desplegar a Cloudflare Workers
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: cloudflare/wrangler-action@v3
