@@ -2,8 +2,8 @@ import { PayrollRecord, Employee } from '../types/payroll';
 
 export class BankDisbursementService {
   static generateCSV(payrolls: PayrollRecord[], employeesMap: Map<string, Employee>): string {
-    const headers = ['ID\_EMPLEADO', 'NOMBRE', 'BANCO', 'CUENTA', 'RFC\_NIF', 'MONTO\_NETO\_A\_PAGAR'];
-    const rows = payrolls.map(p =&gt; {
+    const headers = ['ID_EMPLEADO', 'NOMBRE', 'BANCO', 'CUENTA', 'RFC_NIF', 'MONTO_NETO_A_PAGAR'];
+    const rows = payrolls.map(p => {
       const emp = employeesMap.get(p.employeeId);
       return [
         `"${p.employeeId}"`,
