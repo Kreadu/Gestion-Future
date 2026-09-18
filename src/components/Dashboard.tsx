@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 
-// Tipos importados del motor
 interface EmployeePayrollForm {
   employeeId: string;
   firstName: string;
@@ -11,377 +10,696 @@ interface EmployeePayrollForm {
   extraDiurna: number;
   extraNocturna: number;
   recargoNocturno: number;
-  isExempt114\_1: boolean;
+  isExempt114_1: boolean;
 }
 
-export const Dashboard: React.FC = () =>; {
-  // Estado Multi-tenant (Empresas Cliente)
-  const [selectedTenant, setSelectedTenant] = useState('tenant-001');
-  const [activeTab, setActiveTab] = useState<;'payroll' | 'employees' | 'dian'>;('payroll');
+interface PayrollResult {
+  employeeName: string;
+  taxId: string;
+  daysWorked: number;
+  baseSalaryEarned: number;
+  auxTransporte: number;
+  overtimeTotal: number;
+  extraDiurnaVal: number;
+  extraNocturnaVal: number;
+  recargoNocturnoVal: number;
+  grossEarnings: number;
+  ibc: number;
+  health: number;
+  pension: number;
+  totalDeductions: number;
+  netPay: number;
+  employerCost: number;
+}
 
-// Estado del Formulario de Liquidación
-  const [form, setForm] = useState<EmployeePayrollForm&gt;({ 
+export const Dashboard: React.FC = () => {
+  const [selectedTenant, setSelectedTenant] = useState('tenant-001');
+  const [activeTab, setActiveTab] = useState<'payroll' | 'dian'>('payroll');
+  const [loading, setLoading] = useState(false);
+
+  const [form, setForm] = useState<EmployeePayrollForm>({
     employeeId: 'EMP-101',
-    irstName: 'Carlos',
+    firstName: 'Carlos',
     lastName: 'Rodríguez',
     taxId: '1098765432',
-    baseSalaryMonthly: 1750905,// 1 SMMLV 2026 
+    baseSalaryMonthly: 1750905,
     daysWorked: 30,
     extraDiurna: 4,
     extraNocturna: 2,
     recargoNocturno: 10,
-    isExempt114\_1: true
+    isExempt114_1: true,
   });
 
-// Estado de la nómina calculada y estado DIAN
-  const [payrollResult, setPayrollResult] = useState<any | null>(null);
-  const [dianStatus, setDianStatus] = useState<;{ emitted: boolean; cune?: string }>;({ emitted: false }); 
-  const [loading, setLoading] = useState(false);
+  const [payrollResult, setPayrollResult] = useState<PayrollResult | null>(null);
+  const [dianStatus, setDianStatus] = useState<{ emitted: boolean; cune?: string }>({ emitted: false });
 
-// Cálculo en tiempo real (Simulación frontend con reglas Colombia 2026) 
-  const handleCalculatePayroll = (e: React.FormEvent) =>;{
-   e.preventDefault();
-   setLoading(true);
-  
-  setTimeout(() =>; { 
-    const hourlyRate = form.baseSalaryMonthly / 210; // 42h/semana
-    const baseSalaryEarned = (form.baseSalaryMonthly / 30) \* form.daysWorked;
+  const handleCalculatePayroll = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
 
-    const auxTransporte = form.baseSalaryMonthly <= 3501810 ? (249095 / 30) \* form.daysWorked : 0;
-    const extraDiurnaVal = form.extraDiurna \* hourlyRate \* 1.25;
-    const extraNocturnaVal = form.extraNocturna \* hourlyRate \* 1.75;
-    const recargoNocturnoVal = form.recargoNocturno \* hourlyRate \* 0.35;
-    const overtimeTotal = extraDiurnaVal + extraNocturnaVal + recargoNocturnoVal;
-    const grossEarnings = baseSalaryEarned + auxTransporte + overtimeTotal;
-    const ibc = baseSalaryEarned + overtimeTotal;
-    const health = ibc \* 0.04;
-    const pension = ibc \* 0.04;
-    const totalDeductions = health + pension;
+    setTimeout(() => {
+      const hourlyRate = form.baseSalaryMonthly / 210;
+      const baseSalaryEarned = (form.baseSalaryMonthly / 30) * form.daysWorked;
+      const auxTransporte = form.baseSalaryMonthly <= 3501810 ? (249095 / 30) * form.daysWorked : 0;
 
-    const netPay = grossEarnings - totalDeductions;
-    const employerCost = grossEarnings + (ibc \* 0.12) + (ibc \* 0.00522) + (ibc \* 0.04) + (ibc \* 0.225); // Con provisiones
+      const extraDiurnaVal = form.extraDiurna * hourlyRate * 1.25;
+      const extraNocturnaVal = form.extraNocturna * hourlyRate * 1.75;
+      const recargoNocturnoVal = form.recargoNocturno * hourlyRate * 0.35;
+      const overtimeTotal = extraDiurnaVal + extraNocturnaVal + recargoNocturnoVal;
 
-    setPayrollResult({ 
-      employeeName: \`${form.firstName} ${form.lastName}\`, 
-      taxId: form.taxId,
-      daysWorked: form.daysWorked,
-      baseSalaryEarned, 
-      auxTransporte, 
-      overtimeTotal,
-      grossEarnings,
-      ibc, 
-      health, 
-      pension,
-      totalDeductions,
-      netPay,
-      employerCost
-    });
-    
-    setDianStatus({ emitted: false });
-    setLoading(false);
-  }, 400);
-};
-// Simulación de emisión a la DIAN 
- const handleEmitDian = () =>; { 
- if (!payrollResult) return; 
- const fakeCune = 'cune\_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
- setDianStatus({ emitted: true, cune: fakeCune });
-};
-return ( 
-  <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">;
-  {/* HEADER / NAVBAR */} 
-  <header className="border-b border-slate-800 bg-slate-950 px-6 py-4 flex items-center justify-between">
-   <div className="flex items-center gap-3">
-    <div className="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30">
-     KF 
-   </div>
-   <div> 
-     <h1 className="text-lg font-bold tracking-wide text-white"&gt;Kreadu Gestión-Future>
-     <p className="text-xs text-slate-400">Plataforma de Outsourcing de RRHH &amp; Nómina Electrónica</p>
-   </div>
-  </div>
+      const grossEarnings = baseSalaryEarned + auxTransporte + overtimeTotal;
+      const ibc = baseSalaryEarned + overtimeTotal;
+      const health = ibc * 0.04;
+      const pension = ibc * 0.04;
+      const totalDeductions = health + pension;
 
-  {/\* SELECTOR MULTI-TENANT \*/}
-  <div className="flex items-center gap-4">
-    <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
-      <span className="text-xs font-semibold text-slate-400">Empresa Cliente:</span> 
-      <select
-        value={selectedTenant}
-        onChange={(e) =>; setSelectedTenant(e.target.value)}
-        className="bg-transparent text-sm font-medium text-indigo-400 focus:outline-none cursor-pointer"
-   >
-     <option value="tenant-001" className="bg-slate-900 text-white">Empresa Alfa S.A.S. (NIT 900.123.456)</option>
-     <option value="tenant-002" className="bg-slate-900 text-white">Tech Solutions Ltda. (NIT 800.987.654)</option>
-     <option value="tenant-003" className="bg-slate-900 text-white">Comercializadora Beta (NIT 901.555.444)</option>
-    </select>
-   </div>
+      const netPay = grossEarnings - totalDeductions;
+      const employerCost =
+        grossEarnings +
+        ibc * 0.12 + // AFP
+        ibc * 0.00522 + // SENA
+        ibc * 0.04 + // ICBF
+        ibc * 0.225; // Provisiones
 
-   <div className="h-8 w-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">
-    AD
-   </div>
-  </div>
- </header>
+      setPayrollResult({
+        employeeName: `${form.firstName} ${form.lastName}`,
+        taxId: form.taxId,
+        daysWorked: form.daysWorked,
+        baseSalaryEarned,
+        auxTransporte,
+        overtimeTotal,
+        extraDiurnaVal,
+        extraNocturnaVal,
+        recargoNocturnoVal,
+        grossEarnings,
+        ibc,
+        health,
+        pension,
+        totalDeductions,
+        netPay,
+        employerCost,
+      });
 
- {/* DASHBOARD BODY */}
- <div className="flex-1 flex">
-   {/\* SIDEBAR \*/}
-   <aside className="w-64 border-r border-slate-800 bg-slate-950 p-4 flex flex-col gap-2">
-    <button
-    onClick={() =>; setActiveTab('payroll')}
-    className={\`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-all ${
-      activeTab === 'payroll'
-       ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30'
-       : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-    }\`}
-   >
-    📊 Liquidador de Nómina
-   </button>
-   <button
-     onClick={() =>; setActiveTab('dian')}
-     className={\`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-all ${
-       activeTab === 'dian'
-        ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30'
-        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-     }\`}
-    >
-     🏛️ Nómina Electrónica DIAN
-    </button>
-  </aside>
-  
-  {/* MAIN CONTENT AREA */}
-  <main className="flex-1 p-8 overflow-y-auto">
-    {/* KPI CARDS */}
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-     <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5">
-       <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Empleados Activos</span>
-       <p className="text-2xl font-extrabold text-white mt-1">42</p>
-       <span className="text-xs text-emerald-400 mt-1 inline-block">100% Contratos Vigentes</span>
-    </div>
-    
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5"> 
-     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Salario Mínimo 2026</span>
-     <p className="text-2xl font-extrabold text-indigo-400 mt-1"> \$1.750.905 COP</p> 
-     <span className="text-xs text-slate-400 mt-1 inline-block"> Aux. Transp: \$249.095</span>
-    </div>
-    
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5">
-     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Jornada Ordinaria</span>
-     <p className="text-2xl font-extrabold text-white mt-1">42 hrs / sem</p>
-     <span className="text-xs text-slate-400 mt-1 inline-block">210 Horas Mensuales (Ley 2101)</span> 
-    </div>
-    
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5">
-     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Estado Transmisión DIAN</span>
-     <p className="text-2xl font-extrabold text-emerald-400 mt-1">Al día</p>
-     <span className="text-xs text-slate-400 mt-1 inline-block">Próximo límite: Día 10 del mes</span>
-    </div>
-  </div>
+      setDianStatus({ emitted: false });
+      setLoading(false);
+    }, 400);
+  };
 
-    {/\* CONTENIDO DE LA PESTAÑA \*/}
-    {activeTab === 'payroll' &amp;&amp; (
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/\* FORMULARIO DE LIQUIDACIÓN \*/}
-        <div className="lg:col-span-5 bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
-          <h2 className="text-lg font-bold text-white mb-4"&gt;Liquidador Exprés (Colombia 2026)>
-          
-          <form onSubmit={handleCalculatePayroll} className="space-y-4">
-           <div className="grid grid-cols-2 gap-4">
-             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1"&gt;Nombre>
-              <input
-              type="text"
-              value={form.firstName} onChange={(e) =>; setForm({ ...form, firstName: e.target.value })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-            />
-          </div>
-          <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Apellido</label>
-          <input
-            type="text" 
-            value={form.lastName}
-            onChange={(e) =&gt; setForm({ ...form, lastName: e.target.value })}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-           />
-          </div>
-        </div>
+  const handleEmitDian = () => {
+    if (!payrollResult) return;
+    const fakeCune = 'cune_' + Math.random().toString(36).substring(2, 15);
+    setDianStatus({ emitted: true, cune: fakeCune });
+  };
 
-        <div className="grid grid-cols-2 gap-4">
-          </div>
-           <label className="block text-xs font-semibold text-slate-300 mb-1">Cédula / Tax ID</label>
-           <input
-             type="text" 
-             value={form.taxId} 
-             onChange={(e) =>; setForm({ ...form, taxId: e.target.value })}
-             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-           />
-          </div>
-          <div>
-           <label className="block text-xs font-semibold text-slate-300 mb-1">Días Laborados</label>
-           <input
-             type="number" 
-             value={form.daysWorked} 
-             onChange={(e) =>; setForm({ ...form, daysWorked: Number(e.target.value) })} 
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-           />
-          </div>
-         <div>
+  const tenantOptions = [
+    { id: 'tenant-001', name: 'Empresa Alfa S.A.S.', nit: '900.123.456' },
+    { id: 'tenant-002', name: 'Tech Solutions Ltda.', nit: '800.987.654' },
+    { id: 'tenant-003', name: 'Comercializadora Beta', nit: '901.555.444' },
+  ];
 
-         <div>
-           <label className="block text-xs font-semibold text-slate-300 mb-1"&gt;Salario Mensual Base (COP)>
-           <input
-           type="number" 
-           value={form.baseSalaryMonthly} 
-           onChange={(e) =>; setForm({ ...form, baseSalaryMonthly: Number(e.target.value) })}
-           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-          />
-         </div>
-         
-         {/* NOVEDADES / HORAS EXTRAS */}
-         <div className="pt-2 border-t border-slate-700/50">
-          <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider block mb-2">
-            Horas Extras &amp; Recargos
-          </span>
-          <div className="grid grid-cols-3 gap-3">
-            </div>
-            <label className="block text-[11px] text-slate-400">Extra Diurna (+25%)</label>
-            <input
-              type="number"
-              value={form.extraDiurna}
-              onChange={(e) =>; setForm({ ...form, extraDiurna: Number(e.target.value) })}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
-            />
-           </div>
-           <div>
-             <label className="block text-[11px] text-slate-400">Extra Noct. (+75%)</label>
-             <input
-               type="number"
-               value={form.extraNocturna} 
-               onChange={(e) =&gt; setForm({ ...form, extraNocturna: Number(e.target.value) })} 
-               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
-              />
-            </div>
-            <div>
-             <label className="block text-[11px] text-slate-400">Rec. Noct. (+35%)</label>
-             <input
-               type="number" 
-               value={form.recargoNocturno} 
-               onChange={(e) =&gt; setForm({ ...form, recargoNocturno: Number(e.target.value) })}
-               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
-             />
-            </div>
-          </div>
-               
-          <button
-            type="submit" 
-            disabled={loading} 
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all shadow-lg shadow-indigo-600/30"
+  return (
+    <div style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: '#e2e8f0', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif' }}>
+      {/* HEADER */}
+      <header
+        style={{
+          borderBottom: '1px solid #1e293b',
+          backgroundColor: '#020617',
+          padding: '1rem 1.5rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div
+            style={{
+              height: '36px',
+              width: '36px',
+              borderRadius: '0.5rem',
+              backgroundColor: '#4f46e5',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '14px',
+            }}
           >
-            {loading ? 'Calculando...' : '⚡ Calcular Liquidación de Nómina'}
-          </button>
-         </form> 
+            KF
+          </div>
+          <div>
+            <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0', color: 'white' }}>
+              Kreadu Gestión-Future
+            </h1>
+            <p style={{ fontSize: '12px', color: '#94a3b8', margin: '0.25rem 0 0 0' }}>
+              Plataforma de Outsourcing de RRHH & Nómina Electrónica
+            </p>
+          </div>
         </div>
 
-        {/* RESULTADOS / VISTA DE COMPROBANTE */}
-        <div className="lg:col-span-7">
-          {payrollResult ? (
-            <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-700/60">
-                <div>
-                 <h3 className="text-lg font-bold text-white">{payrollResult.employeeName}</h3>
-                 <p className="text-xs text-slate-400">C.C. {payrollResult.taxId} | {payrollResult.daysWorked} Días Laborados</p>
-                </div>
-
-                <button
-                  onClick={handleEmitDian} 
-                  disabled={dianStatus.emitted}
-                  className={\`px-4 py-2 rounded-lg text-xs font-bold transition-all ${ 
-                    dianStatus.emitted
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-default'
-                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20'
-
-                    }`}
-                >
-                     {dianStatus.emitted ? '✓ Nómina Transmitida a DIAN' : '🏛️ Transmitir a DIAN (XML)'}
-                 </button>
-               </div>
-
-               {/* CUNE DIAN BANNER */}
-               {dianStatus.emitted &amp;&amp; (
-                 <div className="mt-4 p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-lg">
-                   <span className="text-xs font-bold text-emerald-400 block"&gt;CUNE Generado (SHA-384):</span>
-                   <code className="text-[11px] text-slate-300 break-all font-mono">{dianStatus.cune}</code>
-                 </div>
-              )}
-
-               {/* DESGLOSE */}
-               <div className="grid grid-cols-2 gap-6 mt-6">
-                 {/\* DEVENGADOS \*/}
-                  <div className="space-y-2">
-                    <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider block">
-                      Percepciones / Devengado
-                    </span>
-                    <div className="flex justify-between text-xs text-slate-300">
-                      <span>Sueldo Básico</span>
-                      <span>\${payrollResult.baseSalaryEarned.toLocaleString('es-CO')}</span>
-                    </div>
-                    <div className="flex justify-between text-xs text-slate-300">
-                      <span>Auxilio de Transporte</span>
-                      <span>\${payrollResult.auxTransporte.toLocaleString('es-CO')}</span>
-                    </div>
-                    <div className="flex justify-between text-xs text-slate-300">
-                      <span>Total Devengado</span>
-                      <span>\${payrollResult.grossEarnings.toLocaleString('es-CO')}</span>
-                    </div>
-                  </div>
-                 
-                {/* DEDUCCIONES */}
-                <div className="space-y-2">   
-                  <span className="text-xs font-bold text-rose-400 uppercase tracking-wider block">
-                    Deducciones Trabajador
-                  </span>
-                  <div className="flex justify-between text-xs text-slate-300">
-                    <span>Salud (4%)</span>
-                    <span>\${payrollResult.health.toLocaleString('es-CO')}</span>
-                  </div>
-                   <div className="flex justify-between text-xs text-slate-300">
-                    <span>Pensión (4%)</span>
-                    <span>\${payrollResult.pension.toLocaleString('es-CO')}</span>
-                  </div>
-                  <div className="flex justify-between text-sm font-bold text-rose-300 pt-2 border-t border-slate-700">
-                    <span>Total Deducciones</span>
-                    <span>-\${payrollResult.totalDeductions.toLocaleString('es-CO')}</span>
-                  </div>
-                 </div>
-                </div>
-    
-                {/* NETO FINAL */}
-                <div className="mt-6 p-4 bg-slate-900 border border-slate-700/80 rounded-xl flex items-center justify-between">
-                  </div>
-                  <span className="text-xs text-slate-400 font-semibold block">Neto a Pagar al Empleado</span>
-                  <span className="text-2xl font-black text-emerald-400">
-                    \${payrollResult.netPay.toLocaleString('es-CO')} COP
-                   </span>
-                </div>
-                <div className="text-right">
-                <span className="text-xs text-slate-400 block">Costo Total Empleador</span>
-                <span className="text-sm font-bold text-slate-200">
-                  \${payrollResult.employerCost.toLocaleString('es-CO')} COP
-                </span>
-               </div>
-             </div>
-            ) : (
-              <div className="h-full border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center p-12 text-center text-slate-500">
-               <div>
-                 <p className="text-base font-semibold">Sin liquidación calculada</p>
-                 <p className="text-xs text-slate-600 mt-1"&gt;Completa los datos a la izquierda para simular el pago y la emisión DIAN.</p>
-              </div>
-             </div>
-            )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              backgroundColor: '#1e293b',
+              border: '1px solid #334155',
+              borderRadius: '0.5rem',
+              padding: '0.375rem 0.75rem',
+            }}
+          >
+            <span style={{ fontSize: '12px', fontWeight: '600', color: '#94a3b8' }}>Empresa Cliente:</span>
+            <select
+              value={selectedTenant}
+              onChange={(e) => setSelectedTenant(e.target.value)}
+              style={{
+                backgroundColor: 'transparent',
+                fontSize: '14px',
+                fontWeight: '500',
+                color: '#818cf8',
+                border: 'none',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              {tenantOptions.map((opt) => (
+                <option key={opt.id} value={opt.id} style={{ backgroundColor: '#1e293b', color: 'white' }}>
+                  {opt.name} (NIT {opt.nit})
+                </option>
+              ))}
+            </select>
           </div>
-         </div>
-       )}
-     </main>
+
+          <div
+            style={{
+              height: '32px',
+              width: '32px',
+              borderRadius: '50%',
+              backgroundColor: '#1e293b',
+              border: '1px solid #334155',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              color: '#cbd5e1',
+            }}
+          >
+            AD
+          </div>
+        </div>
+      </header>
+
+      {/* MAIN CONTENT */}
+      <div style={{ display: 'flex', flex: 1 }}>
+        {/* SIDEBAR */}
+        <aside
+          style={{
+            width: '256px',
+            borderRight: '1px solid #1e293b',
+            backgroundColor: '#020617',
+            padding: '1rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+          }}
+        >
+          <button
+            onClick={() => setActiveTab('payroll')}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              padding: '0.75rem 1rem',
+              borderRadius: '0.5rem',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'all 0.3s',
+              border: activeTab === 'payroll' ? '1px solid rgba(99, 102, 241, 0.3)' : 'none',
+              backgroundColor: activeTab === 'payroll' ? 'rgba(79, 70, 229, 0.2)' : 'transparent',
+              color: activeTab === 'payroll' ? '#818cf8' : '#94a3b8',
+              cursor: 'pointer',
+            }}
+          >
+            📊 Liquidador de Nómina
+          </button>
+          <button
+            onClick={() => setActiveTab('dian')}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              padding: '0.75rem 1rem',
+              borderRadius: '0.5rem',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'all 0.3s',
+              border: activeTab === 'dian' ? '1px solid rgba(99, 102, 241, 0.3)' : 'none',
+              backgroundColor: activeTab === 'dian' ? 'rgba(79, 70, 229, 0.2)' : 'transparent',
+              color: activeTab === 'dian' ? '#818cf8' : '#94a3b8',
+              cursor: 'pointer',
+            }}
+          >
+            🏛️ Nómina Electrónica DIAN
+          </button>
+        </aside>
+
+        {/* MAIN AREA */}
+        <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+          {/* KPI CARDS */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '1.5rem',
+              marginBottom: '2rem',
+            }}
+          >
+            <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: '0.75rem', padding: '1.25rem' }}>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Empleados Activos
+              </span>
+              <p style={{ fontSize: '28px', fontWeight: '900', color: 'white', margin: '0.5rem 0 0 0' }}>
+                42
+              </p>
+              <span style={{ fontSize: '11px', color: '#4ade80', marginTop: '0.5rem', display: 'inline-block' }}>
+                100% Contratos Vigentes
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: '0.75rem', padding: '1.25rem' }}>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Salario Mínimo 2026
+              </span>
+              <p style={{ fontSize: '28px', fontWeight: '900', color: '#818cf8', margin: '0.5rem 0 0 0' }}>
+                $1.750.905 COP
+              </p>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginTop: '0.5rem', display: 'inline-block' }}>
+                Aux. Transp: $249.095
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: '0.75rem', padding: '1.25rem' }}>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Jornada Ordinaria
+              </span>
+              <p style={{ fontSize: '28px', fontWeight: '900', color: 'white', margin: '0.5rem 0 0 0' }}>
+                42 hrs / sem
+              </p>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginTop: '0.5rem', display: 'inline-block' }}>
+                210 Horas Mensuales (Ley 2101)
+              </span>
+            </div>
+
+            <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(71, 85, 105, 0.5)', borderRadius: '0.75rem', padding: '1.25rem' }}>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Estado Transmisión DIAN
+              </span>
+              <p style={{ fontSize: '28px', fontWeight: '900', color: '#4ade80', margin: '0.5rem 0 0 0' }}>
+                Al día
+              </p>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginTop: '0.5rem', display: 'inline-block' }}>
+                Próximo límite: Día 10 del mes
+              </span>
+            </div>
+          </div>
+
+          {/* PAYROLL TAB CONTENT */}
+          {activeTab === 'payroll' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+              {/* FORM */}
+              <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(71, 85, 105, 0.4)', borderRadius: '0.75rem', padding: '1.5rem' }}>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: 'white', marginBottom: '1rem' }}>
+                  Liquidador Exprés (Colombia 2026)
+                </h2>
+
+                <form onSubmit={handleCalculatePayroll} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {/* NOMBRE Y APELLIDO */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                        Nombre
+                      </label>
+                      <input
+                        type="text"
+                        value={form.firstName}
+                        onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                        style={{
+                          width: '100%',
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: '0.5rem',
+                          padding: '0.5rem 0.75rem',
+                          fontSize: '14px',
+                          color: 'white',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                        Apellido
+                      </label>
+                      <input
+                        type="text"
+                        value={form.lastName}
+                        onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                        style={{
+                          width: '100%',
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: '0.5rem',
+                          padding: '0.5rem 0.75rem',
+                          fontSize: '14px',
+                          color: 'white',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* CEDULA Y SALARIO */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                        Cédula / Tax ID
+                      </label>
+                      <input
+                        type="text"
+                        value={form.taxId}
+                        onChange={(e) => setForm({ ...form, taxId: e.target.value })}
+                        style={{
+                          width: '100%',
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: '0.5rem',
+                          padding: '0.5rem 0.75rem',
+                          fontSize: '14px',
+                          color: 'white',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                        Salario Mensual Base (COP)
+                      </label>
+                      <input
+                        type="number"
+                        value={form.baseSalaryMonthly}
+                        onChange={(e) => setForm({ ...form, baseSalaryMonthly: Number(e.target.value) })}
+                        style={{
+                          width: '100%',
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: '0.5rem',
+                          padding: '0.5rem 0.75rem',
+                          fontSize: '14px',
+                          color: 'white',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* DIAS TRABAJADOS */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                      Días Laborados
+                    </label>
+                    <input
+                      type="number"
+                      value={form.daysWorked}
+                      onChange={(e) => setForm({ ...form, daysWorked: Number(e.target.value) })}
+                      style={{
+                        width: '100%',
+                        backgroundColor: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: '0.5rem',
+                        padding: '0.5rem 0.75rem',
+                        fontSize: '14px',
+                        color: 'white',
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+
+                  {/* HORAS EXTRAS */}
+                  <div style={{ paddingTop: '0.5rem', borderTop: '1px solid rgba(71, 85, 105, 0.5)' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.5rem' }}>
+                      Horas Extras & Recargos
+                    </span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '0.25rem' }}>
+                          Extra Diurna (+25%)
+                        </label>
+                        <input
+                          type="number"
+                          value={form.extraDiurna}
+                          onChange={(e) => setForm({ ...form, extraDiurna: Number(e.target.value) })}
+                          style={{
+                            width: '100%',
+                            backgroundColor: '#0f172a',
+                            border: '1px solid #334155',
+                            borderRadius: '0.5rem',
+                            padding: '0.375rem 0.5rem',
+                            fontSize: '13px',
+                            color: 'white',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '0.25rem' }}>
+                          Extra Noct. (+75%)
+                        </label>
+                        <input
+                          type="number"
+                          value={form.extraNocturna}
+                          onChange={(e) => setForm({ ...form, extraNocturna: Number(e.target.value) })}
+                          style={{
+                            width: '100%',
+                            backgroundColor: '#0f172a',
+                            border: '1px solid #334155',
+                            borderRadius: '0.5rem',
+                            padding: '0.375rem 0.5rem',
+                            fontSize: '13px',
+                            color: 'white',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '0.25rem' }}>
+                          Rec. Noct. (+35%)
+                        </label>
+                        <input
+                          type="number"
+                          value={form.recargoNocturno}
+                          onChange={(e) => setForm({ ...form, recargoNocturno: Number(e.target.value) })}
+                          style={{
+                            width: '100%',
+                            backgroundColor: '#0f172a',
+                            border: '1px solid #334155',
+                            borderRadius: '0.5rem',
+                            padding: '0.375rem 0.5rem',
+                            fontSize: '13px',
+                            color: 'white',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SUBMIT BUTTON */}
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    style={{
+                      width: '100%',
+                      backgroundColor: loading ? '#4f46e5' : '#4f46e5',
+                      color: 'white',
+                      fontWeight: 'bold',
+                      padding: '0.625rem',
+                      borderRadius: '0.5rem',
+                      fontSize: '14px',
+                      transition: 'all 0.3s',
+                      cursor: loading ? 'not-allowed' : 'pointer',
+                      border: 'none',
+                      opacity: loading ? 0.8 : 1,
+                    }}
+                  >
+                    {loading ? '⏳ Calculando...' : '⚡ Calcular Liquidación de Nómina'}
+                  </button>
+                </form>
+              </div>
+
+              {/* RESULTS */}
+              <div>
+                {payrollResult ? (
+                  <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(71, 85, 105, 0.4)', borderRadius: '0.75rem', padding: '1.5rem' }}>
+                    <div style={{ paddingBottom: '1rem', borderBottom: '1px solid rgba(71, 85, 105, 0.4)', marginBottom: '1.5rem' }}>
+                      <div>
+                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'white', margin: '0 0 0.25rem 0' }}>
+                          {payrollResult.employeeName}
+                        </h3>
+                        <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>
+                          C.C. {payrollResult.taxId} | {payrollResult.daysWorked} Días Laborados
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={handleEmitDian}
+                        disabled={dianStatus.emitted}
+                        style={{
+                          marginTop: '0.75rem',
+                          paddingLeft: '1rem',
+                          paddingRight: '1rem',
+                          paddingTop: '0.5rem',
+                          paddingBottom: '0.5rem',
+                          borderRadius: '0.5rem',
+                          fontSize: '12px',
+                          fontWeight: 'bold',
+                          transition: 'all 0.3s',
+                          border: dianStatus.emitted ? '1px solid rgba(16, 185, 129, 0.3)' : 'none',
+                          backgroundColor: dianStatus.emitted ? 'rgba(16, 185, 129, 0.2)' : '#10b981',
+                          color: dianStatus.emitted ? '#4ade80' : 'white',
+                          cursor: dianStatus.emitted ? 'default' : 'pointer',
+                        }}
+                      >
+                        {dianStatus.emitted ? '✓ Nómina Transmitida a DIAN' : '🏛️ Transmitir a DIAN (XML)'}
+                      </button>
+                    </div>
+
+                    {dianStatus.emitted && (
+                      <div style={{ marginBottom: '1.5rem', padding: '0.75rem', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '0.5rem' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#4ade80', display: 'block' }}>
+                          CUNE Generado (SHA-384):
+                        </span>
+                        <code style={{ fontSize: '11px', color: '#cbd5e1', wordBreak: 'break-all', fontFamily: 'monospace', display: 'block', marginTop: '0.25rem' }}>
+                          {dianStatus.cune}
+                        </code>
+                      </div>
+                    )}
+
+                    {/* DESGLOSE */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                      {/* DEVENGADOS */}
+                      <div>
+                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.75rem' }}>
+                          Percepciones / Devengado
+                        </span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                          <span>Sueldo Básico</span>
+                          <span>${payrollResult.baseSalaryEarned.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                          <span>Auxilio de Transporte</span>
+                          <span>${payrollResult.auxTransporte.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                          <span>Extra Diurna</span>
+                          <span>${payrollResult.extraDiurnaVal.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                          <span>Extra Nocturna</span>
+                          <span>${payrollResult.extraNocturnaVal.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1' }}>
+                          <span>Recargo Nocturno</span>
+                          <span>${payrollResult.recargoNocturnoVal.toLocaleString('es-CO')}</span>
+                        </div>
+                      </div>
+
+                      {/* DEDUCCIONES */}
+                      <div>
+                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '0.75rem' }}>
+                          Deducciones Trabajador
+                        </span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                          <span>Salud (4%)</span>
+                          <span>${payrollResult.health.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', marginBottom: '0.75rem' }}>
+                          <span>Pensión (4%)</span>
+                          <span>${payrollResult.pension.toLocaleString('es-CO')}</span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            color: '#fca5a5',
+                            paddingTop: '0.5rem',
+                            borderTop: '1px solid #334155',
+                          }}
+                        >
+                          <span>Total Deducciones</span>
+                          <span>-${payrollResult.totalDeductions.toLocaleString('es-CO')}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* NETO FINAL */}
+                    <div style={{ marginTop: '1.5rem', padding: '1rem', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: '600', display: 'block' }}>
+                        Neto a Pagar al Empleado
+                      </span>
+                      <span style={{ fontSize: '28px', fontWeight: '900', color: '#4ade80', display: 'block', marginTop: '0.5rem' }}>
+                        ${payrollResult.netPay.toLocaleString('es-CO')} COP
+                      </span>
+                    </div>
+
+                    {/* COSTO EMPLEADOR */}
+                    <div style={{ marginTop: '1rem', textAlign: 'right', paddingRight: '1rem' }}>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', display: 'block' }}>
+                        Costo Total Empleador (con provisiones)
+                      </span>
+                      <span style={{ fontSize: '16px', fontWeight: 'bold', color: '#cbd5e1', display: 'block', marginTop: '0.25rem' }}>
+                        ${payrollResult.employerCost.toLocaleString('es-CO')} COP
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      height: '100%',
+                      border: '2px dashed #334155',
+                      borderRadius: '0.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '3rem',
+                      textAlign: 'center',
+                      color: '#64748b',
+                    }}
+                  >
+                    <div>
+                      <p style={{ fontSize: '16px', fontWeight: '600', margin: '0' }}>Sin liquidación calculada</p>
+                      <p style={{ fontSize: '12px', color: '#475569', margin: '0.5rem 0 0 0' }}>
+                        Completa los datos a la izquierda para simular el pago y la emisión DIAN.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* DIAN TAB CONTENT */}
+          {activeTab === 'dian' && (
+            <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(71, 85, 105, 0.4)', borderRadius: '0.75rem', padding: '1.5rem', textAlign: 'center' }}>
+              <p style={{ fontSize: '16px', color: '#cbd5e1', margin: 0 }}>
+                📄 Módulo de Nómina Electrónica DIAN - En desarrollo
+              </p>
+            </div>
+          )}
+        </main>
+      </div>
     </div>
-   </div>
- );
+  );
 };
+
+export default Dashboard;
