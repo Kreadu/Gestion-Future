@@ -1,4 +1,3 @@
-```
 import { Employee, PayrollRecord, PayrollDetailConcept } from '../types/payroll';
 
 export class PayrollCalculator {
@@ -10,20 +9,23 @@ export class PayrollCalculator {
     taxRate: number = 0.10,
     socialSecurityRate: number = 0.05
   ): PayrollRecord {
-    const baseSalaryEarned = (employee.baseSalaryMonthly / 30) * daysWorked;
-    const grossEarnings = baseSalaryEarned + overtimeAmount + bonusesAmount;
+    // Redondear a 2 decimales para evitar imprecisiones de coma flotante
+    const round = (val: number) => Math.round(val * 100) / 100;
 
-    const taxDeduction = grossEarnings * taxRate;
-    const socialSecurityDeduction = grossEarnings * socialSecurityRate;
-    const totalDeductions = taxDeduction + socialSecurityDeduction;
+    const baseSalaryEarned = round((employee.baseSalaryMonthly / 30) * daysWorked);
+    const grossEarnings = round(baseSalaryEarned + overtimeAmount + bonusesAmount);
 
-    const netPay = grossEarnings - totalDeductions;
-    const employerContributions = grossEarnings * 0.15;
+    const taxDeduction = round(grossEarnings * taxRate);
+    const socialSecurityDeduction = round(grossEarnings * socialSecurityRate);
+    const totalDeductions = round(taxDeduction + socialSecurityDeduction);
+
+    const netPay = round(grossEarnings - totalDeductions);
+    const employerContributions = round(grossEarnings * 0.15);
 
     const details: PayrollDetailConcept[] = [
       { concept: 'Salario Base', conceptType: 'earning', amount: baseSalaryEarned, taxable: true },
-      ...(overtimeAmount &gt; 0 ? [{ concept: 'Horas Extra', conceptType: 'earning' as const, amount: overtimeAmount, taxable: true }] : []),
-      ...(bonusesAmount &gt; 0 ? [{ concept: 'Bonos y Comisiones', conceptType: 'earning' as const, amount: bonusesAmount, taxable: true }] : []),
+      ...(overtimeAmount > 0 ? [{ concept: 'Horas Extra', conceptType: 'earning' as const, amount: overtimeAmount, taxable: true }] : []),
+      ...(bonusesAmount > 0 ? [{ concept: 'Bonos y Comisiones', conceptType: 'earning' as const, amount: bonusesAmount, taxable: true }] : []),
       { concept: 'Retención de Impuestos', conceptType: 'deduction', amount: taxDeduction, taxable: false },
       { concept: 'Seguridad Social (Empleado)', conceptType: 'deduction', amount: socialSecurityDeduction, taxable: false }
     ];
@@ -42,5 +44,3 @@ export class PayrollCalculator {
     };
   }
 }
-
-```
