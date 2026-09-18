@@ -306,7 +306,38 @@ return (
                </div>
 
                {/\* CUNE DIAN BANNER \*/}
-    
+               {dianStatus.emitted &amp;&amp; (
+                 <div className="mt-4 p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-lg">
+                   <span className="text-xs font-bold text-emerald-400 block"&gt;CUNE Generado (SHA-384):</span>
+                   <code className="text-[11px] text-slate-300 break-all font-mono">{dianStatus.cune}</code>
+                 </div>
+              )}
+
+               {/\* DESGLOSE \*/}
+               <div className="grid grid-cols-2 gap-6 mt-6">
+                 {/\* DEVENGADOS \*/}
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider block">
+                      Percepciones / Devengado
+                    </span>
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>Sueldo Básico</span>
+                      <span>\${payrollResult.baseSalaryEarned.toLocaleString('es-CO')}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>Auxilio de Transporte</span>
+                      <span>\${payrollResult.auxTransporte.toLocaleString('es-CO')}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>Total Devengado</span>
+                      <span>\${payrollResult.grossEarnings.toLocaleString('es-CO')}</span>
+                    </div>
+                  </div>
+                 
+                 {/\* DEDUCCIONES \*/}
+                      
+                      
+                      
                  
             
 
