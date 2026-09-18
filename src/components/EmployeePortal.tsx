@@ -1,4 +1,3 @@
-```tsx
 import React, { useMemo, useState } from 'react';
 
 /**
@@ -704,4 +703,3 @@ export const EmployeePortal: React.FC = () => {
                   rounded-xl
                   flex
                   flex-col
-```
