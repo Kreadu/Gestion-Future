@@ -1,0 +1,46 @@
+name: CI/CD Pipeline - Gestion-Future
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ejecutar Pruebas Automatizadas de Nómina y DIAN
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Configurar Python (v3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar Dependencias de Node.js
+        run: |
+          npm ci || npm install
+
+      - name: Validar Tipos y Compilación TypeScript
+        run: |
+          npx tsc --noEmit
+
+      - name: Ejecutar Pruebas Automatizadas de Nómina (Python)
+        run: |
+          python3 tests/test_colombia_payroll_and_dian.py
+
+      - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
+        run: |
+          npx ts-node tests/payrollAndDian.test.ts
