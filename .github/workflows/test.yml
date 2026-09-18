@@ -44,3 +44,8 @@ jobs:
       - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
         run: |
           npx ts-node tests/payrollAndDian.test.ts
+     - name: Desplegar a Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
