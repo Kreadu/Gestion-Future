@@ -281,7 +281,7 @@ return (
          </form> 
         </div>
 
-        {/\* RESULTADOS / VISTA DE COMPROBANTE \*/}
+        {/* RESULTADOS / VISTA DE COMPROBANTE */}
         <div className="lg:col-span-7">
           {payrollResult ? (
             <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-6">
@@ -305,7 +305,7 @@ return (
                  </button>
                </div>
 
-               {/\* CUNE DIAN BANNER \*/}
+               {/* CUNE DIAN BANNER */}
                {dianStatus.emitted &amp;&amp; (
                  <div className="mt-4 p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-lg">
                    <span className="text-xs font-bold text-emerald-400 block"&gt;CUNE Generado (SHA-384):</span>
@@ -313,7 +313,7 @@ return (
                  </div>
               )}
 
-               {/\* DESGLOSE \*/}
+               {/* DESGLOSE */}
                <div className="grid grid-cols-2 gap-6 mt-6">
                  {/\* DEVENGADOS \*/}
                   <div className="space-y-2">
@@ -334,12 +334,54 @@ return (
                     </div>
                   </div>
                  
-                 {/\* DEDUCCIONES \*/}
-                      
-                      
-                      
-                 
-            
-
-
-            
+                {/* DEDUCCIONES */}
+                <div className="space-y-2">   
+                  <span className="text-xs font-bold text-rose-400 uppercase tracking-wider block">
+                    Deducciones Trabajador
+                  </span>
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span>Salud (4%)</span>
+                    <span>\${payrollResult.health.toLocaleString('es-CO')}</span>
+                  </div>
+                   <div className="flex justify-between text-xs text-slate-300">
+                    <span>Pensión (4%)</span>
+                    <span>\${payrollResult.pension.toLocaleString('es-CO')}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-bold text-rose-300 pt-2 border-t border-slate-700">
+                    <span>Total Deducciones</span>
+                    <span>-\${payrollResult.totalDeductions.toLocaleString('es-CO')}</span>
+                  </div>
+                 </div>
+                </div>
+    
+                {/* NETO FINAL */}
+                <div className="mt-6 p-4 bg-slate-900 border border-slate-700/80 rounded-xl flex items-center justify-between">
+                  </div>
+                  <span className="text-xs text-slate-400 font-semibold block">Neto a Pagar al Empleado</span>
+                  <span className="text-2xl font-black text-emerald-400">
+                    \${payrollResult.netPay.toLocaleString('es-CO')} COP
+                   </span>
+                </div>
+                <div className="text-right">
+                <span className="text-xs text-slate-400 block">Costo Total Empleador</span>
+                <span className="text-sm font-bold text-slate-200">
+                  \${payrollResult.employerCost.toLocaleString('es-CO')} COP
+                </span>
+               </div>
+             </div>
+            ) : (
+              <div className="h-full border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center p-12 text-center text-slate-500">
+               <div>
+                 <p className="text-base font-semibold">Sin liquidación calculada</p>
+                 <p className="text-xs text-slate-600 mt-1"&gt;Completa los datos a la izquierda para simular el pago y la emisión DIAN.</p>
+              </div>
+             </div>
+            )}
+          </div>
+         </div>
+       )}
+     </main>
+    </div>
+   </div>
+ );
+};
