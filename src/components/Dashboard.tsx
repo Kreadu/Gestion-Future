@@ -235,3 +235,39 @@ return (
            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
           />
          </div>
+         
+         {/* NOVEDADES / HORAS EXTRAS */}
+         <div className="pt-2 border-t border-slate-700/50">
+          <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider block mb-2">
+            Horas Extras &amp; Recargos
+          </span>
+          <div className="grid grid-cols-3 gap-3">
+            </div>
+            <label className="block text-[11px] text-slate-400">Extra Diurna (+25%)</label>
+            <input
+              type="number"
+              value={form.extraDiurna}
+              onChange={(e) =>; setForm({ ...form, extraDiurna: Number(e.target.value) })}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
+            />
+           </div>
+           <div>
+             <label className="block text-[11px] text-slate-400">Extra Noct. (+75%)</label>
+             <input
+               type="number"
+               value={form.extraNocturna} 
+               onChange={(e) =&gt; setForm({ ...form, extraNocturna: Number(e.target.value) })} 
+               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
+              />
+            </div>
+            <div>
+             <label className="block text-[11px] text-slate-400">Rec. Noct. (+35%)</label>
+             <input
+               type="number" 
+               value={form.recargoNocturno} 
+               onChange={(e) =&gt; setForm({ ...form, recargoNocturno: Number(e.target.value) })}
+               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-white"
+             />
+            </div>
+          </div>
+               
