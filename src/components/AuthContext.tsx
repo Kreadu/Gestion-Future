@@ -6,7 +6,16 @@ import React, {
 } from 'react';
 
 /**
- * Roles disponibles en Fink Business.
+ * Roles disponibles en Gestion-Future.
+ *
+ * SUPER_ADMIN:
+ * Administrador global del sistema.
+ *
+ * TENANT_ADMIN:
+ * Administrador de una empresa cliente.
+ *
+ * EMPLOYEE:
+ * Empleado perteneciente a una empresa cliente.
  */
 export type UserRole =
   | 'SUPER_ADMIN'
@@ -20,49 +29,60 @@ export interface AuthUser {
   uid: string;
   email: string;
   displayName: string;
+
   role: UserRole;
 
   /**
-   * Tenant al que pertenece el usuario.
+   * Empresa/tenant al que pertenece el usuario.
    *
-   * SUPER_ADMIN puede no tener tenantId
-   * porque tiene acceso global.
+   * SUPER_ADMIN no necesita tenantId.
    */
   tenantId?: string;
 
   /**
-   * Nombre del tenant actualmente seleccionado.
+   * Nombre de la empresa actualmente seleccionada.
+   *
+   * Principalmente utilizado por SUPER_ADMIN
+   * cuando cambia de empresa desde el panel.
    */
   tenantName?: string;
 }
 
 /**
- * API disponible a través del AuthContext.
+ * Contexto global de autenticación.
  */
 interface AuthContextType {
   user: AuthUser | null;
 
   /**
-   * Login temporal.
+   * Login temporal para desarrollo.
    *
-   * Esta función será reemplazada posteriormente
-   * por Firebase Authentication.
+   * Será reemplazado por Firebase Authentication.
    */
   login: (
     role: UserRole,
-    tenantId?: string
+    tenantId?: string,
+    tenantName?: string
   ) => void;
 
+  /**
+   * Cierra la sesión actual.
+   */
   logout: () => void;
 
   /**
-   * Permite a un SUPER_ADMIN cambiar el tenant
-   * que está administrando.
+   * Permite al SUPER_ADMIN seleccionar
+   * la empresa que desea administrar.
    */
   switchTenant: (
     tenantId: string,
     tenantName: string
   ) => void;
+
+  /**
+   * Indica si existe una sesión activa.
+   */
+  isAuthenticated: boolean;
 }
 
 /**
@@ -83,8 +103,11 @@ export const AuthProvider: React.FC<{
    * Usuario inicial temporal.
    *
    * IMPORTANTE:
-   * Esto es solamente para desarrollo/prototipo.
-   * Posteriormente será sustituido por Firebase Authentication.
+   * Este usuario solamente existe para desarrollo.
+   * No representa autenticación real.
+   *
+   * Cuando conectemos Firebase Authentication,
+   * esta información será obtenida desde Firebase.
    */
   const [user, setUser] =
     useState<AuthUser | null>({
@@ -96,19 +119,39 @@ export const AuthProvider: React.FC<{
     });
 
   /**
-   * Login temporal.
+   * Autenticación temporal.
    *
-   * Actualmente no autentica realmente al usuario.
-   * Solo crea un usuario simulado para probar
-   * la interfaz y los permisos.
+   * Más adelante será sustituida por:
+   *
+   * Firebase Authentication
+   *        ↓
+   * ID Token
+   *        ↓
+   * Custom Claims
+   *        ↓
+   * role + tenantId
    */
   const login = (
     role: UserRole,
-    tenantId?: string
-  ) => {
+    tenantId?: string,
+    tenantName?: string
+  ): void => {
 
     const isSuperAdmin =
       role === 'SUPER_ADMIN';
+
+    /**
+     * Los usuarios normales necesitan
+     * pertenecer a un tenant.
+     */
+    if (
+      !isSuperAdmin &&
+      !tenantId
+    ) {
+      throw new Error(
+        `${role} requiere un tenantId.`
+      );
+    }
 
     setUser({
       uid: `usr-${Date.now()}`,
@@ -119,26 +162,18 @@ export const AuthProvider: React.FC<{
 
       displayName: isSuperAdmin
         ? 'SuperAdmin Kreadu'
-        : 'Admin Cliente',
+        : role === 'TENANT_ADMIN'
+          ? 'Administrador de Empresa'
+          : 'Empleado',
 
       role,
 
-      /**
-       * SUPER_ADMIN no necesita tenantId.
-       */
-      ...(tenantId && !isSuperAdmin
-        ? { tenantId }
-        : {}),
-
-      /**
-       * Nombre temporal del tenant.
-       *
-       * Posteriormente vendrá desde Firestore.
-       */
-      ...(tenantId && !isSuperAdmin
+      ...(tenantId
         ? {
+            tenantId,
             tenantName:
-              'Empresa Alfa S.A.S.',
+              tenantName ??
+              'Empresa Cliente',
           }
         : {}),
     });
@@ -147,32 +182,58 @@ export const AuthProvider: React.FC<{
   /**
    * Cierra la sesión.
    */
-  const logout = () => {
+  const logout = (): void => {
     setUser(null);
   };
 
   /**
-   * Cambia el tenant activo.
+   * Cambia la empresa activa.
    *
-   * Actualmente solo SUPER_ADMIN puede
-   * cambiar de tenant.
+   * Solamente SUPER_ADMIN puede cambiar
+   * entre empresas.
+   *
+   * IMPORTANTE:
+   * Esto no cambia la pertenencia real del usuario.
+   * Solo cambia el tenant que está administrando
+   * temporalmente desde el panel.
    */
   const switchTenant = (
     tenantId: string,
     tenantName: string
-  ) => {
+  ): void => {
 
-    if (
-      user &&
-      user.role === 'SUPER_ADMIN'
-    ) {
-      setUser({
-        ...user,
-        tenantId,
-        tenantName,
-      });
+    if (!user) {
+      return;
     }
+
+    if (user.role !== 'SUPER_ADMIN') {
+      return;
+    }
+
+    if (!tenantId.trim()) {
+      throw new Error(
+        'El tenantId es obligatorio.'
+      );
+    }
+
+    if (!tenantName.trim()) {
+      throw new Error(
+        'El nombre del tenant es obligatorio.'
+      );
+    }
+
+    setUser({
+      ...user,
+      tenantId: tenantId.trim(),
+      tenantName: tenantName.trim(),
+    });
   };
+
+  /**
+   * Estado derivado de autenticación.
+   */
+  const isAuthenticated =
+    user !== null;
 
   return (
     <AuthContext.Provider
@@ -181,6 +242,7 @@ export const AuthProvider: React.FC<{
         login,
         logout,
         switchTenant,
+        isAuthenticated,
       }}
     >
       {children}
@@ -189,16 +251,17 @@ export const AuthProvider: React.FC<{
 };
 
 /**
- * Hook para acceder al contexto de autenticación.
+ * Hook para acceder al usuario y
+ * las funciones de autenticación.
  */
-export const useAuth = () => {
+export const useAuth = (): AuthContextType => {
 
   const context =
     useContext(AuthContext);
 
   if (!context) {
     throw new Error(
-      'useAuth debe usarse dentro de un AuthProvider'
+      'useAuth debe utilizarse dentro de un AuthProvider.'
     );
   }
 
