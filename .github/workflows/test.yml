@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Ejecutar Pruebas Automatizadas de Nómina y DIAN
+  test-and-deploy:
+    name: Pruebas Automatizadas y Despliegue
     runs-on: ubuntu-latest
 
     steps:
@@ -28,24 +28,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # Si utilizas requirements.txt
+          cache: 'pip' # Activa cache si usas requirements.txt
 
       - name: Instalar Dependencias de Node.js
+        run: npm ci
+
+      - name: Instalar Dependencias de Python
         run: |
-          npm ci || npm install
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Validar Tipos y Compilación TypeScript
-        run: |
-          npx tsc --noEmit
+        run: npx tsc --noEmit
 
       - name: Ejecutar Pruebas Automatizadas de Nómina (Python)
-        run: |
-          python3 tests/test_colombia_payroll_and_dian.py
+        run: python3 tests/test_colombia_payroll_and_dian.py
 
       - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
-        run: |
-          npx ts-node tests/payrollAndDian.test.ts
+        run: npx ts-node tests/payrollAndDian.test.ts
 
+      # Solo se ejecuta si los pasos anteriores aprueban Y la rama es 'main' en un evento 'push'
       - name: Desplegar a Cloudflare Workers
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: cloudflare/wrangler-action@v3
