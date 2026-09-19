@@ -1,316 +1,338 @@
 /**
- * CLIENTE HTTP PARA API DE NÓMINA COLOMBIA
- * Ejemplos de uso con fetch, axios, etc.
+ * TIPOS UNIFICADOS
+ * Combina tipos de BD + API + Colombia/DIAN
  */
 
-import {
-  ColombiaEmployeeInput,
-  DianEmployerInfo,
-  DianEmployeeExtraInfo,
-  PayrollResult,
-  DianNominaXmlResult,
-} from './payrollApiTypes';
-
 // ============================================
-// CONFIGURACIÓN
+// MODELOS DE NEGOCIO (Base de Datos)
 // ============================================
 
-const API_BASE_URL = process.env.REACT_APP_PAYROLL_API_URL || 'http://localhost:8787/api';
-const API_TIMEOUT = 30000; // 30 segundos
+export interface Tenant {
+  id: string;
+  name: string;
+  taxId: string; // NIT empresa
+  bankAccount: string;
+  createdAt: string;
+  // Adicionales para DIAN
+  address?: string;
+  city?: string;
+  department?: string;
+  country?: string;
+  email?: string;
+  phone?: string;
+  industryCode?: string; // Código CIIU
+}
 
-// ============================================
-// CLIENTE API
-// ============================================
+export interface Employee {
+  id: string; // ID de BD
+  tenantId: string;
+  firstName: string;
+  lastName: string;
+  taxId: string; // Cédula
+  jobTitle: string;
+  baseSalaryMonthly: number;
+  bankAccount: string;
+  bankCode: string;
+  // Adicionales para nómina
+  contractType?: 'Indefinido' | 'Fijo' | 'Obra o Labor' | 'Aprendizaje' | 'Por Horas';
+  startDate?: string;
+  departmentName?: string;
+  isExempt114_1?: boolean; // Exención Art 114-1 Colombia
+}
 
-export class PayrollApiClient {
-  private baseUrl: string;
-  private timeout: number;
+export interface PayrollDetailConcept {
+  concept: string;
+  conceptType: 'earning' | 'deduction';
+  amount: number;
+  taxable: boolean;
+}
 
-  constructor(baseUrl: string = API_BASE_URL, timeout: number = API_TIMEOUT) {
-    this.baseUrl = baseUrl;
-    this.timeout = timeout;
-  }
-
-  /**
-   * Verificar estado del servicio
-   */
-  async health(): Promise<{ status: string; service: string }> {
-    return this.get('/health');
-  }
-
-  /**
-   * Calcular liquidación de nómina
-   */
-  async calculatePayroll(
-    employeeInput: ColombiaEmployeeInput
-  ): Promise<PayrollResult> {
-    return this.post('/colombia/payroll/calculate', {
-      employeeInput,
-    });
-  }
-
-  /**
-   * Generar XML de nómina electrónica DIAN
-   */
-  async generateDianNominaXml(
-    employeeInput: ColombiaEmployeeInput,
-    employerInfo: DianEmployerInfo,
-    employeeExtraInfo: DianEmployeeExtraInfo,
-    consecutiveNumber?: number
-  ): Promise<DianNominaXmlResult> {
-    return this.post('/dian/nomina-xml', {
-      employeeInput,
-      employerInfo,
-      employeeExtraInfo,
-      consecutiveNumber,
-    });
-  }
-
-  /**
-   * Request GET
-   */
-  private async get(endpoint: string): Promise<any> {
-    const url = `${this.baseUrl}${endpoint}`;
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(this.timeout),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      throw this.handleError(error, url);
-    }
-  }
-
-  /**
-   * Request POST
-   */
-  private async post(endpoint: string, payload: any): Promise<any> {
-    const url = `${this.baseUrl}${endpoint}`;
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(this.timeout),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      throw this.handleError(error, url);
-    }
-  }
-
-  /**
-   * Manejo de errores
-   */
-  private handleError(error: any, url: string): Error {
-    if (error instanceof TypeError) {
-      return new Error(`Error de conexión a ${url}: ${error.message}`);
-    }
-    if (error.name === 'AbortError') {
-      return new Error(`Timeout: La solicitud excedió ${this.timeout}ms`);
-    }
-    return error instanceof Error ? error : new Error(String(error));
-  }
+export interface PayrollRecord {
+  payrollId: string;
+  employeeId: string;
+  employeeName: string;
+  periodDate: string; // Fecha del período
+  daysWorked: number;
+  baseSalaryEarned: number;
+  totalEarnings: number;
+  totalDeductions: number;
+  netPay: number;
+  employerContributions: number;
+  details: PayrollDetailConcept[];
+  // Adicionales para DIAN
+  cune?: string; // Código DIAN
+  dianStatus?: 'pending' | 'transmitted' | 'rejected';
 }
 
 // ============================================
-// INSTANCIA GLOBAL
-// ============================================
-
-export const payrollApi = new PayrollApiClient();
-
-// ============================================
-// EJEMPLOS DE USO
+// INPUT/OUTPUT DE API
 // ============================================
 
 /**
- * Ejemplo 1: Calcular nómina simple
+ * Input para calcular nómina Colombia
+ * Se obtiene combinando Employee + período específico
  */
-export async function exampleCalculatePayroll() {
-  try {
-    const employeeData: ColombiaEmployeeInput = {
-      employeeId: 'EMP-001',
-      firstName: 'Carlos',
-      lastName: 'Rodríguez',
-      taxId: '1098765432',
-      baseSalaryMonthly: 1750905,
-      daysWorked: 30,
-      extraDiurna: 4,
-      extraNocturna: 2,
-      recargoNocturno: 10,
-    };
-
-    const result = await payrollApi.calculatePayroll(employeeData);
-    console.log('Nómina calculada:', result);
-    console.log('Neto a pagar:', result.netPay);
-    console.log('Costo empleador:', result.totalEmployerCost);
-
-    return result;
-  } catch (error) {
-    console.error('Error calculando nómina:', error);
-    throw error;
-  }
+export interface ColombiaPayrollInput {
+  employeeId: string; // Del Employee.id
+  firstName: string;
+  lastName: string;
+  taxId: string; // Del Employee.taxId
+  baseSalaryMonthly: number;
+  daysWorked: number; // Específico del período (1-30)
+  // Novedades del período
+  extraDiurna: number; // Horas extras diurnas
+  extraNocturna: number; // Horas extras nocturnas
+  recargoNocturno: number; // Recargo nocturno
+  isExempt114_1?: boolean;
 }
 
 /**
- * Ejemplo 2: Generar XML DIAN completo
+ * Output después de calcular
+ * Contiene el desglose completo de la nómina
  */
-export async function exampleGenerateDianXml() {
-  try {
-    const employeeInput: ColombiaEmployeeInput = {
-      employeeId: 'EMP-001',
-      firstName: 'Juan',
-      lastName: 'Pérez',
-      taxId: '1234567890',
-      baseSalaryMonthly: 2500000,
-      daysWorked: 30,
-      extraDiurna: 0,
-      extraNocturna: 0,
-      recargoNocturno: 0,
-    };
+export interface ColombiaPayrollResult {
+  employeeId: string;
+  employeeName: string;
+  taxId: string;
+  periodDate: string; // ISO date
 
-    const employerInfo: DianEmployerInfo = {
-      companyName: 'Tech Solutions S.A.S.',
-      nit: '900123456',
-      nitVerifier: '1',
-      address: 'Cra. 15 # 100-50',
-      city: 'Medellín',
-      department: 'Antioquia',
-      country: 'CO',
-      email: 'rrhh@techsolutions.com',
-      softwareProvider: {
-        nit: '800987654',
-        name: 'Gestión-Future',
-        pin: 'gf-2024-prod',
-      },
-    };
+  // PERCEPCIONES (Devengos)
+  baseSalaryEarned: number;
+  auxTransporte: number;
+  extraDiurnaValue: number;
+  extraNocturnaValue: number;
+  recargoNocturnoValue: number;
+  otherBenefits: number;
+  grossEarnings: number; // Total devengado
 
-    const employeeExtraInfo: DianEmployeeExtraInfo = {
-      departmentCode: '05001', // Medellín
-      municipalityCode: '05001000',
-      contractType: 'Indefinido',
-      workPosition: 'Ingeniero de Sistemas',
-      startDate: '2022-06-01',
-      departmentName: 'Desarrollo',
-    };
+  // IBC Y APORTES
+  ibc: number; // Ingreso Base de Cotización
+  healthContribution: number; // Aporte salud empleado (4%)
+  pensionContribution: number; // Aporte pensión empleado (4%)
+  totalEmployeeDeductions: number;
 
-    const xmlResult = await payrollApi.generateDianNominaXml(
-      employeeInput,
-      employerInfo,
-      employeeExtraInfo,
-      1
-    );
+  // NETO
+  netPay: number;
 
-    console.log('XML DIAN generado exitosamente');
-    console.log('CUNE:', xmlResult.cune);
-    console.log('Archivo:', xmlResult.filename);
-    console.log('Tamaño:', xmlResult.fileSize, 'bytes');
-
-    // Descargar XML
-    if (typeof window !== 'undefined') {
-      downloadFile(xmlResult.xml, xmlResult.filename, 'application/xml');
-    }
-
-    return xmlResult;
-  } catch (error) {
-    console.error('Error generando XML DIAN:', error);
-    throw error;
-  }
+  // COSTOS EMPLEADOR
+  employerHealthContribution: number; // 8.5%
+  employerPensionContribution: number; // 12%
+  senaContribution: number; // 0.522%
+  icbfContribution: number; // 4%
+  provisionsDeduction: number; // Cesantías + Prima + Vacaciones
+  totalEmployerCost: number;
 }
 
-/**
- * Ejemplo 3: Obtener estado del servicio
- */
-export async function exampleHealthCheck() {
-  try {
-    const status = await payrollApi.health();
-    console.log('Estado del servicio:', status);
-    return status;
-  } catch (error) {
-    console.error('Servicio no disponible:', error);
-    throw error;
-  }
-}
+// ============================================
+// DIAN - NÓMINA ELECTRÓNICA
+// ============================================
 
-/**
- * Ejemplo 4: Calcular múltiples empleados (lote)
- */
-export async function exampleBatchPayroll(employees: ColombiaEmployeeInput[]) {
-  try {
-    const results = await Promise.all(
-      employees.map((emp) => payrollApi.calculatePayroll(emp))
-    );
-
-    const totalNetPay = results.reduce((sum, r) => sum + r.netPay, 0);
-    const totalEmployerCost = results.reduce(
-      (sum, r) => sum + r.totalEmployerCost,
-      0
-    );
-
-    console.log('Lote procesado:');
-    console.log('- Empleados:', results.length);
-    console.log('- Total neto:', totalNetPay);
-    console.log('- Costo total empleador:', totalEmployerCost);
-
-    return {
-      employees: results,
-      summary: {
-        count: results.length,
-        totalNetPay,
-        totalEmployerCost,
-        averageNetPay: totalNetPay / results.length,
-      },
-    };
-  } catch (error) {
-    console.error('Error procesando lote:', error);
-    throw error;
-  }
-}
-
-/**
- * Ejemplo 5: Integración en React (Hook)
- */
-export function usePayrollCalculation() {
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [result, setResult] = React.useState<PayrollResult | null>(null);
-
-  const calculate = async (employeeInput: ColombiaEmployeeInput) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const payrollResult = await payrollApi.calculatePayroll(employeeInput);
-      setResult(payrollResult);
-      return payrollResult;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Error desconocido';
-      setError(errorMsg);
-      throw err;
-    } finally {
-      setLoading(false);
-    }
+export interface DianEmployerInfo {
+  companyName: string; // Razón social
+  nit: string; // NIT (sin verificador)
+  nitVerifier: string; // Dígito verificador
+  address: string;
+  city: string;
+  department: string;
+  country: string;
+  email: string;
+  phone?: string;
+  industryCode?: string; // CIIU
+  softwareProvider: {
+    nit: string;
+    name: string;
+    pin: string;
   };
+}
 
-  return { loading, error, result, calculate };
+export interface DianEmployeeExtraInfo {
+  departmentCode: string; // Código DANE departamento
+  municipalityCode: string; // Código DANE municipio
+  bank?: string;
+  bankAccountType?: 'Ahorros' | 'Corriente';
+  bankAccountNumber?: string;
+  contractType: 'Indefinido' | 'Fijo' | 'Obra o Labor' | 'Aprendizaje' | 'Por Horas';
+  workPosition: string;
+  startDate: string; // ISO
+  departmentName: string;
+  entitlement?: {
+    vacationDays?: number;
+    bonusMonths?: number;
+  };
+}
+
+export interface DianNominaXmlResult {
+  success: boolean;
+  xml: string; // XML completo
+  cune: string; // CUNE (SHA-384)
+  consecutiveNumber: number;
+  validationErrors: string[];
+  generatedAt: string; // ISO
+  filename: string;
+  fileSize: number;
+}
+
+// ============================================
+// REQUEST/RESPONSE DE ENDPOINTS
+// ============================================
+
+export interface PayrollCalculateRequest {
+  employeeInput: ColombiaPayrollInput;
+}
+
+export interface PayrollCalculateResponse {
+  success: boolean;
+  data: ColombiaPayrollResult;
+  error?: string;
+}
+
+export interface DianXmlGenerateRequest {
+  employeeInput: ColombiaPayrollInput;
+  employerInfo: DianEmployerInfo;
+  employeeExtraInfo: DianEmployeeExtraInfo;
+  consecutiveNumber?: number;
+}
+
+export interface DianXmlGenerateResponse {
+  success: boolean;
+  payrollSummary: ColombiaPayrollResult;
+  dianDocument: DianNominaXmlResult;
+  error?: string;
+}
+
+// ============================================
+// HELPERS Y CONVERSIONES
+// ============================================
+
+/**
+ * Convierte Employee (BD) → ColombiaPayrollInput (Cálculo)
+ * Útil cuando tienes un empleado guardado y quieres calcular su nómina
+ */
+export function employeeToColombiPayrollInput(
+  employee: Employee,
+  daysWorked: number,
+  extraDiurna: number = 0,
+  extraNocturna: number = 0,
+  recargoNocturno: number = 0
+): ColombiaPayrollInput {
+  return {
+    employeeId: employee.id,
+    firstName: employee.firstName,
+    lastName: employee.lastName,
+    taxId: employee.taxId,
+    baseSalaryMonthly: employee.baseSalaryMonthly,
+    daysWorked,
+    extraDiurna,
+    extraNocturna,
+    recargoNocturno,
+    isExempt114_1: employee.isExempt114_1,
+  };
+}
+
+/**
+ * Convierte ColombiaPayrollResult (Cálculo) → PayrollDetailConcept[] (BD)
+ * Útil para guardar el desglose en la BD
+ */
+export function payrollResultToDetailConcepts(
+  result: ColombiaPayrollResult
+): PayrollDetailConcept[] {
+  return [
+    // INGRESOS
+    {
+      concept: 'Sueldo Básico',
+      conceptType: 'earning',
+      amount: result.baseSalaryEarned,
+      taxable: true,
+    },
+    {
+      concept: 'Auxilio de Transporte',
+      conceptType: 'earning',
+      amount: result.auxTransporte,
+      taxable: false,
+    },
+    {
+      concept: 'Extras Diurnas',
+      conceptType: 'earning',
+      amount: result.extraDiurnaValue,
+      taxable: true,
+    },
+    {
+      concept: 'Extras Nocturnas',
+      conceptType: 'earning',
+      amount: result.extraNocturnaValue,
+      taxable: true,
+    },
+    {
+      concept: 'Recargo Nocturno',
+      conceptType: 'earning',
+      amount: result.recargoNocturnoValue,
+      taxable: true,
+    },
+    // DEDUCCIONES
+    {
+      concept: 'Aporte Salud (4%)',
+      conceptType: 'deduction',
+      amount: result.healthContribution,
+      taxable: false,
+    },
+    {
+      concept: 'Aporte Pensión (4%)',
+      conceptType: 'deduction',
+      amount: result.pensionContribution,
+      taxable: false,
+    },
+  ];
+}
+
+/**
+ * Convierte Tenant (BD) → DianEmployerInfo (DIAN)
+ * Útil para generar XML DIAN desde datos guardados
+ */
+export function tenantToDianEmployerInfo(
+  tenant: Tenant,
+  softwareProvider: { nit: string; name: string; pin: string }
+): DianEmployerInfo {
+  return {
+    companyName: tenant.name,
+    nit: tenant.taxId.split('-')[0] || tenant.taxId, // Remover verificador si lo tiene
+    nitVerifier: calculateNitVerifier(tenant.taxId),
+    address: tenant.address || '',
+    city: tenant.city || 'Bogotá',
+    department: tenant.department || 'Cundinamarca',
+    country: tenant.country || 'CO',
+    email: tenant.email || '',
+    phone: tenant.phone,
+    industryCode: tenant.industryCode,
+    softwareProvider,
+  };
+}
+
+// ============================================
+// VALIDACIONES
+// ============================================
+
+export function validateEmployee(employee: Employee): string[] {
+  const errors: string[] = [];
+  if (!employee.id) errors.push('id requerido');
+  if (!employee.firstName) errors.push('firstName requerido');
+  if (!employee.lastName) errors.push('lastName requerido');
+  if (!employee.taxId) errors.push('taxId requerido');
+  if (employee.baseSalaryMonthly <= 0)
+    errors.push('baseSalaryMonthly debe ser > 0');
+  return errors;
+}
+
+export function validatePayrollInput(input: ColombiaPayrollInput): string[] {
+  const errors: string[] = [];
+  if (!input.employeeId) errors.push('employeeId requerido');
+  if (!input.firstName) errors.push('firstName requerido');
+  if (!input.lastName) errors.push('lastName requerido');
+  if (!input.taxId) errors.push('taxId requerido');
+  if (input.baseSalaryMonthly <= 0)
+    errors.push('baseSalaryMonthly debe ser > 0');
+  if (input.daysWorked < 1 || input.daysWorked > 30)
+    errors.push('daysWorked entre 1-30');
+  return errors;
 }
 
 // ============================================
@@ -318,66 +340,38 @@ export function usePayrollCalculation() {
 // ============================================
 
 /**
- * Descargar archivo desde blob
+ * Calcula dígito verificador del NIT según DIAN
  */
-export function downloadFile(
-  content: string,
-  filename: string,
-  mimeType: string = 'text/plain'
-) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+export function calculateNitVerifier(nit: string): string {
+  const weights = [3, 7, 13, 17, 19, 23, 29, 31, 37];
+  const cleanNit = nit.replace(/[^0-9]/g, '').slice(0, 9);
+  const reversedNit = cleanNit.split('').reverse();
+  let sum = 0;
+
+  for (let i = 0; i < reversedNit.length; i++) {
+    sum += parseInt(reversedNit[i]) * weights[i];
+  }
+
+  const remainder = sum % 11;
+  const verifier = remainder === 0 ? '0' : remainder === 1 ? '9' : String(11 - remainder);
+
+  return verifier;
 }
 
 /**
- * Validar conexión a API
+ * Formatea a moneda COP
  */
-export async function validateApiConnection(
-  baseUrl: string = API_BASE_URL
-): Promise<boolean> {
-  try {
-    const client = new PayrollApiClient(baseUrl, 5000);
-    await client.health();
-    return true;
-  } catch {
-    return false;
-  }
+export function formatCOP(amount: number): string {
+  return new Intl.NumberFormat('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    minimumFractionDigits: 0,
+  }).format(amount);
 }
 
 /**
- * Retry con exponential backoff
+ * Obtiene fecha actual en ISO
  */
-export async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxAttempts: number = 3,
-  initialDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxAttempts) {
-        const delay = initialDelay * Math.pow(2, attempt - 1);
-        console.warn(
-          `Intento ${attempt} fallido. Reintentando en ${delay}ms...`
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
+export function getCurrentDate(): string {
+  return new Date().toISOString().split('T')[0];
 }
-
-// Exportar para TypeScript
-import React from 'react';
