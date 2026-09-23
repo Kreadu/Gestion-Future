@@ -4,3 +4,8 @@ compatibility_date = "2024-01-01"
 
 [vars]
 ENVIRONMENT = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gestion_future_db"
+database_id = "272ce3a6-51d7-4fd3-9353-37347f174edb"

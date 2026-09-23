@@ -208,7 +208,7 @@ export interface DianXmlGenerateResponse {
  * Convierte Employee (BD) → ColombiaPayrollInput (Cálculo)
  * Útil cuando tienes un empleado guardado y quieres calcular su nómina
  */
-export function employeeToColombiPayrollInput(
+export function employeeToColombiaPayrollInput(
   employee: Employee,
   daysWorked: number,
   extraDiurna: number = 0,
@@ -375,3 +375,62 @@ export function formatCOP(amount: number): string {
 export function getCurrentDate(): string {
   return new Date().toISOString().split('T')[0];
 }
+// ============================================
+// CLIENTE HTTP PARA API EN CLOUDFLARE
+// ============================================
+
+export const API_BASE_URL = 'https://gestion-future-api.raipimo37.workers.dev';
+
+export const payrollApiClient = {
+  // --- EMPRESAS / TENANTS ---
+  async getCompanies() {
+    const res = await fetch(`${API_BASE_URL}/api/companies`);
+    return res.json();
+  },
+
+  async createCompany(companyData: Partial<Tenant>) {
+    const res = await fetch(`${API_BASE_URL}/api/companies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(companyData),
+    });
+    return res.json();
+  },
+
+  // --- EMPLEADOS ---
+  async getEmployees(companyId?: string) {
+    const url = companyId 
+      ? `${API_BASE_URL}/api/employees?companyId=${companyId}`
+      : `${API_BASE_URL}/api/employees`;
+    const res = await fetch(url);
+    return res.json();
+  },
+
+  async createEmployee(employeeData: Partial<Employee>) {
+    const res = await fetch(`${API_BASE_URL}/api/employees`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(employeeData),
+    });
+    return res.json();
+  },
+
+  // --- CÁLCULO DE NÓMINA Y DIAN ---
+  async calculatePayroll(input: ColombiaPayrollInput): Promise<PayrollCalculateResponse> {
+    const res = await fetch(`${API_BASE_URL}/api/payroll/calculate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employeeInput: input }),
+    });
+    return res.json();
+  },
+
+  async generateDianXml(request: DianXmlGenerateRequest): Promise<DianXmlGenerateResponse> {
+    const res = await fetch(`${API_BASE_URL}/api/dian/generate-xml`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return res.json();
+  }
+};

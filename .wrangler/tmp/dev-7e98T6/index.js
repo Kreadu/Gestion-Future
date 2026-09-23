@@ -1,90 +1,477 @@
-import ColombiaPayrollEngine from './engine/countries/colombiaEngine';
-import type {
-  ColombiaPayrollInput,
-  ColombiaPayrollResult,
-} from './types/payroll';
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-import { DianNominaXmlService } from './services/dianNominaXmlService';
-interface DianEmployerInfo {
-  nit: string;
-  dv: string;
-  companyName: string;
-  softwareId: string;
-  pinSoftware: string;
-  testSetId?: string;
+// .wrangler/tmp/bundle-3kDyEN/checked-fetch.js
+var urls = /* @__PURE__ */ new Set();
+function checkURL(request, init) {
+  const url = request instanceof URL ? request : new URL(
+    (typeof request === "string" ? new Request(request, init) : request).url
+  );
+  if (url.port && url.port !== "443" && url.protocol === "https:") {
+    if (!urls.has(url.toString())) {
+      urls.add(url.toString());
+      console.warn(
+        `WARNING: known issue with \`fetch()\` requests to custom HTTPS ports in published Workers:
+ - ${url.toString()} - the custom port will be ignored when the Worker is published using the \`wrangler deploy\` command.
+`
+      );
+    }
+  }
 }
+__name(checkURL, "checkURL");
+globalThis.fetch = new Proxy(globalThis.fetch, {
+  apply(target, thisArg, argArray) {
+    const [request, init] = argArray;
+    checkURL(request, init);
+    return Reflect.apply(target, thisArg, argArray);
+  }
+});
 
-interface DianEmployeeExtraInfo {
-  typeDocument: '13' | '31' | '22' | '41' | '42';
-  typeContract: '1' | '2' | '3' | '4' | '5';
-  paymentMethod: '10' | '42' | '20';
-  bankName?: string;
-  accountNumber?: string;
-  accountType?: 'AHORROS' | 'CORRIENTE';
+// .wrangler/tmp/bundle-3kDyEN/strip-cf-connecting-ip-header.js
+function stripCfConnectingIPHeader(input, init) {
+  const request = new Request(input, init);
+  request.headers.delete("CF-Connecting-IP");
+  return request;
 }
+__name(stripCfConnectingIPHeader, "stripCfConnectingIPHeader");
+globalThis.fetch = new Proxy(globalThis.fetch, {
+  apply(target, thisArg, argArray) {
+    return Reflect.apply(target, thisArg, [
+      stripCfConnectingIPHeader.apply(null, argArray)
+    ]);
+  }
+});
 
-import { BankDisbursementService } from './services/bankDisbursement';
+// src/engine/countries/colombiaEngine.ts
+var CONSTANTS_2026 = {
+  SMMLV: 1750905,
+  AUXILIO_TRANSPORTE: 249095,
+  SMMLV_LIMIT_AUX: 2 * 1750905,
+  /**
+   * Jornada mensual utilizada para cálculo
+   * de valor hora.
+   */
+  MONTHLY_ORDINARY_HOURS: 210,
+  EXTRA_DIURNA_MULTIPLIER: 1.25,
+  EXTRA_NOCTURNA_MULTIPLIER: 1.75,
+  RECARGO_NOCTURNO_FACTOR: 0.35,
+  HEALTH_EMPLOYEE: 0.04,
+  PENSION_EMPLOYEE: 0.04,
+  HEALTH_EMPLOYER: 0.085,
+  PENSION_EMPLOYER: 0.12,
+  SENA: 0.02,
+  ICBF: 0.03,
+  CCF: 0.04,
+  CESANTIAS_RATE: 1 / 12,
+  INTERESES_CESANTIAS_RATE: 0.01,
+  PRIMA_RATE: 1 / 12,
+  VACACIONES_RATE: 1 / 24
+};
+var ColombiaPayrollEngine = class {
+  // ==========================================================
+  // FONDO DE SOLIDARIDAD PENSIONAL
+  // ==========================================================
+  static calculateFspRate(ibc) {
+    const smmlvCount = ibc / CONSTANTS_2026.SMMLV;
+    if (smmlvCount < 4) {
+      return 0;
+    }
+    if (smmlvCount < 16) {
+      return 0.01;
+    }
+    if (smmlvCount < 17) {
+      return 0.012;
+    }
+    if (smmlvCount < 18) {
+      return 0.014;
+    }
+    if (smmlvCount < 19) {
+      return 0.016;
+    }
+    if (smmlvCount < 20) {
+      return 0.018;
+    }
+    return 0.02;
+  }
+  // ==========================================================
+  // CÁLCULO PRINCIPAL
+  // ==========================================================
+  static calculate(input) {
+    const baseSalary = Number(input.baseSalaryMonthly) || 0;
+    const daysWorkedRaw = Number(input.daysWorked);
+    const daysWorked = Number.isFinite(daysWorkedRaw) && daysWorkedRaw >= 1 && daysWorkedRaw <= 30 ? Math.floor(daysWorkedRaw) : 30;
+    const baseSalaryEarned = baseSalary / 30 * daysWorked;
+    let earnedAuxTransporte = 0;
+    if (baseSalary <= CONSTANTS_2026.SMMLV_LIMIT_AUX) {
+      earnedAuxTransporte = CONSTANTS_2026.AUXILIO_TRANSPORTE / 30 * daysWorked;
+    }
+    const hourlyRate = baseSalary / CONSTANTS_2026.MONTHLY_ORDINARY_HOURS;
+    const extraDiurnaHours = Number(
+      input.extraDiurna ?? input.overtimeHours?.extraDiurna ?? 0
+    ) || 0;
+    const extraNocturnaHours = Number(
+      input.extraNocturna ?? input.overtimeHours?.extraNocturna ?? 0
+    ) || 0;
+    const recargoNocturnoHours = Number(
+      input.recargoNocturno ?? input.overtimeHours?.recargoNocturno ?? 0
+    ) || 0;
+    const extraDiurnaValue = extraDiurnaHours * hourlyRate * CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER;
+    const extraNocturnaValue = extraNocturnaHours * hourlyRate * CONSTANTS_2026.EXTRA_NOCTURNA_MULTIPLIER;
+    const recargoNocturnoValue = recargoNocturnoHours * hourlyRate * CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
+    const overtimeTotal = extraDiurnaValue + extraNocturnaValue + recargoNocturnoValue;
+    const grossEarnings = baseSalaryEarned + earnedAuxTransporte + overtimeTotal;
+    const ibcSecuritySocial = baseSalaryEarned + overtimeTotal;
+    const health4pct = ibcSecuritySocial * CONSTANTS_2026.HEALTH_EMPLOYEE;
+    const pension4pct = ibcSecuritySocial * CONSTANTS_2026.PENSION_EMPLOYEE;
+    const fspPct = this.calculateFspRate(
+      ibcSecuritySocial
+    );
+    const fspValue = ibcSecuritySocial * fspPct;
+    const totalDeductions = health4pct + pension4pct + fspValue;
+    const netPay = grossEarnings - totalDeductions;
+    const isExempt = input.isExempt114_1 ?? false;
+    const arlRate = input.riskClass ?? 522e-5 /* CLASS_I */;
+    const health8_5pct = isExempt ? 0 : ibcSecuritySocial * CONSTANTS_2026.HEALTH_EMPLOYER;
+    const pension12pct = ibcSecuritySocial * CONSTANTS_2026.PENSION_EMPLOYER;
+    const arlValue = ibcSecuritySocial * arlRate;
+    const sena2pct = isExempt ? 0 : ibcSecuritySocial * CONSTANTS_2026.SENA;
+    const icbf3pct = isExempt ? 0 : ibcSecuritySocial * CONSTANTS_2026.ICBF;
+    const ccf4pct = ibcSecuritySocial * CONSTANTS_2026.CCF;
+    const totalContributions = health8_5pct + pension12pct + arlValue + sena2pct + icbf3pct + ccf4pct;
+    const cesantias = grossEarnings * CONSTANTS_2026.CESANTIAS_RATE;
+    const interesesCesantias = cesantias * CONSTANTS_2026.INTERESES_CESANTIAS_RATE;
+    const primaServicios = grossEarnings * CONSTANTS_2026.PRIMA_RATE;
+    const vacaciones = ibcSecuritySocial * CONSTANTS_2026.VACACIONES_RATE;
+    const totalProvisions = cesantias + interesesCesantias + primaServicios + vacaciones;
+    const round = /* @__PURE__ */ __name((value) => {
+      return Math.round(value * 100) / 100;
+    }, "round");
+    const fullName = [
+      input.firstName,
+      input.firstName2,
+      input.lastName,
+      input.lastName2
+    ].filter(
+      (value) => Boolean(value)
+    ).join(" ");
+    return {
+      companyId: input.companyId,
+      employeeId: input.employeeId,
+      employeeName: fullName,
+      firstName: input.firstName,
+      firstName2: input.firstName2,
+      lastName: input.lastName,
+      lastName2: input.lastName2,
+      taxId: input.taxId,
+      periodDate: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+      daysWorked,
+      // DEVENGADOS
+      baseSalaryEarned: round(baseSalaryEarned),
+      earnedAuxTransporte: round(earnedAuxTransporte),
+      extraDiurnaValue: round(extraDiurnaValue),
+      extraNocturnaValue: round(extraNocturnaValue),
+      recargoNocturnoValue: round(recargoNocturnoValue),
+      overtimeTotal: round(overtimeTotal),
+      grossEarnings: round(grossEarnings),
+      // IBC
+      ibcSecuritySocial: round(ibcSecuritySocial),
+      // DEDUCCIONES
+      employeeDeductions: {
+        health4pct: round(health4pct),
+        pension4pct: round(pension4pct),
+        fspPct,
+        fspValue: round(fspValue),
+        fsp: round(fspValue),
+        totalDeductions: round(totalDeductions)
+      },
+      // NETO
+      netPay: round(netPay),
+      // EMPLEADOR
+      employerContributions: {
+        health8_5pct: round(health8_5pct),
+        pension12pct: round(pension12pct),
+        arlValue: round(arlValue),
+        sena2pct: round(sena2pct),
+        icbf3pct: round(icbf3pct),
+        ccf4pct: round(ccf4pct),
+        totalContributions: round(totalContributions)
+      },
+      // PROVISIONES
+      provisions: {
+        cesantias: round(cesantias),
+        interesesCesantias: round(interesesCesantias),
+        primaServicios: round(primaServicios),
+        vacaciones: round(vacaciones),
+        totalProvisions: round(totalProvisions)
+      },
+      hourlyRate: round(hourlyRate)
+    };
+  }
+};
+__name(ColombiaPayrollEngine, "ColombiaPayrollEngine");
+var colombiaEngine_default = ColombiaPayrollEngine;
 
-interface Env {
-  DB: D1Database;
-}
+// src/services/dianNominaXmlService.ts
+var DianNominaXmlService = class {
+  static async calculateCUNE(consecutive, issueDate, issueTime, valDevengado, valDeducciones, valTotal, employerNit, employeeDoc, pinSoftware) {
+    const rawString = `${consecutive}${issueDate}${issueTime}${valDevengado.toFixed(2)}${valDeducciones.toFixed(2)}${valTotal.toFixed(2)}${employerNit}${employeeDoc}${pinSoftware}`;
+    try {
+      const msgBuffer = new TextEncoder().encode(rawString);
+      const hashBuffer = await crypto.subtle.digest(
+        "SHA-384",
+        msgBuffer
+      );
+      const hashArray = Array.from(
+        new Uint8Array(hashBuffer)
+      );
+      return hashArray.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+      let hash = 0;
+      for (let i = 0; i < rawString.length; i++) {
+        hash = (hash << 5) - hash + rawString.charCodeAt(i);
+        hash |= 0;
+      }
+      return `cune_simulated_${Math.abs(hash)}_${Date.now()}`;
+    }
+  }
+  static escapeXml(value) {
+    return String(value).replace(
+      /[<>&'"]/g,
+      (character) => {
+        switch (character) {
+          case "<":
+            return "&lt;";
+          case ">":
+            return "&gt;";
+          case "&":
+            return "&amp;";
+          case "'":
+            return "&apos;";
+          case '"':
+            return "&quot;";
+          default:
+            return character;
+        }
+      }
+    );
+  }
+  static async generateDSPNE(payroll, employer, employeeExtra, consecutiveNumber, issueDateStr, issueTimeStr) {
+    const issueDate = issueDateStr || (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+    const issueTime = issueTimeStr || `${(/* @__PURE__ */ new Date()).toTimeString().split(" ")[0]}-05:00`;
+    const consecutive = `NE${consecutiveNumber.toString().padStart(8, "0")}`;
+    const totalDevengado = payroll.grossEarnings;
+    const totalDeducciones = payroll.employeeDeductions.totalDeductions;
+    const totalComprobante = payroll.netPay;
+    const cune = await this.calculateCUNE(
+      consecutive,
+      issueDate,
+      issueTime,
+      totalDevengado,
+      totalDeducciones,
+      totalComprobante,
+      employer.nit,
+      payroll.taxId,
+      employer.pinSoftware
+    );
+    const primerNombre = payroll.firstName || "";
+    const segundoNombre = payroll.firstName2 || "";
+    const primerApellido = payroll.lastName || "";
+    const segundoApellido = payroll.lastName2 || "";
+    const departmentCode = employeeExtra.departmentCode || "05";
+    const municipalityCode = employeeExtra.municipalityCode || "001";
+    const fullMunicipalityCode = `${departmentCode}${municipalityCode}`;
+    const xmlContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<NominaIndividual
+  xmlns="dian:gov:co:facturaelectronica:NominaIndividual"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="dian:gov:co:facturaelectronica:NominaIndividual NominaIndividual.xsd">
 
-interface Company {
-  logo?: string;
-  id: string;
-  name: string;
-  nit: string;
-  dv?: string | null;
-  address?: string | null;
-  city?: string | null;
-  department?: string | null;
-  postalCode?: string | null;
-  phone?: string | null;
-  whatsapp?: string | null;
-  email?: string | null;
-  contactName?: string | null;
-  legalRepresentative?: string | null;
-  taxRegime?: string | null;
-  economicActivity?: string | null;
-  active: boolean | number;
-  createdAt?: string | null;
-}
+  <Novedad CCCNovedad="false"/>
 
-interface Employee {
-  id: string;
-  companyId: string;
-  firstName: string;
-  firstName2?: string | null;
-  lastName: string;
-  lastName2?: string | null;
-  taxId: string;
-  position?: string | null;
-  contractType?: string | null;
-  salary: number;
-  address?: string | null;
-  city?: string | null;
-  country?: string | null;
-  phone?: string | null;
-  whatsapp?: string | null;
-  hireDate?: string | null;
-  active: boolean | number;
-  createdAt?: string | null;
-}
+  <Periodo
+    FechaIngreso="${this.escapeXml(employeeExtra.startDate || issueDate)}"
+    FechaLiquidacionInicio="${issueDate.substring(0, 7)}-01"
+    FechaLiquidacionFin="${issueDate.substring(0, 7)}-30"
+    TiempoLaborado="${payroll.daysWorked}.00"
+    FechaGen="${issueDate}"/>
 
-function sendJson(data: unknown, status = 200): Response {
+  <NumeroSecuenciaXML
+    CodigoTrabajador="${this.escapeXml(payroll.employeeId)}"
+    Prefijo="NE"
+    Consecutivo="${consecutiveNumber}"
+    Numero="${consecutive}"/>
+
+  <LugarGeneracionXML
+    Pais="CO"
+    DepartamentoEstado="${this.escapeXml(departmentCode)}"
+    MunicipioCiudad="${this.escapeXml(fullMunicipalityCode)}"
+    Idioma="es"/>
+
+  <ProveedorXML
+    RazonSocial="${this.escapeXml(employer.companyName)}"
+    NIT="${this.escapeXml(employer.nit)}"
+    DV="${this.escapeXml(employer.dv)}"
+    SoftwareID="${this.escapeXml(employer.softwareId)}"
+    SoftwareSC="${cune.substring(0, 40)}"/>
+
+  <CodigoQR>https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey=${cune}</CodigoQR>
+
+  <InformacionGeneral
+    Version="V1.0: Documento Soporte de Pago de N\xF3mina Electr\xF3nica"
+    Ambiente="${employer.testSetId ? "2" : "1"}"
+    TipoXML="102"
+    CUNE="${cune}"
+    EncripCUNE="SHA-384"
+    FechaGen="${issueDate}"
+    HoraGen="${issueTime}"
+    PeriodoNomina="5"
+    TipoMoneda="COP"/>
+
+  <Empleador
+    RazonSocial="${this.escapeXml(employer.companyName)}"
+    NIT="${this.escapeXml(employer.nit)}"
+    DV="${this.escapeXml(employer.dv)}"
+    Pais="${this.escapeXml(employer.country || "CO")}"
+    DepartamentoEstado="${this.escapeXml(employer.department || departmentCode)}"
+    MunicipioCiudad="${this.escapeXml(fullMunicipalityCode)}"
+    Direccion="${this.escapeXml(employer.address || "Direcci\xF3n registrada")}"/>
+
+  <Trabajador
+    TipoTrabajador="01"
+    SubTipoTrabajador="00"
+    AltoRiesgoPension="false"
+    TipoDocumento="${this.escapeXml(employeeExtra.typeDocument)}"
+    NumeroDocumento="${this.escapeXml(payroll.taxId)}"
+    PrimerApellido="${this.escapeXml(primerApellido)}"
+    SegundoApellido="${this.escapeXml(segundoApellido)}"
+    PrimerNombre="${this.escapeXml(primerNombre)}"
+    SegundoNombre="${this.escapeXml(segundoNombre)}"
+    LugarTrabajoPais="CO"
+    LugarTrabajoDepartamentoEstado="${this.escapeXml(departmentCode)}"
+    LugarTrabajoMunicipioCiudad="${this.escapeXml(fullMunicipalityCode)}"
+    SalarioIntegral="false"
+    TipoContrato="${this.escapeXml(employeeExtra.typeContract)}"
+    Sueldo="${payroll.baseSalaryEarned.toFixed(2)}"
+    CodigoTrabajador="${this.escapeXml(payroll.employeeId)}"/>
+
+  <Pago
+    Forma="1"
+    Metodo="${this.escapeXml(employeeExtra.paymentMethod)}"
+    Banco="${this.escapeXml(employeeExtra.bankName || "BANCO GENERAL")}"
+    TipoCuenta="${this.escapeXml(employeeExtra.accountType || "AHORROS")}"
+    NumeroCuenta="${this.escapeXml(employeeExtra.accountNumber || "0000000000")}"/>
+
+  <FechasPagos>
+    <FechaPago>${issueDate}</FechaPago>
+  </FechasPagos>
+
+  <Devengados>
+
+    <Basico
+      DiasTrabajados="${payroll.daysWorked}"
+      SueldoTrabajado="${payroll.baseSalaryEarned.toFixed(2)}"/>
+
+    ${payroll.earnedAuxTransporte > 0 ? `
+    <AuxilioTransporte
+      AuxilioTransporte="${payroll.earnedAuxTransporte.toFixed(2)}"/>` : ""}
+
+    ${payroll.extraDiurnaValue > 0 ? `
+    <HorasExtrasDiurnas
+      Valor="${payroll.extraDiurnaValue.toFixed(2)}"/>` : ""}
+
+    ${payroll.extraNocturnaValue > 0 ? `
+    <HorasExtrasNocturnas
+      Valor="${payroll.extraNocturnaValue.toFixed(2)}"/>` : ""}
+
+    ${payroll.recargoNocturnoValue > 0 ? `
+    <RecargoNocturno
+      Valor="${payroll.recargoNocturnoValue.toFixed(2)}"/>` : ""}
+
+  </Devengados>
+
+  <Deducciones>
+
+    <Salud
+      Porcentaje="4.00"
+      ValorBase="${payroll.ibcSecuritySocial.toFixed(2)}"
+      Deduccion="${payroll.employeeDeductions.health4pct.toFixed(2)}"/>
+
+    <FondoPension
+      Porcentaje="4.00"
+      ValorBase="${payroll.ibcSecuritySocial.toFixed(2)}"
+      Deduccion="${payroll.employeeDeductions.pension4pct.toFixed(2)}"/>
+
+    ${payroll.employeeDeductions.fspValue > 0 ? `
+    <FondoSP
+      DeduccionSP="${payroll.employeeDeductions.fspValue.toFixed(2)}"/>` : ""}
+
+  </Deducciones>
+
+  <DevengadosTotal>
+    ${totalDevengado.toFixed(2)}
+  </DevengadosTotal>
+
+  <DeduccionesTotal>
+    ${totalDeducciones.toFixed(2)}
+  </DeduccionesTotal>
+
+  <ComprobanteTotal>
+    ${totalComprobante.toFixed(2)}
+  </ComprobanteTotal>
+
+</NominaIndividual>`.trim();
+    return {
+      cune,
+      consecutive,
+      issueDate,
+      issueTime,
+      xmlContent,
+      totalDevengado,
+      totalDeducciones,
+      totalComprobante
+    };
+  }
+};
+__name(DianNominaXmlService, "DianNominaXmlService");
+
+// src/services/bankDisbursement.ts
+var BankDisbursementService = class {
+  /**
+   * Genera el archivo CSV con la información requerida para el pago masivo o dispersión bancaria
+   */
+  static generateCSV(payrolls, employeesMap) {
+    const headers = ["ID_EMPLEADO", "NOMBRE", "BANCO", "CUENTA", "RFC_NIF", "MONTO_NETO_A_PAGAR"];
+    const rows = payrolls.map((p) => {
+      const emp = employeesMap.get(p.employeeId);
+      return [
+        `"${p.employeeId}"`,
+        `"${p.employeeName}"`,
+        `"${emp?.bankCode || "N/A"}"`,
+        `"${emp?.bankAccount || "N/A"}"`,
+        `"${emp?.taxId || p.taxId || "N/A"}"`,
+        p.netPay.toFixed(2)
+      ].join(",");
+    });
+    return [headers.join(","), ...rows].join("\n");
+  }
+};
+__name(BankDisbursementService, "BankDisbursementService");
+
+// src/index.ts
+function sendJson(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
+      "Content-Type": "application/json; charset=utf-8"
+    }
   });
 }
-
-function normalizeCompany(row: any): Company {
+__name(sendJson, "sendJson");
+function normalizeCompany(row) {
   return {
     id: String(row.id),
-    name: String(row.name ?? ''),
-    nit: String(row.nit ?? ''),
+    name: String(row.name ?? ""),
+    nit: String(row.nit ?? ""),
     dv: row.dv ?? null,
     address: row.address ?? null,
     city: row.city ?? null,
@@ -98,55 +485,44 @@ function normalizeCompany(row: any): Company {
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
     active: !!row.active,
-    createdAt: row.createdAt ?? null,
+    createdAt: row.createdAt ?? null
   };
 }
-
-function normalizeEmployee(row: any): Employee {
+__name(normalizeCompany, "normalizeCompany");
+function normalizeEmployee(row) {
   return {
     id: String(row.id),
     companyId: String(row.companyId),
-    firstName: String(row.firstName ?? ''),
+    firstName: String(row.firstName ?? ""),
     firstName2: row.firstName2 ?? null,
-    lastName: String(row.lastName ?? ''),
+    lastName: String(row.lastName ?? ""),
     lastName2: row.lastName2 ?? null,
-    taxId: String(row.taxId ?? ''),
+    taxId: String(row.taxId ?? ""),
     position: row.position ?? null,
     contractType: row.contractType ?? null,
     salary: Number(row.salary ?? 0),
     address: row.address ?? null,
     city: row.city ?? null,
-    country: row.country ?? 'Colombia',
+    country: row.country ?? "Colombia",
     phone: row.phone ?? null,
     whatsapp: row.whatsapp ?? null,
     hireDate: row.hireDate ?? null,
     active: !!row.active,
-    createdAt: row.createdAt ?? null,
+    createdAt: row.createdAt ?? null
   };
 }
-
-function getEmployeeFullName(employee: Employee): string {
-  return [
-    employee.firstName,
-    employee.firstName2,
-    employee.lastName,
-    employee.lastName2,
-  ]
-    .filter(Boolean)
-    .join(' ');
-}
-
-function getDashboardHtml(): string {
+__name(normalizeEmployee, "normalizeEmployee");
+function getDashboardHtml() {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kreadu Gestión-Future | Dashboard Nómina</title>
+  <title>Kreadu Gesti\xF3n-Future | Dashboard N\xF3mina</title>
 
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
 
   <style>
     * {
@@ -716,7 +1092,7 @@ function App() {
     nit: '',
     dv: '',
     address: '',
-    city: 'Popayán',
+    city: 'Popay\xE1n',
     department: 'Cauca',
     postalCode: '190001',
     phone: '',
@@ -738,7 +1114,7 @@ function App() {
     contractType: '1',
     salary: '',
     address: '',
-    city: 'Popayán',
+    city: 'Popay\xE1n',
     country: 'Colombia',
     phone: '',
     whatsapp: '',
@@ -862,7 +1238,7 @@ function App() {
       nit: '',
       dv: '',
       address: '',
-      city: 'Popayán',
+      city: 'Popay\xE1n',
       department: 'Cauca',
       postalCode: '190001',
       phone: '',
@@ -960,7 +1336,7 @@ function App() {
     if (!selectedCompany) return;
 
     const confirmed = window.confirm(
-      '¿Deseas eliminar la empresa "' +
+      '\xBFDeseas eliminar la empresa "' +
       selectedCompany.name +
       '"?'
     );
@@ -1004,7 +1380,7 @@ function App() {
       contractType: '1',
       salary: '',
       address: '',
-      city: selectedCompany.city || 'Popayán',
+      city: selectedCompany.city || 'Popay\xE1n',
       country: 'Colombia',
       phone: '',
       whatsapp: '',
@@ -1106,7 +1482,7 @@ function App() {
 
   async function deleteEmployee(employee) {
     const confirmed = window.confirm(
-      '¿Deseas eliminar a "' +
+      '\xBFDeseas eliminar a "' +
       employee.firstName +
       ' ' +
       employee.lastName +
@@ -1148,7 +1524,7 @@ function App() {
       const daysWorked = Number(payrollForm.daysWorked);
 
       if (!Number.isFinite(daysWorked) || daysWorked < 1 || daysWorked > 30) {
-        throw new Error('Los días trabajados deben estar entre 1 y 30.');
+        throw new Error('Los d\xEDas trabajados deben estar entre 1 y 30.');
       }
 
       setLoading(true);
@@ -1174,7 +1550,7 @@ function App() {
       setPayrollResult(result.data);
       setDianXmlResult(null);
       setDisbursementResult(null);
-      setSuccess('Nómina calculada correctamente.');
+      setSuccess('N\xF3mina calculada correctamente.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1187,7 +1563,7 @@ function App() {
       clearMessages();
 
       if (!payrollResult) {
-        throw new Error('Primero debes calcular la nómina.');
+        throw new Error('Primero debes calcular la n\xF3mina.');
       }
 
       if (!selectedCompany) {
@@ -1223,7 +1599,7 @@ function App() {
       });
 
       setDianXmlResult(result.data);
-      setSuccess('XML de nómina generado.');
+      setSuccess('XML de n\xF3mina generado.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1236,7 +1612,7 @@ function App() {
       clearMessages();
 
       if (!payrollResult) {
-        throw new Error('Primero debes calcular la nómina.');
+        throw new Error('Primero debes calcular la n\xF3mina.');
       }
 
       if (!selectedCompany) {
@@ -1286,8 +1662,8 @@ function App() {
     if (!payrollResult) {
       return (
         <div className="empty">
-          <div style={{fontSize: '30px', marginBottom: '10px'}}>📊</div>
-          Selecciona un empleado y calcula la nómina para ver los resultados.
+          <div style={{fontSize: '30px', marginBottom: '10px'}}>\u{1F4CA}</div>
+          Selecciona un empleado y calcula la n\xF3mina para ver los resultados.
         </div>
       );
     }
@@ -1319,7 +1695,7 @@ function App() {
 
         <div className="result-body">
           <div className="result-section">
-            <h3>👤 Empleado</h3>
+            <h3>\u{1F464} Empleado</h3>
 
             <div className="result-row">
               <span>Nombre</span>
@@ -1332,13 +1708,13 @@ function App() {
             </div>
 
             <div className="result-row">
-              <span>Días trabajados</span>
+              <span>D\xEDas trabajados</span>
               <strong>{payrollResult.daysWorked}</strong>
             </div>
           </div>
 
           <div className="result-section">
-            <h3>💰 Devengados</h3>
+            <h3>\u{1F4B0} Devengados</h3>
 
             <div className="result-row">
               <span>Salario</span>
@@ -1372,7 +1748,7 @@ function App() {
           </div>
 
           <div className="result-section">
-            <h3>📉 Deducciones empleado</h3>
+            <h3>\u{1F4C9} Deducciones empleado</h3>
 
             <div className="result-row">
               <span>Salud 4%</span>
@@ -1380,7 +1756,7 @@ function App() {
             </div>
 
             <div className="result-row">
-              <span>Pensión 4%</span>
+              <span>Pensi\xF3n 4%</span>
               <strong>{formatCOP(deductions.pension4pct)}</strong>
             </div>
 
@@ -1396,7 +1772,7 @@ function App() {
           </div>
 
           <div className="result-section">
-            <h3>🏢 Aportes empleador</h3>
+            <h3>\u{1F3E2} Aportes empleador</h3>
 
             <div className="result-row">
               <span>Salud 8.5%</span>
@@ -1404,7 +1780,7 @@ function App() {
             </div>
 
             <div className="result-row">
-              <span>Pensión 12%</span>
+              <span>Pensi\xF3n 12%</span>
               <strong>{formatCOP(employer.pension12pct)}</strong>
             </div>
 
@@ -1424,7 +1800,7 @@ function App() {
             </div>
 
             <div className="result-row">
-              <span>Caja compensación 4%</span>
+              <span>Caja compensaci\xF3n 4%</span>
               <strong>{formatCOP(employer.ccf4pct)}</strong>
             </div>
 
@@ -1435,15 +1811,15 @@ function App() {
           </div>
 
           <div className="result-section">
-            <h3>📦 Provisiones</h3>
+            <h3>\u{1F4E6} Provisiones</h3>
 
             <div className="result-row">
-              <span>Cesantías</span>
+              <span>Cesant\xEDas</span>
               <strong>{formatCOP(provisions.cesantias)}</strong>
             </div>
 
             <div className="result-row">
-              <span>Intereses cesantías</span>
+              <span>Intereses cesant\xEDas</span>
               <strong>{formatCOP(provisions.interesesCesantias)}</strong>
             </div>
 
@@ -1464,7 +1840,7 @@ function App() {
           </div>
 
           <div className="result-section">
-            <h3>📊 Seguridad social</h3>
+            <h3>\u{1F4CA} Seguridad social</h3>
 
             <div className="result-row">
               <span>IBC</span>
@@ -1482,7 +1858,7 @@ function App() {
               className="btn"
               onClick={() => setShowPayrollPreview(true)}
             >
-              📄 Ver hoja de nómina
+              \u{1F4C4} Ver hoja de n\xF3mina
             </button>
 
             <button
@@ -1490,7 +1866,7 @@ function App() {
               onClick={generateDianXml}
               disabled={loading}
             >
-              🧾 Generar XML DIAN
+              \u{1F9FE} Generar XML DIAN
             </button>
 
             <button
@@ -1498,13 +1874,13 @@ function App() {
               onClick={generateBankFile}
               disabled={loading}
             >
-              🏦 Archivo bancario
+              \u{1F3E6} Archivo bancario
             </button>
           </div>
 
           {dianXmlResult && (
             <div className="result-section" style={{marginTop: '18px'}}>
-              <h3>🧾 XML DIAN generado</h3>
+              <h3>\u{1F9FE} XML DIAN generado</h3>
 
               <div className="result-row">
                 <span>CUNE</span>
@@ -1522,7 +1898,7 @@ function App() {
 
           {disbursementResult && (
             <div className="result-section" style={{marginTop: '18px'}}>
-              <h3>🏦 Archivo bancario</h3>
+              <h3>\u{1F3E6} Archivo bancario</h3>
               <pre>
                 {JSON.stringify(disbursementResult, null, 2)}
               </pre>
@@ -1571,15 +1947,15 @@ function App() {
                         letterSpacing: '1px'
                       }}
                     >
-                      KREADU GESTIÓN-FUTURE
+                      KREADU GESTI\xD3N-FUTURE
                     </div>
 
                     <h2 style={{margin: '5px 0', fontSize: '22px'}}>
-                      Nómina Individual
+                      N\xF3mina Individual
                     </h2>
 
                     <div style={{fontSize: '13px', color: '#64748b'}}>
-                      Liquidación de nómina · Colombia
+                      Liquidaci\xF3n de n\xF3mina \xB7 Colombia
                     </div>
                   </div>
 
@@ -1587,7 +1963,7 @@ function App() {
                     className="btn"
                     onClick={() => setShowPayrollPreview(false)}
                   >
-                    ✕ Cerrar
+                    \u2715 Cerrar
                   </button>
                 </div>
 
@@ -1643,15 +2019,15 @@ function App() {
                         color: '#64748b',
                         marginBottom: '10px'
                       }}>
-                        PERÍODO
+                        PER\xCDODO
                       </div>
 
                       <strong style={{fontSize: '17px'}}>
-                        Nómina mensual
+                        N\xF3mina mensual
                       </strong>
 
                       <div style={{marginTop: '7px', fontSize: '13px'}}>
-                        Días trabajados: {payrollResult.daysWorked}
+                        D\xEDas trabajados: {payrollResult.daysWorked}
                       </div>
 
                       <div style={{marginTop: '5px', fontSize: '13px'}}>
@@ -1678,7 +2054,7 @@ function App() {
                     <tbody>
                       <tr>
                         <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Salario básico
+                          Salario b\xE1sico
                         </td>
                         <td style={{
                           padding: '9px 5px',
@@ -1777,7 +2153,7 @@ function App() {
                     <tbody>
                       <tr>
                         <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Salud · 4%
+                          Salud \xB7 4%
                         </td>
                         <td style={{
                           padding: '9px 5px',
@@ -1790,7 +2166,7 @@ function App() {
 
                       <tr>
                         <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Pensión · 4%
+                          Pensi\xF3n \xB7 4%
                         </td>
                         <td style={{
                           padding: '9px 5px',
@@ -1880,9 +2256,9 @@ function App() {
                     fontSize: '11px',
                     color: '#64748b'
                   }}>
-                    Documento generado por Kreadu Gestión-Future.
-                    Esta vista es una representación visual de la liquidación.
-                    El documento técnico para nómina electrónica se encuentra
+                    Documento generado por Kreadu Gesti\xF3n-Future.
+                    Esta vista es una representaci\xF3n visual de la liquidaci\xF3n.
+                    El documento t\xE9cnico para n\xF3mina electr\xF3nica se encuentra
                     en el XML DIAN.
                   </div>
 
@@ -1902,8 +2278,8 @@ function App() {
           <div className="brand-logo">K</div>
 
           <div>
-            <h1>Kreadu Gestión-Future</h1>
-            <p>Sistema de gestión de nómina multiempresa</p>
+            <h1>Kreadu Gesti\xF3n-Future</h1>
+            <p>Sistema de gesti\xF3n de n\xF3mina multiempresa</p>
           </div>
         </div>
 
@@ -1935,14 +2311,14 @@ function App() {
               onClick={openEditCompany}
               disabled={!selectedCompany}
             >
-              ✏️
+              \u270F\uFE0F
             </button>
 
             <button
               className="btn btn-primary"
               onClick={openNewCompany}
             >
-              🏢 + Crear Empresa
+              \u{1F3E2} + Crear Empresa
             </button>
           </div>
         </div>
@@ -1964,7 +2340,7 @@ function App() {
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>👥 Empleados</h2>
+              <h2>\u{1F465} Empleados</h2>
               <span>
                 {employees.length} registrado(s)
               </span>
@@ -2051,7 +2427,7 @@ function App() {
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>🧮 Datos para la liquidación de nómina</h2>
+              <h2>\u{1F9EE} Datos para la liquidaci\xF3n de n\xF3mina</h2>
               <span>Colombia 2026</span>
             </div>
           </div>
@@ -2060,7 +2436,7 @@ function App() {
             {!selectedEmp ? (
               <div className="info-box">
                 Selecciona un empleado de la izquierda. Sus datos de
-                identificación y salario se cargarán automáticamente.
+                identificaci\xF3n y salario se cargar\xE1n autom\xE1ticamente.
               </div>
             ) : (
               <>
@@ -2078,7 +2454,7 @@ function App() {
 
                 <div className="section">
                   <div className="section-title">
-                    💼 Información salarial
+                    \u{1F4BC} Informaci\xF3n salarial
                   </div>
 
                   <div className="form-grid">
@@ -2099,7 +2475,7 @@ function App() {
                     </div>
 
                     <div className="form-group">
-                      <label>Días trabajados</label>
+                      <label>D\xEDas trabajados</label>
                       <input
                         type="number"
                         min="1"
@@ -2118,7 +2494,7 @@ function App() {
 
                 <div className="section">
                   <div className="section-title">
-                    ⏱️ Horas extras y recargos
+                    \u23F1\uFE0F Horas extras y recargos
                   </div>
 
                   <div className="form-grid">
@@ -2178,7 +2554,7 @@ function App() {
                     onClick={calculatePayroll}
                     disabled={loading}
                   >
-                    {loading ? 'Calculando...' : '🧮 Calcular Nómina'}
+                    {loading ? 'Calculando...' : '\u{1F9EE} Calcular N\xF3mina'}
                   </button>
 
                   <button
@@ -2186,7 +2562,7 @@ function App() {
                     onClick={clearPayrollForm}
                     disabled={loading}
                   >
-                    🧹 Limpiar formulario
+                    \u{1F9F9} Limpiar formulario
                   </button>
                 </div>
               </>
@@ -2197,7 +2573,7 @@ function App() {
         <section className="panel">
           <div className="panel-header">
             <div>
-              <h2>📊 Resultado de la liquidación</h2>
+              <h2>\u{1F4CA} Resultado de la liquidaci\xF3n</h2>
               <span>Detalle completo</span>
             </div>
           </div>
@@ -2222,14 +2598,14 @@ function App() {
                   setCompanyModal(false);
                 }}
               >
-                ✕
+                \u2715
               </button>
             </div>
 
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Razón social</label>
+                  <label>Raz\xF3n social</label>
                   <div style={{
                     marginBottom: '18px',
                     padding: '16px',
@@ -2242,7 +2618,7 @@ function App() {
                       marginBottom: '8px',
                       fontWeight: '700'
                     }}>
-                      🖼️ Logo de la empresa
+                      \u{1F5BC}\uFE0F Logo de la empresa
                     </label>
 
                     <div style={{
@@ -2313,7 +2689,7 @@ function App() {
                           fontSize: '11px',
                           color: '#94a3b8'
                         }}>
-                          PNG, JPG, WEBP o SVG · máximo 2 MB
+                          PNG, JPG, WEBP o SVG \xB7 m\xE1ximo 2 MB
                         </div>
                       </div>
                     </div>
@@ -2346,7 +2722,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Dígito verificación</label>
+                  <label>D\xEDgito verificaci\xF3n</label>
                   <input
                     value={companyForm.dv}
                     onChange={function(e) {
@@ -2359,7 +2735,7 @@ function App() {
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
+                  <label>Direcci\xF3n</label>
                   <input
                     value={companyForm.address}
                     onChange={function(e) {
@@ -2398,7 +2774,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Código postal</label>
+                  <label>C\xF3digo postal</label>
                   <input
                     value={companyForm.postalCode}
                     onChange={function(e) {
@@ -2411,7 +2787,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
+                  <label>Tel\xE9fono</label>
                   <input
                     value={companyForm.phone}
                     onChange={function(e) {
@@ -2477,7 +2853,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Régimen tributario</label>
+                  <label>R\xE9gimen tributario</label>
                   <select
                     value={companyForm.taxRegime}
                     onChange={function(e) {
@@ -2493,7 +2869,7 @@ function App() {
                 </div>
 
                 <div className="form-group full">
-                  <label>Actividad económica</label>
+                  <label>Actividad econ\xF3mica</label>
                   <input
                     value={companyForm.economicActivity}
                     onChange={function(e) {
@@ -2555,7 +2931,7 @@ function App() {
                   setEmployeeModal(false);
                 }}
               >
-                ✕
+                \u2715
               </button>
             </div>
 
@@ -2650,8 +3026,8 @@ function App() {
                       });
                     }}
                   >
-                    <option value="1">Término indefinido</option>
-                    <option value="2">Término fijo</option>
+                    <option value="1">T\xE9rmino indefinido</option>
+                    <option value="2">T\xE9rmino fijo</option>
                     <option value="3">Obra o labor</option>
                     <option value="4">Aprendizaje</option>
                     <option value="5">Otro</option>
@@ -2674,7 +3050,7 @@ function App() {
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
+                  <label>Direcci\xF3n</label>
                   <input
                     value={employeeForm.address}
                     onChange={function(e) {
@@ -2700,7 +3076,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>País</label>
+                  <label>Pa\xEDs</label>
                   <input
                     value={employeeForm.country}
                     onChange={function(e) {
@@ -2713,7 +3089,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
+                  <label>Tel\xE9fono</label>
                   <input
                     value={employeeForm.phone}
                     onChange={function(e) {
@@ -2791,48 +3167,24 @@ function getEmployeeName(employee) {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
+<\/script>
 </body>
 </html>`;
 }
-
-export default {
-  async fetch(
-    request: Request,
-    env: Env,
-  ): Promise<Response> {
+__name(getDashboardHtml, "getDashboardHtml");
+var src_default = {
+  async fetch(request, env) {
     const url = new URL(request.url);
-
     try {
-      /*
-       * ============================================================
-       * DASHBOARD
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/' ||
-        url.pathname === '/dashboard'
-      ) {
+      if (url.pathname === "/" || url.pathname === "/dashboard") {
         return new Response(getDashboardHtml(), {
           headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-          },
+            "Content-Type": "text/html; charset=utf-8"
+          }
         });
       }
-
-      /*
-       * ============================================================
-       * EMPRESAS - LISTAR
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/companies' &&
-        request.method === 'GET'
-      ) {
-        const result = await env.DB
-          .prepare(`
+      if (url.pathname === "/api/companies" && request.method === "GET") {
+        const result = await env.DB.prepare(`
             SELECT
               id,
               name,
@@ -2855,59 +3207,40 @@ export default {
             FROM companies
             WHERE active = 1
             ORDER BY name ASC
-          `)
-          .all();
-
+          `).all();
         const companies = (result.results || []).map(
           normalizeCompany
         );
-
         return sendJson({
           success: true,
-          data: companies,
+          data: companies
         });
       }
-
-      /*
-       * ============================================================
-       * EMPRESAS - CREAR
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/companies' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
-
-        const name = String(body.name || '').trim();
-        const nit = String(body.nit || '').trim();
-
+      if (url.pathname === "/api/companies" && request.method === "POST") {
+        const body = await request.json();
+        const name = String(body.name || "").trim();
+        const nit = String(body.nit || "").trim();
         if (!name) {
           return sendJson(
             {
               success: false,
-              error: 'El nombre de la empresa es obligatorio.',
+              error: "El nombre de la empresa es obligatorio."
             },
             400
           );
         }
-
         if (!nit) {
           return sendJson(
             {
               success: false,
-              error: 'El NIT de la empresa es obligatorio.',
+              error: "El NIT de la empresa es obligatorio."
             },
             400
           );
         }
-
         const id = `COMP-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
-
-        await env.DB
-          .prepare(`
+        const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+        await env.DB.prepare(`
             INSERT INTO companies (
               id,
               name,
@@ -2931,101 +3264,72 @@ export default {
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
               ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
             )
-          `)
-          .bind(
-            id,
-            name,
-            nit,
-            body.dv || null,
-            body.address || null,
-            body.city || null,
-            body.department || null,
-            body.postalCode || null,
-            body.phone || null,
-            body.whatsapp || null,
-            body.email || null,
-            body.contactName || null,
-            body.legalRepresentative || null,
-            body.taxRegime || null,
-            body.economicActivity || null,
-            body.logo || null,
-            createdAt
-          )
-          .run();
-
-        const row = await env.DB
-          .prepare(`
+          `).bind(
+          id,
+          name,
+          nit,
+          body.dv || null,
+          body.address || null,
+          body.city || null,
+          body.department || null,
+          body.postalCode || null,
+          body.phone || null,
+          body.whatsapp || null,
+          body.email || null,
+          body.contactName || null,
+          body.legalRepresentative || null,
+          body.taxRegime || null,
+          body.economicActivity || null,
+          body.logo || null,
+          createdAt
+        ).run();
+        const row = await env.DB.prepare(`
             SELECT *
             FROM companies
             WHERE id = ?1
-          `)
-          .bind(id)
-          .first();
-
+          `).bind(id).first();
         return sendJson(
           {
             success: true,
-            data: normalizeCompany(row),
+            data: normalizeCompany(row)
           },
           201
         );
       }
-
-      /*
-       * ============================================================
-       * EMPRESA - EDITAR
-       * ============================================================
-       */
-
-      const companyMatch =
-        url.pathname.match(/^\/api\/companies\/([^/]+)$/);
-
-      if (
-        companyMatch &&
-        request.method === 'PUT'
-      ) {
+      const companyMatch = url.pathname.match(/^\/api\/companies\/([^/]+)$/);
+      if (companyMatch && request.method === "PUT") {
         const companyId = decodeURIComponent(companyMatch[1]);
-        const body = await request.json() as any;
-
-        const existing = await env.DB
-          .prepare(`
+        const body = await request.json();
+        const existing = await env.DB.prepare(`
             SELECT *
             FROM companies
             WHERE id = ?1
-          `)
-          .bind(companyId)
-          .first();
-
+          `).bind(companyId).first();
         if (!existing) {
           return sendJson(
             {
               success: false,
-              error: 'Empresa no encontrada.',
+              error: "Empresa no encontrada."
             },
             404
           );
         }
-
         const name = String(
-          body.name ?? existing.name ?? ''
+          body.name ?? existing.name ?? ""
         ).trim();
-
         const nit = String(
-          body.nit ?? existing.nit ?? ''
+          body.nit ?? existing.nit ?? ""
         ).trim();
-
         if (!name || !nit) {
           return sendJson(
             {
               success: false,
-              error: 'Nombre y NIT son obligatorios.',
+              error: "Nombre y NIT son obligatorios."
             },
             400
           );
         }
-
-        await env.DB
-          .prepare(`
+        await env.DB.prepare(`
             UPDATE companies
             SET
               name = ?1,
@@ -3044,121 +3348,77 @@ export default {
               economicActivity = ?14,
               logo = ?15
             WHERE id = ?16
-          `)
-          .bind(
-            name,
-            nit,
-            body.dv ?? null,
-            body.address ?? null,
-            body.city ?? null,
-            body.department ?? null,
-            body.postalCode ?? null,
-            body.phone ?? null,
-            body.whatsapp ?? null,
-            body.email ?? null,
-            body.contactName ?? null,
-            body.legalRepresentative ?? null,
-            body.taxRegime ?? null,
-            body.economicActivity ?? null,
-            body.logo ?? existing.logo ?? null,
-            companyId
-          )
-          .run();
-
-        const row = await env.DB
-          .prepare(`
+          `).bind(
+          name,
+          nit,
+          body.dv ?? null,
+          body.address ?? null,
+          body.city ?? null,
+          body.department ?? null,
+          body.postalCode ?? null,
+          body.phone ?? null,
+          body.whatsapp ?? null,
+          body.email ?? null,
+          body.contactName ?? null,
+          body.legalRepresentative ?? null,
+          body.taxRegime ?? null,
+          body.economicActivity ?? null,
+          body.logo ?? existing.logo ?? null,
+          companyId
+        ).run();
+        const row = await env.DB.prepare(`
             SELECT *
             FROM companies
             WHERE id = ?1
-          `)
-          .bind(companyId)
-          .first();
-
+          `).bind(companyId).first();
         return sendJson({
           success: true,
-          data: normalizeCompany(row),
+          data: normalizeCompany(row)
         });
       }
-
-      /*
-       * ============================================================
-       * EMPRESA - ELIMINAR
-       * ============================================================
-       */
-
-      if (
-        companyMatch &&
-        request.method === 'DELETE'
-      ) {
+      if (companyMatch && request.method === "DELETE") {
         const companyId = decodeURIComponent(companyMatch[1]);
-
-        const existing = await env.DB
-          .prepare(`
+        const existing = await env.DB.prepare(`
             SELECT id
             FROM companies
             WHERE id = ?1
-          `)
-          .bind(companyId)
-          .first();
-
+          `).bind(companyId).first();
         if (!existing) {
           return sendJson(
             {
               success: false,
-              error: 'Empresa no encontrada.',
+              error: "Empresa no encontrada."
             },
             404
           );
         }
-
-        await env.DB
-          .prepare(`
+        await env.DB.prepare(`
             UPDATE companies
             SET active = 0
             WHERE id = ?1
-          `)
-          .bind(companyId)
-          .run();
-
-        await env.DB
-          .prepare(`
+          `).bind(companyId).run();
+        await env.DB.prepare(`
             UPDATE employees
             SET active = 0
             WHERE companyId = ?1
-          `)
-          .bind(companyId)
-          .run();
-
+          `).bind(companyId).run();
         return sendJson({
           success: true,
-          message: 'Empresa eliminada correctamente.',
+          message: "Empresa eliminada correctamente."
         });
       }
-
-      /*
-       * ============================================================
-       * EMPLEADOS - LISTAR
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/employees' &&
-        request.method === 'GET'
-      ) {
-        const companyId = url.searchParams.get('companyId');
-
+      if (url.pathname === "/api/employees" && request.method === "GET") {
+        const companyId = url.searchParams.get("companyId");
         if (!companyId) {
           return sendJson(
             {
               success: false,
-              error: 'companyId es obligatorio.',
+              error: "companyId es obligatorio."
             },
             400
           );
         }
-
-        const result = await env.DB
-          .prepare(`
+        const result = await env.DB.prepare(`
             SELECT
               id,
               companyId,
@@ -3182,106 +3442,75 @@ export default {
             WHERE companyId = ?1
               AND active = 1
             ORDER BY firstName ASC, lastName ASC
-          `)
-          .bind(companyId)
-          .all();
-
+          `).bind(companyId).all();
         const employees = (result.results || []).map(
           normalizeEmployee
         );
-
         return sendJson({
           success: true,
-          data: employees,
+          data: employees
         });
       }
-
-      /*
-       * ============================================================
-       * EMPLEADOS - CREAR
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/employees' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
-
+      if (url.pathname === "/api/employees" && request.method === "POST") {
+        const body = await request.json();
         const companyId = String(
-          body.companyId || ''
+          body.companyId || ""
         ).trim();
-
         if (!companyId) {
           return sendJson(
             {
               success: false,
-              error: 'companyId es obligatorio.',
+              error: "companyId es obligatorio."
             },
             400
           );
         }
-
-        const company = await env.DB
-          .prepare(`
+        const company = await env.DB.prepare(`
             SELECT id
             FROM companies
             WHERE id = ?1
               AND active = 1
-          `)
-          .bind(companyId)
-          .first();
-
+          `).bind(companyId).first();
         if (!company) {
           return sendJson(
             {
               success: false,
-              error: 'La empresa no existe o está inactiva.',
+              error: "La empresa no existe o est\xE1 inactiva."
             },
             404
           );
         }
-
         const firstName = String(
-          body.firstName || ''
+          body.firstName || ""
         ).trim();
-
         const lastName = String(
-          body.lastName || ''
+          body.lastName || ""
         ).trim();
-
         const taxId = String(
-          body.taxId || ''
+          body.taxId || ""
         ).trim();
-
         const salary = Number(body.salary);
-
         if (!firstName || !lastName || !taxId) {
           return sendJson(
             {
               success: false,
-              error:
-                'Primer nombre, primer apellido y documento son obligatorios.',
+              error: "Primer nombre, primer apellido y documento son obligatorios."
             },
             400
           );
         }
-
         if (!Number.isFinite(salary) || salary <= 0) {
           return sendJson(
             {
               success: false,
-              error: 'El salario debe ser mayor que cero.',
+              error: "El salario debe ser mayor que cero."
             },
             400
           );
         }
-
         const id = `EMP-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
-
-        await env.DB
-          .prepare(`
+        const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+        await env.DB.prepare(`
             INSERT INTO employees (
               id,
               companyId,
@@ -3306,99 +3535,69 @@ export default {
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
               ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
             )
-          `)
-          .bind(
-            id,
-            companyId,
-            firstName,
-            body.firstName2 || null,
-            lastName,
-            body.lastName2 || null,
-            taxId,
-            body.position || null,
-            body.contractType || '1',
-            salary,
-            body.address || null,
-            body.city || null,
-            body.country || 'Colombia',
-            body.phone || null,
-            body.whatsapp || null,
-            body.hireDate || null,
-            createdAt
-          )
-          .run();
-
-        const row = await env.DB
-          .prepare(`
+          `).bind(
+          id,
+          companyId,
+          firstName,
+          body.firstName2 || null,
+          lastName,
+          body.lastName2 || null,
+          taxId,
+          body.position || null,
+          body.contractType || "1",
+          salary,
+          body.address || null,
+          body.city || null,
+          body.country || "Colombia",
+          body.phone || null,
+          body.whatsapp || null,
+          body.hireDate || null,
+          createdAt
+        ).run();
+        const row = await env.DB.prepare(`
             SELECT *
             FROM employees
             WHERE id = ?1
-          `)
-          .bind(id)
-          .first();
-
+          `).bind(id).first();
         return sendJson(
           {
             success: true,
-            data: normalizeEmployee(row),
+            data: normalizeEmployee(row)
           },
           201
         );
       }
-
-      /*
-       * ============================================================
-       * EMPLEADO - EDITAR
-       * ============================================================
-       */
-
-      const employeeMatch =
-        url.pathname.match(/^\/api\/employees\/([^/]+)$/);
-
-      if (
-        employeeMatch &&
-        request.method === 'PUT'
-      ) {
-        const employeeId =
-          decodeURIComponent(employeeMatch[1]);
-
-        const body = await request.json() as any;
-
-        const existing = await env.DB
-          .prepare(`
+      const employeeMatch = url.pathname.match(/^\/api\/employees\/([^/]+)$/);
+      if (employeeMatch && request.method === "PUT") {
+        const employeeId = decodeURIComponent(employeeMatch[1]);
+        const body = await request.json();
+        const existing = await env.DB.prepare(`
             SELECT *
             FROM employees
             WHERE id = ?1
-          `)
-          .bind(employeeId)
-          .first();
-
+          `).bind(employeeId).first();
         if (!existing) {
           return sendJson(
             {
               success: false,
-              error: 'Empleado no encontrado.',
+              error: "Empleado no encontrado."
             },
             404
           );
         }
-
         const salary = Number(
           body.salary ?? existing.salary
         );
-
         if (!Number.isFinite(salary) || salary <= 0) {
           return sendJson(
             {
               success: false,
-              error: 'El salario debe ser mayor que cero.',
+              error: "El salario debe ser mayor que cero."
             },
             400
           );
         }
-
-        await env.DB
-          .prepare(`
+        await env.DB.prepare(`
             UPDATE employees
             SET
               firstName = ?1,
@@ -3416,454 +3615,443 @@ export default {
               whatsapp = ?13,
               hireDate = ?14
             WHERE id = ?15
-          `)
-          .bind(
-            String(
-              body.firstName ??
-              existing.firstName ??
-              ''
-            ).trim(),
-
-            body.firstName2 ?? null,
-
-            String(
-              body.lastName ??
-              existing.lastName ??
-              ''
-            ).trim(),
-
-            body.lastName2 ?? null,
-
-            String(
-              body.taxId ??
-              existing.taxId ??
-              ''
-            ).trim(),
-
-            body.position ?? null,
-            body.contractType ?? '1',
-            salary,
-            body.address ?? null,
-            body.city ?? null,
-            body.country ?? 'Colombia',
-            body.phone ?? null,
-            body.whatsapp ?? null,
-            body.hireDate ?? null,
-            employeeId
-          )
-          .run();
-
-        const row = await env.DB
-          .prepare(`
+          `).bind(
+          String(
+            body.firstName ?? existing.firstName ?? ""
+          ).trim(),
+          body.firstName2 ?? null,
+          String(
+            body.lastName ?? existing.lastName ?? ""
+          ).trim(),
+          body.lastName2 ?? null,
+          String(
+            body.taxId ?? existing.taxId ?? ""
+          ).trim(),
+          body.position ?? null,
+          body.contractType ?? "1",
+          salary,
+          body.address ?? null,
+          body.city ?? null,
+          body.country ?? "Colombia",
+          body.phone ?? null,
+          body.whatsapp ?? null,
+          body.hireDate ?? null,
+          employeeId
+        ).run();
+        const row = await env.DB.prepare(`
             SELECT *
             FROM employees
             WHERE id = ?1
-          `)
-          .bind(employeeId)
-          .first();
-
+          `).bind(employeeId).first();
         return sendJson({
           success: true,
-          data: normalizeEmployee(row),
+          data: normalizeEmployee(row)
         });
       }
-
-      /*
-       * ============================================================
-       * EMPLEADO - ELIMINAR
-       * ============================================================
-       */
-
-      if (
-        employeeMatch &&
-        request.method === 'DELETE'
-      ) {
-        const employeeId =
-          decodeURIComponent(employeeMatch[1]);
-
-        const existing = await env.DB
-          .prepare(`
+      if (employeeMatch && request.method === "DELETE") {
+        const employeeId = decodeURIComponent(employeeMatch[1]);
+        const existing = await env.DB.prepare(`
             SELECT id
             FROM employees
             WHERE id = ?1
               AND active = 1
-          `)
-          .bind(employeeId)
-          .first();
-
+          `).bind(employeeId).first();
         if (!existing) {
           return sendJson(
             {
               success: false,
-              error: 'Empleado no encontrado.',
+              error: "Empleado no encontrado."
             },
             404
           );
         }
-
-        await env.DB
-          .prepare(`
+        await env.DB.prepare(`
             UPDATE employees
             SET active = 0
             WHERE id = ?1
-          `)
-          .bind(employeeId)
-          .run();
-
+          `).bind(employeeId).run();
         return sendJson({
           success: true,
-          message: 'Empleado eliminado correctamente.',
+          message: "Empleado eliminado correctamente."
         });
       }
-
-      /*
-       * ============================================================
-       * NÓMINA COLOMBIA 2026
-       *
-       * IMPORTANTE:
-       * El cálculo NO se hace aquí.
-       * Se delega completamente al motor ColombiaPayrollEngine.
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/colombia/payroll/calculate' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
+      if (url.pathname === "/api/colombia/payroll/calculate" && request.method === "POST") {
+        const body = await request.json();
         const employeeInput = body?.employeeInput || {};
-
         const employeeId = String(
-          employeeInput.employeeId || ''
+          employeeInput.employeeId || ""
         ).trim();
-
         if (!employeeId) {
           return sendJson(
             {
               success: false,
-              error: 'employeeId es obligatorio.',
+              error: "employeeId es obligatorio."
             },
             400
           );
         }
-
-        const employeeRow = await env.DB
-          .prepare(`
+        const employeeRow = await env.DB.prepare(`
             SELECT *
             FROM employees
             WHERE id = ?1
               AND active = 1
-          `)
-          .bind(employeeId)
-          .first();
-
+          `).bind(employeeId).first();
         if (!employeeRow) {
           return sendJson(
             {
               success: false,
-              error: 'Empleado no encontrado o inactivo.',
+              error: "Empleado no encontrado o inactivo."
             },
             404
           );
         }
-
         const employee = normalizeEmployee(employeeRow);
-
         const daysWorked = Number(
           employeeInput.daysWorked ?? 30
         );
-
-        if (
-          !Number.isFinite(daysWorked) ||
-          daysWorked < 1 ||
-          daysWorked > 30
-        ) {
+        if (!Number.isFinite(daysWorked) || daysWorked < 1 || daysWorked > 30) {
           return sendJson(
             {
               success: false,
-              error: 'Los días trabajados deben estar entre 1 y 30.',
+              error: "Los d\xEDas trabajados deben estar entre 1 y 30."
             },
             400
           );
         }
-
-        const overtimeHours =
-          employeeInput.overtimeHours || {};
-
+        const overtimeHours = employeeInput.overtimeHours || {};
         const extraDiurna = Number(
           overtimeHours.extraDiurna ?? 0
         );
-
         const extraNocturna = Number(
           overtimeHours.extraNocturna ?? 0
         );
-
         const recargoNocturno = Number(
           overtimeHours.recargoNocturno ?? 0
         );
-
-        if (
-          !Number.isFinite(extraDiurna) ||
-          !Number.isFinite(extraNocturna) ||
-          !Number.isFinite(recargoNocturno) ||
-          extraDiurna < 0 ||
-          extraNocturna < 0 ||
-          recargoNocturno < 0
-        ) {
+        if (!Number.isFinite(extraDiurna) || !Number.isFinite(extraNocturna) || !Number.isFinite(recargoNocturno) || extraDiurna < 0 || extraNocturna < 0 || recargoNocturno < 0) {
           return sendJson(
             {
               success: false,
-              error: 'Las horas extras y recargos deben ser valores válidos.',
+              error: "Las horas extras y recargos deben ser valores v\xE1lidos."
             },
             400
           );
         }
-
-        const payrollInput: ColombiaPayrollInput = {
+        const payrollInput = {
           companyId: employee.companyId,
           employeeId: employee.id,
-
           firstName: employee.firstName,
-          firstName2:
-            employee.firstName2 || undefined,
-
+          firstName2: employee.firstName2 || void 0,
           lastName: employee.lastName,
-          lastName2:
-            employee.lastName2 || undefined,
-
+          lastName2: employee.lastName2 || void 0,
           taxId: employee.taxId,
-
           baseSalaryMonthly: employee.salary,
-
           daysWorked,
-
           extraDiurna,
           extraNocturna,
           recargoNocturno,
-
           overtimeHours: {
             extraDiurna,
             extraNocturna,
-            recargoNocturno,
-          },
+            recargoNocturno
+          }
         };
-
-        const payrollResult: ColombiaPayrollResult =
-          ColombiaPayrollEngine.calculate(
-            payrollInput
-          );
-
+        const payrollResult = colombiaEngine_default.calculate(
+          payrollInput
+        );
         return sendJson({
           success: true,
-          data: payrollResult,
+          data: payrollResult
         });
       }
-
-      /*
-       * ============================================================
-       * DIAN - GENERAR XML
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/colombia/dian/xml' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
-
-        const payrollData =
-          body?.payrollData as ColombiaPayrollResult;
-
-        if (
-          !payrollData ||
-          !payrollData.employeeId ||
-          !payrollData.taxId
-        ) {
+      if (url.pathname === "/api/colombia/dian/xml" && request.method === "POST") {
+        const body = await request.json();
+        const payrollData = body?.payrollData;
+        if (!payrollData || !payrollData.employeeId || !payrollData.taxId) {
           return sendJson(
             {
               success: false,
-              error: 'Los datos de nómina son obligatorios.',
+              error: "Los datos de n\xF3mina son obligatorios."
             },
             400
           );
         }
-
-        const employerInput =
-          body?.employerInfo || {};
-
-        const employeeInput =
-          body?.employeeExtra || {};
-
-        const employerInfo: DianEmployerInfo = {
+        const employerInput = body?.employerInfo || {};
+        const employeeInput = body?.employeeExtra || {};
+        const employerInfo = {
           nit: String(
-            employerInput.nit || ''
+            employerInput.nit || ""
           ).trim(),
-
           dv: String(
-            employerInput.dv || '0'
+            employerInput.dv || "0"
           ).trim(),
-
           companyName: String(
-            employerInput.companyName || ''
+            employerInput.companyName || ""
           ).trim(),
-
           softwareId: String(
-            employerInput.softwareId ||
-            'SOFT-KREADU-2026'
+            employerInput.softwareId || "SOFT-KREADU-2026"
           ).trim(),
-
           pinSoftware: String(
-            employerInput.pinSoftware ||
-            '12345'
+            employerInput.pinSoftware || "12345"
           ).trim(),
-
-          testSetId:
-            employerInput.testSetId ||
-            undefined,
+          testSetId: employerInput.testSetId || void 0
         };
-
-        if (
-          !employerInfo.nit ||
-          !employerInfo.companyName
-        ) {
+        if (!employerInfo.nit || !employerInfo.companyName) {
           return sendJson(
             {
               success: false,
-              error:
-                'NIT y nombre de empresa son obligatorios para generar el XML.',
+              error: "NIT y nombre de empresa son obligatorios para generar el XML."
             },
             400
           );
         }
-
-        const employeeExtra: DianEmployeeExtraInfo = {
-          typeDocument:
-            employeeInput.typeDocument || '13',
-
-          typeContract:
-            employeeInput.typeContract || '1',
-
+        const employeeExtra = {
+          typeDocument: employeeInput.typeDocument || "13",
+          typeContract: employeeInput.typeContract || "1",
           /*
            * 42 = transferencia bancaria.
            * El servicio DIAN preparado acepta 10, 42 o 20.
            */
-          paymentMethod:
-            employeeInput.paymentMethod || '42',
-
-          bankName:
-            employeeInput.bankName ||
-            undefined,
-
-          accountNumber:
-            employeeInput.accountNumber ||
-            undefined,
-
-          accountType:
-            employeeInput.accountType ||
-            undefined,
+          paymentMethod: employeeInput.paymentMethod || "42",
+          bankName: employeeInput.bankName || void 0,
+          accountNumber: employeeInput.accountNumber || void 0,
+          accountType: employeeInput.accountType || void 0
         };
-
         const consecutiveNumber = Math.max(
           1,
           Number(body?.consecutiveNumber || 1)
         );
-
-        const xmlResult =
-          await DianNominaXmlService.generateDSPNE(
-            payrollData,
-            employerInfo,
-            employeeExtra,
-            consecutiveNumber
-          );
-
+        const xmlResult = await DianNominaXmlService.generateDSPNE(
+          payrollData,
+          employerInfo,
+          employeeExtra,
+          consecutiveNumber
+        );
         return sendJson({
           success: true,
-          data: xmlResult,
+          data: xmlResult
         });
       }
-
-      /*
-       * ============================================================
-       * BANCOS
-       *
-       * Se conserva conectado al servicio existente.
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/colombia/bank-disbursement' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
-
-        if (
-          !body?.companyInfo ||
-          !Array.isArray(body?.records)
-        ) {
+      if (url.pathname === "/api/colombia/bank-disbursement" && request.method === "POST") {
+        const body = await request.json();
+        if (!body?.companyInfo || !Array.isArray(body?.records)) {
           return sendJson(
             {
               success: false,
-              error:
-                'companyInfo y records son obligatorios.',
+              error: "companyInfo y records son obligatorios."
             },
             400
           );
         }
-
-          const payrolls = Array.isArray(body.records)
-            ? body.records
-            : [];
-
-          const employeesMap = new Map<string, any>();
-
-          for (const record of payrolls) {
-            if (!record?.employeeId) continue;
-
-            employeesMap.set(record.employeeId, {
-              bankCode: record.bankCode || record.bankName || 'N/A',
-              bankAccount: record.bankAccount || record.accountNumber || 'N/A',
-              taxId: record.taxId || 'N/A',
-            });
-          }
-
-          const result = BankDisbursementService.generateCSV(
-            payrolls,
-            employeesMap
-          );
-
-          return sendJson({
-            success: true,
-            data: result,
+        const payrolls = Array.isArray(body.records) ? body.records : [];
+        const employeesMap = /* @__PURE__ */ new Map();
+        for (const record of payrolls) {
+          if (!record?.employeeId)
+            continue;
+          employeesMap.set(record.employeeId, {
+            bankCode: record.bankCode || record.bankName || "N/A",
+            bankAccount: record.bankAccount || record.accountNumber || "N/A",
+            taxId: record.taxId || "N/A"
           });
+        }
+        const result = BankDisbursementService.generateCSV(
+          payrolls,
+          employeesMap
+        );
+        return sendJson({
+          success: true,
+          data: result
+        });
       }
-
-      /*
-       * ============================================================
-       * 404
-       * ============================================================
-       */
-
       return sendJson(
         {
           success: false,
-          error: 'Ruta no encontrada.',
+          error: "Ruta no encontrada."
         },
         404
       );
-
     } catch (error) {
-      console.error('Worker error:', error);
-
+      console.error("Worker error:", error);
       return sendJson(
         {
           success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Error interno del servidor.',
+          error: error instanceof Error ? error.message : "Error interno del servidor."
         },
         500
       );
     }
-  },
+  }
 };
+
+// node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
+var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } finally {
+    try {
+      if (request.body !== null && !request.bodyUsed) {
+        const reader = request.body.getReader();
+        while (!(await reader.read()).done) {
+        }
+      }
+    } catch (e) {
+      console.error("Failed to drain the unused request body.", e);
+    }
+  }
+}, "drainBody");
+var middleware_ensure_req_body_drained_default = drainBody;
+
+// node_modules/wrangler/templates/middleware/middleware-miniflare3-json-error.ts
+function reduceError(e) {
+  return {
+    name: e?.name,
+    message: e?.message ?? String(e),
+    stack: e?.stack,
+    cause: e?.cause === void 0 ? void 0 : reduceError(e.cause)
+  };
+}
+__name(reduceError, "reduceError");
+var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } catch (e) {
+    const error = reduceError(e);
+    return Response.json(error, {
+      status: 500,
+      headers: { "MF-Experimental-Error-Stack": "true" }
+    });
+  }
+}, "jsonError");
+var middleware_miniflare3_json_error_default = jsonError;
+
+// .wrangler/tmp/bundle-3kDyEN/middleware-insertion-facade.js
+var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
+  middleware_ensure_req_body_drained_default,
+  middleware_miniflare3_json_error_default
+];
+var middleware_insertion_facade_default = src_default;
+
+// node_modules/wrangler/templates/middleware/common.ts
+var __facade_middleware__ = [];
+function __facade_register__(...args) {
+  __facade_middleware__.push(...args.flat());
+}
+__name(__facade_register__, "__facade_register__");
+function __facade_invokeChain__(request, env, ctx, dispatch, middlewareChain) {
+  const [head, ...tail] = middlewareChain;
+  const middlewareCtx = {
+    dispatch,
+    next(newRequest, newEnv) {
+      return __facade_invokeChain__(newRequest, newEnv, ctx, dispatch, tail);
+    }
+  };
+  return head(request, env, ctx, middlewareCtx);
+}
+__name(__facade_invokeChain__, "__facade_invokeChain__");
+function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
+  return __facade_invokeChain__(request, env, ctx, dispatch, [
+    ...__facade_middleware__,
+    finalMiddleware
+  ]);
+}
+__name(__facade_invoke__, "__facade_invoke__");
+
+// .wrangler/tmp/bundle-3kDyEN/middleware-loader.entry.ts
+var __Facade_ScheduledController__ = class {
+  constructor(scheduledTime, cron, noRetry) {
+    this.scheduledTime = scheduledTime;
+    this.cron = cron;
+    this.#noRetry = noRetry;
+  }
+  #noRetry;
+  noRetry() {
+    if (!(this instanceof __Facade_ScheduledController__)) {
+      throw new TypeError("Illegal invocation");
+    }
+    this.#noRetry();
+  }
+};
+__name(__Facade_ScheduledController__, "__Facade_ScheduledController__");
+function wrapExportedHandler(worker) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return worker;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
+    if (worker.fetch === void 0) {
+      throw new Error("Handler does not export a fetch() function.");
+    }
+    return worker.fetch(request, env, ctx);
+  }, "fetchDispatcher");
+  return {
+    ...worker,
+    fetch(request, env, ctx) {
+      const dispatcher = /* @__PURE__ */ __name(function(type, init) {
+        if (type === "scheduled" && worker.scheduled !== void 0) {
+          const controller = new __Facade_ScheduledController__(
+            Date.now(),
+            init.cron ?? "",
+            () => {
+            }
+          );
+          return worker.scheduled(controller, env, ctx);
+        }
+      }, "dispatcher");
+      return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
+    }
+  };
+}
+__name(wrapExportedHandler, "wrapExportedHandler");
+function wrapWorkerEntrypoint(klass) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return klass;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  return class extends klass {
+    #fetchDispatcher = (request, env, ctx) => {
+      this.env = env;
+      this.ctx = ctx;
+      if (super.fetch === void 0) {
+        throw new Error("Entrypoint class does not define a fetch() function.");
+      }
+      return super.fetch(request);
+    };
+    #dispatcher = (type, init) => {
+      if (type === "scheduled" && super.scheduled !== void 0) {
+        const controller = new __Facade_ScheduledController__(
+          Date.now(),
+          init.cron ?? "",
+          () => {
+          }
+        );
+        return super.scheduled(controller);
+      }
+    };
+    fetch(request) {
+      return __facade_invoke__(
+        request,
+        this.env,
+        this.ctx,
+        this.#dispatcher,
+        this.#fetchDispatcher
+      );
+    }
+  };
+}
+__name(wrapWorkerEntrypoint, "wrapWorkerEntrypoint");
+var WRAPPED_ENTRY;
+if (typeof middleware_insertion_facade_default === "object") {
+  WRAPPED_ENTRY = wrapExportedHandler(middleware_insertion_facade_default);
+} else if (typeof middleware_insertion_facade_default === "function") {
+  WRAPPED_ENTRY = wrapWorkerEntrypoint(middleware_insertion_facade_default);
+}
+var middleware_loader_entry_default = WRAPPED_ENTRY;
+export {
+  __INTERNAL_WRANGLER_MIDDLEWARE__,
+  middleware_loader_entry_default as default
+};
+//# sourceMappingURL=index.js.map

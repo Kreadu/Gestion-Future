@@ -34,6 +34,7 @@ export class PayrollCalculator {
       payrollId: `PAY-${Date.now()}-${employee.id}`,
       employeeId: employee.id,
       employeeName: `${employee.firstName} ${employee.lastName}`,
+      periodDate: new Date().toISOString(),
       daysWorked,
       baseSalaryEarned,
       totalEarnings: grossEarnings,

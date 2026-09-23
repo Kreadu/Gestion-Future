@@ -30,7 +30,6 @@ interface Env {
 }
 
 interface Company {
-  logo?: string;
   id: string;
   name: string;
   nit: string;
@@ -2849,7 +2848,6 @@ export default {
               legalRepresentative,
               taxRegime,
               economicActivity,
-              logo,
               active,
               createdAt
             FROM companies
@@ -2929,7 +2927,7 @@ export default {
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16
             )
           `)
           .bind(
@@ -2948,7 +2946,6 @@ export default {
             body.legalRepresentative || null,
             body.taxRegime || null,
             body.economicActivity || null,
-            body.logo || null,
             createdAt
           )
           .run();
@@ -3041,9 +3038,8 @@ export default {
               contactName = ?11,
               legalRepresentative = ?12,
               taxRegime = ?13,
-              economicActivity = ?14,
-              logo = ?15
-            WHERE id = ?16
+              economicActivity = ?14
+            WHERE id = ?15
           `)
           .bind(
             name,
@@ -3060,7 +3056,6 @@ export default {
             body.legalRepresentative ?? null,
             body.taxRegime ?? null,
             body.economicActivity ?? null,
-            body.logo ?? existing.logo ?? null,
             companyId
           )
           .run();
