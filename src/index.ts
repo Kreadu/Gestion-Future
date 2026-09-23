@@ -2924,6 +2924,7 @@ export default {
               legalRepresentative,
               taxRegime,
               economicActivity,
+              logo,
               active,
               createdAt
             )
