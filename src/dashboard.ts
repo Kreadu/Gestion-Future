@@ -2284,7 +2284,11 @@ function App({ me, onSignOut }) {
           {payrollResult.leaveValue > 0 && (
             <div className="info-box" style={{margin: '0 18px 18px'}}>
               De la incapacidad/licencia, {formatCOP(payrollResult.reimbursableAmount)}{' '}
-              son recobrables a EPS/ARL.
+              son recobrables a EPS/ARL. Este valor ya está incluido en lo
+              que se le paga al empleado (el empleado cobra todo, ahora,
+              sin esperar nada) — lo recobrable es lo que la empresa
+              puede reclamarle después a la EPS/ARL, no cambia el pago
+              al empleado.
             </div>
           )}
 
