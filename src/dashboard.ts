@@ -3388,36 +3388,49 @@ function App({ me, onSignOut }) {
 
                   {detectedLeaves.length > 0 ? (
                     <div className="info-box">
-                      {detectedLeaves.length === 1
-                        ? 'Se detectó: '
-                        : 'Se detectaron ' + detectedLeaves.length + ': '}
-                      {detectedLeaves.map(function(lv, index) {
-                        return (
-                          <span key={lv.id}>
-                            {index > 0 ? ' · ' : ''}
-                            {LEAVE_TYPE_LABELS[lv.leaveType]}
-                            {' '}({lv.totalDays} días, del {lv.startDate} al {lv.endDate})
-                          </span>
-                        );
-                      })}
-                      . El motor {detectedLeaves.length === 1 ? 'la aplicará' : 'las sumará'} automáticamente al calcular la nómina de este periodo.
+                      <div>
+                        {detectedLeaves.length === 1
+                          ? 'Se detectó 1 incapacidad/licencia:'
+                          : 'Se detectaron ' + detectedLeaves.length + ' incapacidades/licencias:'}
+                      </div>
+
+                      <ul style={{margin: '8px 0 0', paddingLeft: '18px'}}>
+                        {detectedLeaves.map(function(lv) {
+                          return (
+                            <li key={lv.id} style={{marginBottom: '4px'}}>
+                              {LEAVE_TYPE_LABELS[lv.leaveType]}
+                              {' — '}{lv.totalDays} días, del {lv.startDate} al {lv.endDate}
+                            </li>
+                          );
+                        })}
+                      </ul>
+
+                      <div style={{marginTop: '8px'}}>
+                        El motor {detectedLeaves.length === 1 ? 'la aplicará' : 'las sumará'} automáticamente al calcular la nómina de este periodo.
+                      </div>
                     </div>
                   ) : employeeLeaves.length > 0 ? (
                     <div className="info-box">
-                      ⚠️ Este empleado tiene {employeeLeaves.length === 1 ? 'una incapacidad/licencia registrada' : employeeLeaves.length + ' incapacidades/licencias registradas'},
-                      {' '}pero ninguna cae dentro de las fechas de este periodo
-                      {selectedPeriod ? ' (' + selectedPeriod.periodStart + ' al ' + selectedPeriod.periodEnd + ')' : ''}:
-                      {' '}
-                      {employeeLeaves.map(function(lv, index) {
-                        return (
-                          <span key={lv.id}>
-                            {index > 0 ? ' · ' : ''}
-                            {LEAVE_TYPE_LABELS[lv.leaveType]}
-                            {' '}(del {lv.startDate} al {lv.endDate})
-                          </span>
-                        );
-                      })}
-                      . Revisa si el periodo o las fechas de la licencia están bien.
+                      <div>
+                        ⚠️ Este empleado tiene {employeeLeaves.length === 1 ? '1 incapacidad/licencia registrada' : employeeLeaves.length + ' incapacidades/licencias registradas'},
+                        {' '}pero ninguna cae dentro de las fechas de este periodo
+                        {selectedPeriod ? ' (' + selectedPeriod.periodStart + ' al ' + selectedPeriod.periodEnd + ')' : ''}:
+                      </div>
+
+                      <ul style={{margin: '8px 0 0', paddingLeft: '18px'}}>
+                        {employeeLeaves.map(function(lv) {
+                          return (
+                            <li key={lv.id} style={{marginBottom: '4px'}}>
+                              {LEAVE_TYPE_LABELS[lv.leaveType]}
+                              {' — '}del {lv.startDate} al {lv.endDate}
+                            </li>
+                          );
+                        })}
+                      </ul>
+
+                      <div style={{marginTop: '8px'}}>
+                        Revisa si el periodo o las fechas de la licencia están bien.
+                      </div>
                     </div>
                   ) : (
                     <div className="info-box">
