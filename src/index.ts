@@ -53,6 +53,7 @@ import {
 
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
+import { intersectDateRanges } from './services/dateRanges';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -1795,22 +1796,16 @@ export default {
         if (overlappingLeaves.length === 1) {
           const leaveRow = normalizeEmployeeLeave(overlappingLeaves[0]);
 
-          const intersectionStart =
-            leaveRow.startDate > String(periodRow.periodStart)
-              ? leaveRow.startDate
-              : String(periodRow.periodStart);
+          // Ya sabemos que se solapan (la consulta SQL lo garantiza),
+          // así que la intersección nunca es null aquí.
+          const intersection = intersectDateRanges(
+            leaveRow.startDate,
+            leaveRow.endDate,
+            String(periodRow.periodStart),
+            String(periodRow.periodEnd)
+          )!;
 
-          const intersectionEnd =
-            leaveRow.endDate < String(periodRow.periodEnd)
-              ? leaveRow.endDate
-              : String(periodRow.periodEnd);
-
-          const daysInPeriod =
-            Math.round(
-              (new Date(`${intersectionEnd}T00:00:00Z`).getTime() -
-                new Date(`${intersectionStart}T00:00:00Z`).getTime()) /
-                86400000
-            ) + 1;
+          const daysInPeriod = intersection.days;
 
           if (daysWorked + daysInPeriod > 30) {
             return sendJson(
