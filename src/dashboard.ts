@@ -790,7 +790,10 @@ function App({ me, onSignOut }) {
     country: 'Colombia',
     phone: '',
     whatsapp: '',
-    hireDate: ''
+    hireDate: '',
+    bankName: '',
+    bankAccountType: 'AHORROS',
+    bankAccountNumber: ''
   });
 
   const [payrollForm, setPayrollForm] = useState({
@@ -806,6 +809,14 @@ function App({ me, onSignOut }) {
   const [dianXmlResult, setDianXmlResult] = useState(null);
   const [showPayrollPreview, setShowPayrollPreview] = useState(false);
   const [disbursementResult, setDisbursementResult] = useState(null);
+  const [currentSettlementId, setCurrentSettlementId] = useState('');
+  const [currentSettlementStatus, setCurrentSettlementStatus] = useState('');
+
+  const [periods, setPeriods] = useState([]);
+  const [selectedPeriodId, setSelectedPeriodId] = useState('');
+  const [settlements, setSettlements] = useState([]);
+  const [periodModal, setPeriodModal] = useState(false);
+  const [periodForm, setPeriodForm] = useState({ periodStart: '', periodEnd: '' });
 
   // ------------------------------------------------------------
   // PERSONAL POR HORAS (bolsa de talento)
@@ -882,6 +893,10 @@ function App({ me, onSignOut }) {
     return c.id === selectedCompanyId;
   });
 
+  const selectedPeriod = periods.find(function(p) {
+    return p.id === selectedPeriodId;
+  });
+
   const isSuperAdmin = me.role === 'SUPER_ADMIN';
 
   useEffect(function() {
@@ -891,12 +906,25 @@ function App({ me, onSignOut }) {
   useEffect(function() {
     if (selectedCompanyId) {
       loadEmployees(selectedCompanyId);
+      loadPeriods(selectedCompanyId);
     } else {
       setEmployees([]);
       setSelectedEmp(null);
+      setPeriods([]);
+      setSelectedPeriodId('');
       clearPayrollForm();
     }
   }, [selectedCompanyId]);
+
+  useEffect(function() {
+    if (selectedPeriodId) {
+      loadSettlements(selectedPeriodId);
+    } else {
+      setSettlements([]);
+    }
+
+    clearPayrollForm();
+  }, [selectedPeriodId]);
 
   useEffect(function() {
     if (selectedCompanyId && activeSection === 'hourly') {
@@ -961,12 +989,21 @@ function App({ me, onSignOut }) {
     setPayrollResult(null);
     setDianXmlResult(null);
     setDisbursementResult(null);
+    setCurrentSettlementId('');
+    setCurrentSettlementStatus('');
+  }
+
+  function findSettlementForEmployee(employeeId) {
+    return settlements.find(function(s) {
+      return s.employeeId === employeeId;
+    });
   }
 
   function selectEmployeeForPayroll(employee) {
     clearMessages();
 
     setSelectedEmp(employee);
+    setDisbursementResult(null);
 
     setPayrollForm({
       employeeId: employee.id,
@@ -977,9 +1014,28 @@ function App({ me, onSignOut }) {
       recargoNocturno: 0
     });
 
-    setPayrollResult(null);
-    setDianXmlResult(null);
-    setDisbursementResult(null);
+    const existing = findSettlementForEmployee(employee.id);
+
+    if (existing) {
+      setCurrentSettlementId(existing.id);
+      setCurrentSettlementStatus(existing.dianStatus);
+      setPayrollResult(existing.calculation || null);
+
+      if (existing.dianStatus === 'GENERATED') {
+        setDianXmlResult({
+          cune: existing.dianCune,
+          consecutive: existing.dianConsecutive,
+          xmlContent: existing.dianXmlContent
+        });
+      } else {
+        setDianXmlResult(null);
+      }
+    } else {
+      setCurrentSettlementId('');
+      setCurrentSettlementStatus('');
+      setPayrollResult(null);
+      setDianXmlResult(null);
+    }
   }
 
   function openNewCompany() {
@@ -1138,7 +1194,10 @@ function App({ me, onSignOut }) {
       country: 'Colombia',
       phone: '',
       whatsapp: '',
-      hireDate: ''
+      hireDate: '',
+      bankName: '',
+      bankAccountType: 'AHORROS',
+      bankAccountNumber: ''
     });
 
     setEmployeeModal(true);
@@ -1163,7 +1222,10 @@ function App({ me, onSignOut }) {
       country: employee.country || 'Colombia',
       phone: employee.phone || '',
       whatsapp: employee.whatsapp || '',
-      hireDate: employee.hireDate || ''
+      hireDate: employee.hireDate || '',
+      bankName: employee.bankName || '',
+      bankAccountType: employee.bankAccountType || 'AHORROS',
+      bankAccountNumber: employee.bankAccountNumber || ''
     });
 
     setEmployeeModal(true);
@@ -1267,9 +1329,120 @@ function App({ me, onSignOut }) {
     }
   }
 
+  async function loadPeriods(companyId) {
+    try {
+      const result = await api(
+        '/api/payroll-periods?companyId=' + encodeURIComponent(companyId)
+      );
+
+      const list = Array.isArray(result.data) ? result.data : [];
+      setPeriods(list);
+
+      setSelectedPeriodId(function(current) {
+        return current && list.some(function(p) { return p.id === current; })
+          ? current
+          : (list[0] ? list[0].id : '');
+      });
+    } catch (err) {
+      setError(err.message);
+      setPeriods([]);
+    }
+  }
+
+  async function loadSettlements(periodId) {
+    try {
+      const result = await api(
+        '/api/payroll-settlements?periodId=' + encodeURIComponent(periodId)
+      );
+
+      setSettlements(Array.isArray(result.data) ? result.data : []);
+    } catch (err) {
+      setError(err.message);
+      setSettlements([]);
+    }
+  }
+
+  function openNewPeriod() {
+    if (!selectedCompany) {
+      setError('Primero debes crear o seleccionar una empresa.');
+      return;
+    }
+
+    clearMessages();
+    setPeriodForm({ periodStart: '', periodEnd: '' });
+    setPeriodModal(true);
+  }
+
+  async function savePeriod() {
+    try {
+      clearMessages();
+
+      if (!selectedCompany) {
+        throw new Error('No hay una empresa seleccionada.');
+      }
+
+      if (!periodForm.periodStart || !periodForm.periodEnd) {
+        throw new Error('El periodo (inicio y fin) es obligatorio.');
+      }
+
+      setLoading(true);
+
+      const result = await api('/api/payroll-periods', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: selectedCompany.id,
+          periodStart: periodForm.periodStart,
+          periodEnd: periodForm.periodEnd
+        })
+      });
+
+      setSuccess('Periodo creado correctamente.');
+      setPeriodModal(false);
+
+      await loadPeriods(selectedCompany.id);
+      setSelectedPeriodId(result.data.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function closeCurrentPeriod() {
+    if (!selectedPeriod) return;
+
+    const confirmed = window.confirm(
+      '¿Cerrar el periodo ' + selectedPeriod.periodStart + ' a ' +
+      selectedPeriod.periodEnd + '? No podrás calcular más liquidaciones en él.'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      clearMessages();
+      setLoading(true);
+
+      await api('/api/payroll-periods/' + encodeURIComponent(selectedPeriod.id) + '/close', {
+        method: 'POST'
+      });
+
+      setSuccess('Periodo cerrado correctamente.');
+      await loadPeriods(selectedCompanyId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function calculatePayroll() {
     try {
       clearMessages();
+
+      if (!selectedPeriod) {
+        throw new Error('Selecciona o crea un periodo primero.');
+      }
 
       if (!payrollForm.employeeId) {
         throw new Error('Selecciona un empleado.');
@@ -1283,28 +1456,31 @@ function App({ me, onSignOut }) {
 
       setLoading(true);
 
-      const result = await api('/api/colombia/payroll/calculate', {
+      const result = await api('/api/payroll-settlements/calculate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          employeeInput: {
-            employeeId: payrollForm.employeeId,
-            daysWorked,
-            overtimeHours: {
-              extraDiurna: Number(payrollForm.extraDiurna) || 0,
-              extraNocturna: Number(payrollForm.extraNocturna) || 0,
-              recargoNocturno: Number(payrollForm.recargoNocturno) || 0
-            }
+          periodId: selectedPeriod.id,
+          employeeId: payrollForm.employeeId,
+          daysWorked,
+          overtimeHours: {
+            extraDiurna: Number(payrollForm.extraDiurna) || 0,
+            extraNocturna: Number(payrollForm.extraNocturna) || 0,
+            recargoNocturno: Number(payrollForm.recargoNocturno) || 0
           }
         })
       });
 
-      setPayrollResult(result.data);
+      setPayrollResult(result.data.calculation);
+      setCurrentSettlementId(result.data.id);
+      setCurrentSettlementStatus(result.data.dianStatus);
       setDianXmlResult(null);
       setDisbursementResult(null);
       setSuccess('Nómina calculada correctamente.');
+
+      await loadSettlements(selectedPeriod.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1316,42 +1492,34 @@ function App({ me, onSignOut }) {
     try {
       clearMessages();
 
-      if (!payrollResult) {
+      if (!payrollResult || !currentSettlementId) {
         throw new Error('Primero debes calcular la nómina.');
-      }
-
-      if (!selectedCompany) {
-        throw new Error('No hay una empresa seleccionada.');
       }
 
       setLoading(true);
 
-      const result = await api('/api/colombia/dian/xml', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          payrollData: payrollResult,
-
-          /*
-           * NIT, razón social y credenciales de software se resuelven
-           * en el servidor a partir de la empresa (por companyId) y
-           * de la configuración del Worker: nunca se confía en lo que
-           * envíe el navegador para esos datos.
-           */
-          employeeExtra: {
-            typeDocument: '13',
-            typeContract: '1',
-            paymentMethod: '42'
+      const result = await api(
+        '/api/payroll-settlements/' + encodeURIComponent(currentSettlementId) + '/generate-xml',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
           },
-
-          consecutiveNumber: 1
-        })
-      });
+          body: JSON.stringify({
+            employeeExtra: {
+              typeDocument: '13',
+              typeContract: '1',
+              paymentMethod: '42'
+            }
+          })
+        }
+      );
 
       setDianXmlResult(result.data);
+      setCurrentSettlementStatus('GENERATED');
       setSuccess('XML de nómina generado.');
+
+      await loadSettlements(selectedPeriodId);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1363,48 +1531,19 @@ function App({ me, onSignOut }) {
     try {
       clearMessages();
 
-      if (!payrollResult) {
-        throw new Error('Primero debes calcular la nómina.');
-      }
-
-      if (!selectedCompany) {
-        throw new Error('No hay una empresa seleccionada.');
+      if (!selectedPeriod) {
+        throw new Error('Selecciona un periodo.');
       }
 
       setLoading(true);
 
-      const employee = selectedEmp;
-
-      const result = await api('/api/colombia/bank-disbursement', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          companyId: selectedCompany.id,
-
-          companyInfo: {
-            nit: selectedCompany.nit,
-            name: selectedCompany.name
-          },
-
-          records: [
-            {
-              employeeId: payrollResult.employeeId,
-              employeeName: payrollResult.employeeName,
-              taxId: payrollResult.taxId,
-              amount: payrollResult.netPay,
-              bankName: '',
-              accountNumber: '',
-              accountType: 'AHORROS',
-              phone: employee ? employee.phone || '' : ''
-            }
-          ]
-        })
-      });
+      const result = await api(
+        '/api/payroll-periods/' + encodeURIComponent(selectedPeriod.id) + '/bank-disbursement',
+        { method: 'POST' }
+      );
 
       setDisbursementResult(result.data);
-      setSuccess('Archivo bancario generado.');
+      setSuccess('Archivo bancario del periodo generado.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2016,17 +2155,11 @@ function App({ me, onSignOut }) {
             <button
               className="btn btn-success"
               onClick={generateDianXml}
-              disabled={loading}
+              disabled={loading || currentSettlementStatus === 'GENERATED'}
             >
-              🧾 Generar XML DIAN
-            </button>
-
-            <button
-              className="btn"
-              onClick={generateBankFile}
-              disabled={loading}
-            >
-              🏦 Archivo bancario
+              {currentSettlementStatus === 'GENERATED'
+                ? '✅ XML ya generado'
+                : '🧾 Generar XML DIAN'}
             </button>
           </div>
 
@@ -2047,16 +2180,6 @@ function App({ me, onSignOut }) {
               <pre>{dianXmlResult.xmlContent}</pre>
             </div>
           )}
-
-          {disbursementResult && (
-            <div className="result-section" style={{marginTop: '18px'}}>
-              <h3>🏦 Archivo bancario</h3>
-              <pre>
-                {JSON.stringify(disbursementResult, null, 2)}
-              </pre>
-            </div>
-          )}
-
 
           {showPayrollPreview && (
             <div
@@ -2890,7 +3013,76 @@ function App({ me, onSignOut }) {
           </div>
 
           <div className="panel-body">
-            {!selectedEmp ? (
+            <div className="section">
+              <div className="section-title">
+                📅 Periodo de nómina
+              </div>
+
+              <div className="form-grid">
+                <div className="form-group full">
+                  <label>Periodo</label>
+                  <select
+                    value={selectedPeriodId}
+                    onChange={function(e) {
+                      setSelectedPeriodId(e.target.value);
+                    }}
+                  >
+                    {periods.length === 0 && (
+                      <option value="">Sin periodos creados</option>
+                    )}
+
+                    {periods.map(function(period) {
+                      return (
+                        <option key={period.id} value={period.id}>
+                          {period.periodStart + ' a ' + period.periodEnd +
+                            (period.status === 'CLOSED' ? ' (cerrado)' : ' (borrador)')}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+
+              <div className="button-row">
+                <button
+                  className="btn btn-primary"
+                  onClick={openNewPeriod}
+                  disabled={!selectedCompany}
+                >
+                  + Nuevo periodo
+                </button>
+
+                {selectedPeriod && (
+                  <button
+                    className="btn"
+                    onClick={closeCurrentPeriod}
+                    disabled={loading || selectedPeriod.status === 'CLOSED'}
+                  >
+                    🔒 Cerrar periodo
+                  </button>
+                )}
+
+                {selectedPeriod && (
+                  <button
+                    className="btn btn-success"
+                    onClick={generateBankFile}
+                    disabled={loading}
+                  >
+                    🏦 Archivo bancario del periodo
+                  </button>
+                )}
+              </div>
+
+              {disbursementResult && (
+                <pre style={{marginTop: '10px'}}>{disbursementResult}</pre>
+              )}
+            </div>
+
+            {!selectedPeriod ? (
+              <div className="info-box">
+                Crea o selecciona un periodo para poder liquidar empleados.
+              </div>
+            ) : !selectedEmp ? (
               <div className="info-box">
                 Selecciona un empleado de la izquierda. Sus datos de
                 identificación y salario se cargarán automáticamente.
@@ -2907,6 +3099,15 @@ function App({ me, onSignOut }) {
                   <span>
                     Documento: {selectedEmp.taxId}
                   </span>
+
+                  {currentSettlementStatus === 'GENERATED' && (
+                    <>
+                      <br />
+                      <span className="badge" style={{marginTop: '7px', display: 'inline-block'}}>
+                        ✅ XML DIAN ya generado para este periodo
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div className="section">
@@ -2938,6 +3139,7 @@ function App({ me, onSignOut }) {
                         min="1"
                         max="30"
                         value={payrollForm.daysWorked}
+                        disabled={currentSettlementStatus === 'GENERATED'}
                         onChange={function(e) {
                           setPayrollForm({
                             ...payrollForm,
@@ -2962,6 +3164,7 @@ function App({ me, onSignOut }) {
                         min="0"
                         step="0.01"
                         value={payrollForm.extraDiurna}
+                        disabled={currentSettlementStatus === 'GENERATED'}
                         onChange={function(e) {
                           setPayrollForm({
                             ...payrollForm,
@@ -2978,6 +3181,7 @@ function App({ me, onSignOut }) {
                         min="0"
                         step="0.01"
                         value={payrollForm.extraNocturna}
+                        disabled={currentSettlementStatus === 'GENERATED'}
                         onChange={function(e) {
                           setPayrollForm({
                             ...payrollForm,
@@ -2994,6 +3198,7 @@ function App({ me, onSignOut }) {
                         min="0"
                         step="0.01"
                         value={payrollForm.recargoNocturno}
+                        disabled={currentSettlementStatus === 'GENERATED'}
                         onChange={function(e) {
                           setPayrollForm({
                             ...payrollForm,
@@ -3009,9 +3214,13 @@ function App({ me, onSignOut }) {
                   <button
                     className="btn btn-primary"
                     onClick={calculatePayroll}
-                    disabled={loading}
+                    disabled={loading || currentSettlementStatus === 'GENERATED'}
                   >
-                    {loading ? 'Calculando...' : '🧮 Calcular Nómina'}
+                    {loading
+                      ? 'Calculando...'
+                      : currentSettlementStatus === 'GENERATED'
+                        ? '🔒 Ya liquidado'
+                        : '🧮 Calcular nómina'}
                   </button>
 
                   <button
@@ -3585,6 +3794,48 @@ function App({ me, onSignOut }) {
                     }}
                   />
                 </div>
+
+                <div className="form-group">
+                  <label>Banco</label>
+                  <input
+                    value={employeeForm.bankName}
+                    onChange={function(e) {
+                      setEmployeeForm({
+                        ...employeeForm,
+                        bankName: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Tipo de cuenta</label>
+                  <select
+                    value={employeeForm.bankAccountType}
+                    onChange={function(e) {
+                      setEmployeeForm({
+                        ...employeeForm,
+                        bankAccountType: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="AHORROS">Ahorros</option>
+                    <option value="CORRIENTE">Corriente</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Número de cuenta</label>
+                  <input
+                    value={employeeForm.bankAccountNumber}
+                    onChange={function(e) {
+                      setEmployeeForm({
+                        ...employeeForm,
+                        bankAccountNumber: e.target.value
+                      });
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
@@ -3604,6 +3855,72 @@ function App({ me, onSignOut }) {
                 disabled={loading}
               >
                 {loading ? 'Guardando...' : 'Guardar empleado'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {periodModal && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Nuevo periodo de nómina</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setPeriodModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Periodo desde</label>
+                  <input
+                    type="date"
+                    value={periodForm.periodStart}
+                    onChange={function(e) {
+                      setPeriodForm({
+                        ...periodForm,
+                        periodStart: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Periodo hasta</label>
+                  <input
+                    type="date"
+                    value={periodForm.periodEnd}
+                    onChange={function(e) {
+                      setPeriodForm({
+                        ...periodForm,
+                        periodEnd: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setPeriodModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={savePeriod}
+                disabled={loading}
+              >
+                {loading ? 'Creando...' : 'Crear periodo'}
               </button>
             </div>
           </div>

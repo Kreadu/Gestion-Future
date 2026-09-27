@@ -48,6 +48,7 @@ import {
 } from './engine/hourly/independentContractorEngine';
 
 import { DocumentoSoporteService } from './services/documentoSoporteService';
+import { getNextDianConsecutive } from './services/dianCounters';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -60,6 +61,11 @@ import type {
   DocumentoSoportePayerInfo,
   DocumentoSoporteBeneficiaryInfo,
 } from './types/hourly';
+
+import type {
+  PayrollPeriod,
+  PayrollSettlement,
+} from './types/payrollPeriods';
 
 interface Env {
   DB: D1Database;
@@ -108,6 +114,9 @@ interface Employee {
   phone?: string | null;
   whatsapp?: string | null;
   hireDate?: string | null;
+  bankName?: string | null;
+  bankAccountType?: string | null;
+  bankAccountNumber?: string | null;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -161,6 +170,9 @@ function normalizeEmployee(row: any): Employee {
     phone: row.phone ?? null,
     whatsapp: row.whatsapp ?? null,
     hireDate: row.hireDate ?? null,
+    bankName: row.bankName ?? null,
+    bankAccountType: row.bankAccountType ?? null,
+    bankAccountNumber: row.bankAccountNumber ?? null,
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -218,6 +230,43 @@ function normalizeEngagement(row: any): Engagement {
         : Number(row.weeklyHours),
     contractType: row.contractType ?? null,
     createdAt: row.createdAt ?? null,
+  };
+}
+
+function normalizePayrollPeriod(row: any): PayrollPeriod {
+  return {
+    id: String(row.id),
+    companyId: String(row.companyId),
+    periodStart: String(row.periodStart ?? ''),
+    periodEnd: String(row.periodEnd ?? ''),
+    status: row.status === 'CLOSED' ? 'CLOSED' : 'DRAFT',
+    createdAt: row.createdAt ?? null,
+    closedAt: row.closedAt ?? null,
+  };
+}
+
+function normalizePayrollSettlement(row: any): PayrollSettlement {
+  return {
+    id: String(row.id),
+    periodId: String(row.periodId),
+    employeeId: String(row.employeeId),
+    companyId: String(row.companyId),
+    daysWorked: Number(row.daysWorked ?? 0),
+    extraDiurna: Number(row.extraDiurna ?? 0),
+    extraNocturna: Number(row.extraNocturna ?? 0),
+    recargoNocturno: Number(row.recargoNocturno ?? 0),
+    grossEarnings: Number(row.grossEarnings ?? 0),
+    totalDeductions: Number(row.totalDeductions ?? 0),
+    netPay: Number(row.netPay ?? 0),
+    dianStatus: row.dianStatus === 'GENERATED' ? 'GENERATED' : 'PENDING',
+    dianConsecutive:
+      row.dianConsecutive === null || row.dianConsecutive === undefined
+        ? null
+        : Number(row.dianConsecutive),
+    dianCune: row.dianCune ?? null,
+    dianGeneratedAt: row.dianGeneratedAt ?? null,
+    createdAt: row.createdAt ?? null,
+    updatedAt: row.updatedAt ?? null,
   };
 }
 
@@ -782,12 +831,15 @@ export default {
               phone,
               whatsapp,
               hireDate,
+              bankName,
+              bankAccountType,
+              bankAccountNumber,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 1, ?19
             )
           `)
           .bind(
@@ -807,6 +859,9 @@ export default {
             body.phone || null,
             body.whatsapp || null,
             body.hireDate || null,
+            body.bankName || null,
+            body.bankAccountType || null,
+            body.bankAccountNumber || null,
             createdAt
           )
           .run();
@@ -904,8 +959,11 @@ export default {
               country = ?11,
               phone = ?12,
               whatsapp = ?13,
-              hireDate = ?14
-            WHERE id = ?15
+              hireDate = ?14,
+              bankName = ?15,
+              bankAccountType = ?16,
+              bankAccountNumber = ?17
+            WHERE id = ?18
           `)
           .bind(
             String(
@@ -939,6 +997,9 @@ export default {
             body.phone ?? null,
             body.whatsapp ?? null,
             body.hireDate ?? null,
+            body.bankName ?? existing.bankName ?? null,
+            body.bankAccountType ?? existing.bankAccountType ?? null,
+            body.bankAccountNumber ?? existing.bankAccountNumber ?? null,
             employeeId
           )
           .run();
@@ -1029,42 +1090,342 @@ export default {
 
       /*
        * ============================================================
-       * NÓMINA COLOMBIA 2026
+       * NÓMINA PERSISTENTE — PERIODOS
        *
-       * IMPORTANTE:
-       * El cálculo NO se hace aquí.
-       * Se delega completamente al motor ColombiaPayrollEngine.
+       * Antes de esta fase, calcular una nómina no se guardaba en
+       * ningún lado y el XML de nómina electrónica siempre usaba el
+       * consecutivo 1. Ahora toda liquidación vive dentro de un
+       * periodo, y el consecutivo DIAN se pide con
+       * getNextDianConsecutive (src/services/dianCounters.ts).
        * ============================================================
        */
 
       if (
-        url.pathname === '/api/colombia/payroll/calculate' &&
+        url.pathname === '/api/payroll-periods' &&
         request.method === 'POST'
       ) {
         const body = await request.json() as any;
-        const employeeInput = body?.employeeInput || {};
 
-        const employeeId = String(
-          employeeInput.employeeId || ''
-        ).trim();
+        const companyId = String(body.companyId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
 
-        if (!employeeId) {
+        if (!companyId || !periodStart || !periodEnd) {
           return sendJson(
             {
               success: false,
-              error: 'employeeId es obligatorio.',
+              error: 'companyId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const company = await env.DB
+          .prepare(`SELECT id FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(companyId)
+          .first();
+
+        if (!company) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La empresa no existe o está inactiva.',
+            },
+            404
+          );
+        }
+
+        const id = `PP-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO payroll_periods (
+              id, companyId, periodStart, periodEnd, status, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, 'DRAFT', ?5)
+          `)
+          .bind(id, companyId, periodStart, periodEnd, createdAt)
+          .run();
+
+        await audit(env, user, 'CREATE', 'payroll_period', id, companyId);
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id,
+              companyId,
+              periodStart,
+              periodEnd,
+              status: 'DRAFT',
+              createdAt,
+            },
+          },
+          201
+        );
+      }
+
+      if (
+        url.pathname === '/api/payroll-periods' &&
+        request.method === 'GET'
+      ) {
+        const companyId = url.searchParams.get('companyId');
+
+        if (!companyId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId es obligatorio.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM payroll_periods
+            WHERE companyId = ?1
+            ORDER BY periodStart DESC
+          `)
+          .bind(companyId)
+          .all();
+
+        return sendJson({
+          success: true,
+          data: (result.results || []).map(normalizePayrollPeriod),
+        });
+      }
+
+      const periodCloseMatch = url.pathname.match(
+        /^\/api\/payroll-periods\/([^/]+)\/close$/
+      );
+
+      if (
+        periodCloseMatch &&
+        request.method === 'POST'
+      ) {
+        const periodId = decodeURIComponent(periodCloseMatch[1]);
+
+        const periodRow = await env.DB
+          .prepare(`SELECT * FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        if (periodRow.status === 'CLOSED') {
+          return sendJson(
+            { success: false, error: 'El periodo ya está cerrado.' },
+            400
+          );
+        }
+
+        const totals = await env.DB
+          .prepare(`
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN dianStatus != 'GENERATED' THEN 1 ELSE 0 END) AS pending
+            FROM payroll_settlements
+            WHERE periodId = ?1
+          `)
+          .bind(periodId)
+          .first();
+
+        const total = Number((totals as any)?.total ?? 0);
+        const pending = Number((totals as any)?.pending ?? 0);
+
+        if (total === 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El periodo no tiene liquidaciones todavía.',
+            },
+            400
+          );
+        }
+
+        if (pending > 0) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                `Faltan ${pending} liquidación(es) por generar su XML DIAN ` +
+                'antes de poder cerrar el periodo.',
+            },
+            400
+          );
+        }
+
+        const closedAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            UPDATE payroll_periods
+            SET status = 'CLOSED', closedAt = ?1
+            WHERE id = ?2
+          `)
+          .bind(closedAt, periodId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'payroll_period',
+          periodId,
+          String(periodRow.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Periodo cerrado correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * NÓMINA PERSISTENTE — LIQUIDACIONES
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/payroll-settlements' &&
+        request.method === 'GET'
+      ) {
+        const periodId = url.searchParams.get('periodId');
+
+        if (!periodId) {
+          return sendJson(
+            { success: false, error: 'periodId es obligatorio.' },
+            400
+          );
+        }
+
+        const periodRow = await env.DB
+          .prepare(`SELECT companyId FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              s.*,
+              e.firstName AS e_firstName,
+              e.firstName2 AS e_firstName2,
+              e.lastName AS e_lastName,
+              e.lastName2 AS e_lastName2,
+              e.taxId AS e_taxId
+            FROM payroll_settlements s
+            JOIN employees e ON e.id = s.employeeId
+            WHERE s.periodId = ?1
+            ORDER BY e.firstName ASC, e.lastName ASC
+          `)
+          .bind(periodId)
+          .all();
+
+        const data = (result.results || []).map((row: any) => {
+          let calculation: ColombiaPayrollResult | null = null;
+
+          try {
+            calculation = JSON.parse(String(row.resultJson));
+          } catch {
+            calculation = null;
+          }
+
+          return {
+            ...normalizePayrollSettlement(row),
+            // El cálculo completo y el XML se incluyen aquí (y no en
+            // el tipo compartido PayrollSettlement) para poder
+            // mostrar el detalle desde el dashboard sin un endpoint
+            // de detalle aparte; el volumen por periodo es pequeño.
+            calculation,
+            dianXmlContent: row.dianXmlContent ?? null,
+            employee: {
+              firstName: row.e_firstName,
+              firstName2: row.e_firstName2,
+              lastName: row.e_lastName,
+              lastName2: row.e_lastName2,
+              taxId: row.e_taxId,
+            },
+          };
+        });
+
+        return sendJson({ success: true, data });
+      }
+
+      if (
+        url.pathname === '/api/payroll-settlements/calculate' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const periodId = String(body.periodId || '').trim();
+        const employeeId = String(body.employeeId || '').trim();
+
+        if (!periodId || !employeeId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'periodId y employeeId son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const periodRow = await env.DB
+          .prepare(`SELECT * FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        if (periodRow.status !== 'DRAFT') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'El periodo está cerrado; no se pueden calcular más liquidaciones.',
             },
             400
           );
         }
 
         const employeeRow = await env.DB
-          .prepare(`
-            SELECT *
-            FROM employees
-            WHERE id = ?1
-              AND active = 1
-          `)
+          .prepare(`SELECT * FROM employees WHERE id = ?1 AND active = 1`)
           .bind(employeeId)
           .first();
 
@@ -1080,12 +1441,39 @@ export default {
 
         const employee = normalizeEmployee(employeeRow);
 
-        requireRole(user, ['TENANT_ADMIN']);
-        requireCompanyAccess(user, employee.companyId);
+        if (employee.companyId !== String(periodRow.companyId)) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El empleado no pertenece a la empresa del periodo.',
+            },
+            400
+          );
+        }
 
-        const daysWorked = Number(
-          employeeInput.daysWorked ?? 30
-        );
+        const existing = await env.DB
+          .prepare(`
+            SELECT id, dianStatus
+            FROM payroll_settlements
+            WHERE periodId = ?1
+              AND employeeId = ?2
+          `)
+          .bind(periodId, employeeId)
+          .first();
+
+        if (existing && (existing as any).dianStatus === 'GENERATED') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Esta liquidación ya tiene un XML DIAN generado y no se ' +
+                'puede recalcular.',
+            },
+            400
+          );
+        }
+
+        const daysWorked = Number(body.daysWorked ?? 30);
 
         if (
           !Number.isFinite(daysWorked) ||
@@ -1101,20 +1489,11 @@ export default {
           );
         }
 
-        const overtimeHours =
-          employeeInput.overtimeHours || {};
+        const overtimeHours = body.overtimeHours || {};
 
-        const extraDiurna = Number(
-          overtimeHours.extraDiurna ?? 0
-        );
-
-        const extraNocturna = Number(
-          overtimeHours.extraNocturna ?? 0
-        );
-
-        const recargoNocturno = Number(
-          overtimeHours.recargoNocturno ?? 0
-        );
+        const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
+        const extraNocturna = Number(overtimeHours.extraNocturna ?? 0);
+        const recargoNocturno = Number(overtimeHours.recargoNocturno ?? 0);
 
         if (
           !Number.isFinite(extraDiurna) ||
@@ -1138,12 +1517,10 @@ export default {
           employeeId: employee.id,
 
           firstName: employee.firstName,
-          firstName2:
-            employee.firstName2 || undefined,
+          firstName2: employee.firstName2 || undefined,
 
           lastName: employee.lastName,
-          lastName2:
-            employee.lastName2 || undefined,
+          lastName2: employee.lastName2 || undefined,
 
           taxId: employee.taxId,
 
@@ -1163,66 +1540,136 @@ export default {
         };
 
         const payrollResult: ColombiaPayrollResult =
-          ColombiaPayrollEngine.calculate(
-            payrollInput
-          );
+          ColombiaPayrollEngine.calculate(payrollInput);
 
-        return sendJson({
-          success: true,
-          data: payrollResult,
-        });
-      }
+        const now = new Date().toISOString();
+        const settlementId = existing
+          ? String((existing as any).id)
+          : `PS-${crypto.randomUUID()}`;
 
-      /*
-       * ============================================================
-       * DIAN - GENERAR XML
-       * ============================================================
-       */
-
-      if (
-        url.pathname === '/api/colombia/dian/xml' &&
-        request.method === 'POST'
-      ) {
-        const body = await request.json() as any;
-
-        const payrollData =
-          body?.payrollData as ColombiaPayrollResult;
-
-        if (
-          !payrollData ||
-          !payrollData.employeeId ||
-          !payrollData.taxId
-        ) {
-          return sendJson(
-            {
-              success: false,
-              error: 'Los datos de nómina son obligatorios.',
-            },
-            400
-          );
+        if (existing) {
+          await env.DB
+            .prepare(`
+              UPDATE payroll_settlements
+              SET
+                daysWorked = ?1,
+                extraDiurna = ?2,
+                extraNocturna = ?3,
+                recargoNocturno = ?4,
+                grossEarnings = ?5,
+                totalDeductions = ?6,
+                netPay = ?7,
+                resultJson = ?8,
+                updatedAt = ?9
+              WHERE id = ?10
+            `)
+            .bind(
+              daysWorked,
+              extraDiurna,
+              extraNocturna,
+              recargoNocturno,
+              payrollResult.grossEarnings,
+              payrollResult.employeeDeductions.totalDeductions,
+              payrollResult.netPay,
+              JSON.stringify(payrollResult),
+              now,
+              settlementId
+            )
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              INSERT INTO payroll_settlements (
+                id, periodId, employeeId, companyId, daysWorked,
+                extraDiurna, extraNocturna, recargoNocturno,
+                grossEarnings, totalDeductions, netPay, resultJson,
+                dianStatus, createdAt, updatedAt
+              )
+              VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                'PENDING', ?13, ?13
+              )
+            `)
+            .bind(
+              settlementId,
+              periodId,
+              employeeId,
+              employee.companyId,
+              daysWorked,
+              extraDiurna,
+              extraNocturna,
+              recargoNocturno,
+              payrollResult.grossEarnings,
+              payrollResult.employeeDeductions.totalDeductions,
+              payrollResult.netPay,
+              JSON.stringify(payrollResult),
+              now
+            )
+            .run();
         }
 
-        const dianCompanyId = String(
-          payrollData.companyId || ''
-        ).trim();
+        await audit(
+          env,
+          user,
+          existing ? 'UPDATE' : 'CREATE',
+          'payroll_settlement',
+          settlementId,
+          employee.companyId
+        );
 
-        if (!dianCompanyId) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'Los datos de nómina no tienen una empresa asociada.',
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id: settlementId,
+              periodId,
+              employeeId,
+              dianStatus: 'PENDING',
+              calculation: payrollResult,
             },
-            400
+          },
+          existing ? 200 : 201
+        );
+      }
+
+      const settlementXmlMatch = url.pathname.match(
+        /^\/api\/payroll-settlements\/([^/]+)\/generate-xml$/
+      );
+
+      if (
+        settlementXmlMatch &&
+        request.method === 'POST'
+      ) {
+        const settlementId = decodeURIComponent(settlementXmlMatch[1]);
+
+        const settlementRow = await env.DB
+          .prepare(`SELECT * FROM payroll_settlements WHERE id = ?1`)
+          .bind(settlementId)
+          .first();
+
+        if (!settlementRow) {
+          return sendJson(
+            { success: false, error: 'Liquidación no encontrada.' },
+            404
           );
         }
 
         requireRole(user, ['TENANT_ADMIN']);
-        requireCompanyAccess(user, dianCompanyId);
+        requireCompanyAccess(user, String(settlementRow.companyId));
+
+        if ((settlementRow as any).dianStatus === 'GENERATED') {
+          return sendJson(
+            {
+              success: false,
+              error: 'Esta liquidación ya tiene un XML DIAN generado.',
+            },
+            400
+          );
+        }
 
         // El NIT, la razón social y las credenciales de software NUNCA
         // se toman del body: se resuelven en el servidor a partir de
-        // la empresa dueña de la nómina y de la configuración del
+        // la empresa dueña de la liquidación y de la configuración del
         // Worker, para que no puedan falsificarse desde el navegador.
         const companyRow = await env.DB
           .prepare(`
@@ -1231,192 +1678,188 @@ export default {
             WHERE id = ?1
               AND active = 1
           `)
-          .bind(dianCompanyId)
+          .bind(settlementRow.companyId)
           .first();
 
         if (!companyRow) {
           return sendJson(
-            {
-              success: false,
-              error: 'Empresa no encontrada o inactiva.',
-            },
+            { success: false, error: 'Empresa no encontrada o inactiva.' },
             404
           );
         }
-
-        const employeeInput =
-          body?.employeeExtra || {};
 
         const employerInfo: DianEmployerInfo = {
           nit: String(companyRow.nit || ''),
           dv: String(companyRow.dv || '0'),
           companyName: String(companyRow.name || ''),
-
-          softwareId:
-            env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
-
-          pinSoftware:
-            env.DIAN_SOFTWARE_PIN || '12345',
-
-          testSetId:
-            body?.employerInfo?.testSetId ||
-            undefined,
+          softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+          pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
         };
 
-        if (
-          !employerInfo.nit ||
-          !employerInfo.companyName
-        ) {
+        if (!employerInfo.nit || !employerInfo.companyName) {
           return sendJson(
             {
               success: false,
-              error:
-                'La empresa no tiene NIT o razón social configurados.',
+              error: 'La empresa no tiene NIT o razón social configurados.',
             },
             400
           );
         }
 
-        const employeeExtra: DianEmployeeExtraInfo = {
-          typeDocument:
-            employeeInput.typeDocument || '13',
+        const body = await request.json().catch(() => ({})) as any;
+        const employeeExtraInput = body?.employeeExtra || {};
 
-          typeContract:
-            employeeInput.typeContract || '1',
+        const employeeExtra: DianEmployeeExtraInfo = {
+          typeDocument: employeeExtraInput.typeDocument || '13',
+          typeContract: employeeExtraInput.typeContract || '1',
 
           /*
            * 42 = transferencia bancaria.
            * El servicio DIAN preparado acepta 10, 42 o 20.
            */
-          paymentMethod:
-            employeeInput.paymentMethod || '42',
+          paymentMethod: employeeExtraInput.paymentMethod || '42',
 
-          bankName:
-            employeeInput.bankName ||
-            undefined,
-
-          accountNumber:
-            employeeInput.accountNumber ||
-            undefined,
-
-          accountType:
-            employeeInput.accountType ||
-            undefined,
+          bankName: employeeExtraInput.bankName || undefined,
+          accountNumber: employeeExtraInput.accountNumber || undefined,
+          accountType: employeeExtraInput.accountType || undefined,
         };
 
-        const consecutiveNumber = Math.max(
-          1,
-          Number(body?.consecutiveNumber || 1)
+        const payrollResult: ColombiaPayrollResult = JSON.parse(
+          String((settlementRow as any).resultJson)
         );
 
-        const xmlResult =
-          await DianNominaXmlService.generateDSPNE(
-            payrollData,
-            employerInfo,
-            employeeExtra,
-            consecutiveNumber
-          );
+        const consecutiveNumber = await getNextDianConsecutive(
+          env.DB,
+          String(settlementRow.companyId),
+          'NOMINA'
+        );
 
-        return sendJson({
-          success: true,
-          data: xmlResult,
-        });
+        const xmlResult = await DianNominaXmlService.generateDSPNE(
+          payrollResult,
+          employerInfo,
+          employeeExtra,
+          consecutiveNumber
+        );
+
+        const now = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            UPDATE payroll_settlements
+            SET
+              dianStatus = 'GENERATED',
+              dianConsecutive = ?1,
+              dianCune = ?2,
+              dianXmlContent = ?3,
+              dianGeneratedAt = ?4,
+              updatedAt = ?4
+            WHERE id = ?5
+          `)
+          .bind(
+            consecutiveNumber,
+            xmlResult.cune,
+            xmlResult.xmlContent,
+            now,
+            settlementId
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'payroll_settlement',
+          settlementId,
+          String(settlementRow.companyId)
+        );
+
+        return sendJson({ success: true, data: xmlResult });
       }
 
       /*
        * ============================================================
-       * BANCOS
-       *
-       * Se conserva conectado al servicio existente.
+       * NÓMINA PERSISTENTE — ARCHIVO BANCARIO DEL PERIODO
        * ============================================================
        */
 
+      const periodBankMatch = url.pathname.match(
+        /^\/api\/payroll-periods\/([^/]+)\/bank-disbursement$/
+      );
+
       if (
-        url.pathname === '/api/colombia/bank-disbursement' &&
+        periodBankMatch &&
         request.method === 'POST'
       ) {
-        const body = await request.json() as any;
+        const periodId = decodeURIComponent(periodBankMatch[1]);
 
-        const bankCompanyId = String(body?.companyId || '').trim();
+        const periodRow = await env.DB
+          .prepare(`SELECT companyId FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
 
-        if (
-          !bankCompanyId ||
-          !body?.companyInfo ||
-          !Array.isArray(body?.records)
-        ) {
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              s.resultJson,
+              e.id AS employeeId,
+              e.bankName,
+              e.bankAccountType,
+              e.bankAccountNumber,
+              e.taxId
+            FROM payroll_settlements s
+            JOIN employees e ON e.id = s.employeeId
+            WHERE s.periodId = ?1
+              AND s.dianStatus = 'GENERATED'
+          `)
+          .bind(periodId)
+          .all();
+
+        const rows = result.results || [];
+
+        if (rows.length === 0) {
           return sendJson(
             {
               success: false,
               error:
-                'companyId, companyInfo y records son obligatorios.',
+                'El periodo no tiene liquidaciones con XML DIAN generado.',
             },
             400
           );
         }
 
-          requireRole(user, ['TENANT_ADMIN']);
-          requireCompanyAccess(user, bankCompanyId);
+        const payrolls: ColombiaPayrollResult[] = [];
+        const employeesMap = new Map<string, any>();
 
-          const requestedPayrolls = Array.isArray(body.records)
-            ? body.records
-            : [];
-
-          const requestedEmployeeIds: string[] = requestedPayrolls
-            .map((record: any) => String(record?.employeeId || ''))
-            .filter((id: string) => id.length > 0);
-
-          // Sólo se admiten registros de empleados que de verdad
-          // pertenecen a la empresa autorizada: evita que alguien
-          // cuele el employeeId de otro cliente en el archivo bancario.
-          const allowedEmployeeIds = new Set<string>();
-
-          if (requestedEmployeeIds.length > 0) {
-            const placeholders = requestedEmployeeIds
-              .map((_, index) => `?${index + 2}`)
-              .join(', ');
-
-            const allowedRows = await env.DB
-              .prepare(`
-                SELECT id
-                FROM employees
-                WHERE companyId = ?1
-                  AND id IN (${placeholders})
-              `)
-              .bind(bankCompanyId, ...requestedEmployeeIds)
-              .all();
-
-            for (const row of allowedRows.results || []) {
-              allowedEmployeeIds.add(String((row as any).id));
-            }
-          }
-
-          const payrolls = requestedPayrolls.filter(
-            (record: any) =>
-              record?.employeeId &&
-              allowedEmployeeIds.has(String(record.employeeId))
+        for (const row of rows as any[]) {
+          const payrollResult: ColombiaPayrollResult = JSON.parse(
+            String(row.resultJson)
           );
 
-          const employeesMap = new Map<string, any>();
+          payrolls.push(payrollResult);
 
-          for (const record of payrolls) {
-            if (!record?.employeeId) continue;
-
-            employeesMap.set(record.employeeId, {
-              bankCode: record.bankCode || record.bankName || 'N/A',
-              bankAccount: record.bankAccount || record.accountNumber || 'N/A',
-              taxId: record.taxId || 'N/A',
-            });
-          }
-
-          const result = BankDisbursementService.generateCSV(
-            payrolls,
-            employeesMap
-          );
-
-          return sendJson({
-            success: true,
-            data: result,
+          employeesMap.set(String(row.employeeId), {
+            bankCode: row.bankName || 'N/A',
+            bankAccount: row.bankAccountNumber || 'N/A',
+            taxId: row.taxId || 'N/A',
           });
+        }
+
+        const csv = BankDisbursementService.generateCSV(
+          payrolls,
+          employeesMap
+        );
+
+        return sendJson({ success: true, data: csv });
       }
 
       /*
@@ -2327,6 +2770,12 @@ export default {
               pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
             };
 
+            const nominaConsecutive = await getNextDianConsecutive(
+              env.DB,
+              engagement.companyId,
+              'NOMINA'
+            );
+
             const xmlResult = await DianNominaXmlService.generateDSPNE(
               payrollResult,
               employerInfo,
@@ -2335,7 +2784,7 @@ export default {
                 typeContract: '1',
                 paymentMethod: '42',
               },
-              1
+              nominaConsecutive
             );
 
             grossAmount = payrollResult.grossEarnings;
@@ -2409,11 +2858,17 @@ export default {
               concept: settlementResult.retentionConcept,
             };
 
+            const soporteConsecutive = await getNextDianConsecutive(
+              env.DB,
+              engagement.companyId,
+              'DOCUMENTO_SOPORTE'
+            );
+
             const documentoSoporte = await DocumentoSoporteService.generate(
               settlementResult,
               payerInfo,
               beneficiaryInfo,
-              1
+              soporteConsecutive
             );
 
             grossAmount = settlementResult.grossAmount;
