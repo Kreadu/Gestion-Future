@@ -53,6 +53,12 @@ export interface Professional {
   bankName?: string | null;
   bankAccountType?: string | null;
   bankAccountNumber?: string | null;
+  /**
+   * Tarifa por hora "sugerida" del profesional: precarga el campo al
+   * crear una vinculación (engagement) con una empresa, que siempre
+   * puede cambiarla para esa vinculación puntual.
+   */
+  defaultHourlyRate?: number | null;
   active: boolean;
   createdAt?: string | null;
 }
@@ -60,7 +66,9 @@ export interface Professional {
 /**
  * Versión pública (sin datos de contacto ni bancarios) que se
  * devuelve cuando quien consulta no tiene un engagement propio con
- * ese profesional — ver `GET /api/professionals`.
+ * ese profesional — ver `GET /api/professionals`. Sí incluye
+ * `defaultHourlyRate`: es justo lo que se necesita para precargar el
+ * formulario al crear la PRIMERA vinculación con este profesional.
  */
 export interface PublicProfessional {
   id: string;
@@ -68,6 +76,7 @@ export interface PublicProfessional {
   lastName: string;
   profession: string;
   city?: string | null;
+  defaultHourlyRate?: number | null;
 }
 
 export interface Engagement {

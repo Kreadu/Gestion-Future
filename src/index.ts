@@ -228,6 +228,10 @@ function normalizeProfessional(row: any): Professional {
     bankName: row.bankName ?? null,
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -240,6 +244,10 @@ function normalizePublicProfessional(row: any) {
     lastName: String(row.lastName ?? ''),
     profession: String(row.profession ?? ''),
     city: row.city ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
   };
 }
 
@@ -2368,6 +2376,26 @@ export default {
             ? String(body.dv || '').trim() || null
             : null;
 
+        // Tarifa "sugerida": opcional — precarga el formulario al
+        // crear una vinculación, pero cada empresa la puede cambiar.
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
         const id = `PRO-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
@@ -2377,10 +2405,10 @@ export default {
               INSERT INTO professionals (
                 id, firstName, firstName2, lastName, lastName2, taxId,
                 documentType, dv, profession, email, phone, city,
-                bankName, bankAccountType, bankAccountNumber, active,
-                createdAt
+                bankName, bankAccountType, bankAccountNumber,
+                defaultHourlyRate, active, createdAt
               )
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17)
             `)
             .bind(
               id,
@@ -2398,6 +2426,7 @@ export default {
               body.bankName || null,
               body.bankAccountType || null,
               body.bankAccountNumber || null,
+              defaultHourlyRate,
               createdAt
             )
             .run();

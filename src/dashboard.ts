@@ -876,7 +876,8 @@ function App({ me, onSignOut }) {
     city: '',
     bankName: '',
     bankAccountType: 'AHORROS',
-    bankAccountNumber: ''
+    bankAccountNumber: '',
+    defaultHourlyRate: ''
   });
 
   const [engagementModal, setEngagementModal] = useState(false);
@@ -1714,7 +1715,8 @@ function App({ me, onSignOut }) {
       city: '',
       bankName: '',
       bankAccountType: 'AHORROS',
-      bankAccountNumber: ''
+      bankAccountNumber: '',
+      defaultHourlyRate: ''
     });
 
     setProfessionalModal(true);
@@ -1773,7 +1775,12 @@ function App({ me, onSignOut }) {
 
     setEngagementForm({
       vinculationType: 'INDEPENDENT_SERVICES',
-      hourlyRate: '',
+      // Precargada desde la tarifa "por defecto" del profesional
+      // (si tiene una); la empresa siempre la puede cambiar para
+      // esta vinculación puntual.
+      hourlyRate: professional && professional.defaultHourlyRate
+        ? String(professional.defaultHourlyRate)
+        : '',
       startDate: '',
       endDate: '',
       retentionConcept: 'SERVICIOS',
@@ -4590,6 +4597,23 @@ function App({ me, onSignOut }) {
                         bankAccountNumber: e.target.value
                       });
                     }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Tarifa por hora (por defecto, opcional)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={professionalForm.defaultHourlyRate}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        defaultHourlyRate: e.target.value
+                      });
+                    }}
+                    placeholder="Se precarga al crear una vinculación"
                   />
                 </div>
               </div>
