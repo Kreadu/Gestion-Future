@@ -567,6 +567,22 @@ function leaveOverlapsPeriod(leave, period) {
   return period && leave.startDate <= period.periodEnd && leave.endDate >= period.periodStart;
 }
 
+// Días de la licencia que realmente caen DENTRO del periodo (una
+// licencia puede empezar antes o terminar después del periodo) — es
+// una réplica ligera de intersectDateRanges() del backend, sólo para
+// mostrar un estimado en el aviso; el backend es la fuente de verdad.
+function leaveDaysInPeriod(leave, period) {
+  const start = leave.startDate > period.periodStart ? leave.startDate : period.periodStart;
+  const end = leave.endDate < period.periodEnd ? leave.endDate : period.periodEnd;
+
+  if (start > end) {
+    return 0;
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((new Date(end + 'T00:00:00Z') - new Date(start + 'T00:00:00Z')) / msPerDay) + 1;
+}
+
 function formatCOP(value) {
   return new Intl.NumberFormat('es-CO', {
     style: 'currency',
@@ -938,6 +954,14 @@ function App({ me, onSignOut }) {
         return leaveOverlapsPeriod(lv, selectedPeriod);
       })
     : [];
+
+  const detectedLeavesDaysInPeriod = selectedPeriod
+    ? detectedLeaves.reduce(function(sum, lv) {
+        return sum + leaveDaysInPeriod(lv, selectedPeriod);
+      }, 0)
+    : 0;
+
+  const maxDaysWorkedWithLeaves = 30 - detectedLeavesDaysInPeriod;
 
   const isSuperAdmin = me.role === 'SUPER_ADMIN';
 
@@ -3407,6 +3431,16 @@ function App({ me, onSignOut }) {
 
                       <div style={{marginTop: '8px'}}>
                         El motor {detectedLeaves.length === 1 ? 'la aplicará' : 'las sumará'} automáticamente al calcular la nómina de este periodo.
+                      </div>
+
+                      <div style={{
+                        marginTop: '8px',
+                        fontWeight: '700',
+                        color: Number(payrollForm.daysWorked) > maxDaysWorkedWithLeaves ? '#fca5a5' : '#94a9c0'
+                      }}>
+                        Días trabajados máximo para que cuadren con {detectedLeaves.length === 1 ? 'esta licencia' : 'estas licencias'}:{' '}
+                        {maxDaysWorkedWithLeaves} (30 − {detectedLeavesDaysInPeriod} días de licencia en este periodo).
+                        {Number(payrollForm.daysWorked) > maxDaysWorkedWithLeaves && ' Ajusta el campo de abajo antes de calcular.'}
                       </div>
                     </div>
                   ) : employeeLeaves.length > 0 ? (
