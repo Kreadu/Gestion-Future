@@ -552,6 +552,19 @@ const VINCULATION_LABELS = {
   EST_MISSION: 'Trabajador en misión (EST)'
 };
 
+const LEAVE_TYPE_LABELS = {
+  GENERAL_INCAPACITY: 'Incapacidad general (enfermedad común)',
+  WORK_INCAPACITY: 'Incapacidad laboral (ARL)',
+  MATERNITY_LEAVE: 'Licencia de maternidad',
+  PATERNITY_LEAVE: 'Licencia de paternidad'
+};
+
+// Fechas en formato AAAA-MM-DD: comparar como texto basta para el
+// orden cronológico.
+function leaveOverlapsPeriod(leave, period) {
+  return period && leave.startDate <= period.periodEnd && leave.endDate >= period.periodStart;
+}
+
 function formatCOP(value) {
   return new Intl.NumberFormat('es-CO', {
     style: 'currency',
@@ -815,6 +828,16 @@ function App({ me, onSignOut }) {
   const [currentSettlementId, setCurrentSettlementId] = useState('');
   const [currentSettlementStatus, setCurrentSettlementStatus] = useState('');
 
+  const [employeeLeaves, setEmployeeLeaves] = useState([]);
+  const [leaveModal, setLeaveModal] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({
+    leaveType: 'GENERAL_INCAPACITY',
+    startDate: '',
+    endDate: '',
+    accumulatedDaysBefore: 0,
+    notes: ''
+  });
+
   const [periods, setPeriods] = useState([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState('');
   const [settlements, setSettlements] = useState([]);
@@ -899,6 +922,12 @@ function App({ me, onSignOut }) {
   const selectedPeriod = periods.find(function(p) {
     return p.id === selectedPeriodId;
   });
+
+  const detectedLeave = selectedPeriod
+    ? employeeLeaves.find(function(lv) {
+        return leaveOverlapsPeriod(lv, selectedPeriod);
+      })
+    : null;
 
   const isSuperAdmin = me.role === 'SUPER_ADMIN';
 
@@ -997,6 +1026,19 @@ function App({ me, onSignOut }) {
     setDisbursementResult(null);
     setCurrentSettlementId('');
     setCurrentSettlementStatus('');
+    setEmployeeLeaves([]);
+  }
+
+  async function loadEmployeeLeaves(employeeId) {
+    try {
+      const result = await api(
+        '/api/employee-leaves?employeeId=' + encodeURIComponent(employeeId)
+      );
+
+      setEmployeeLeaves(Array.isArray(result.data) ? result.data : []);
+    } catch (err) {
+      setEmployeeLeaves([]);
+    }
   }
 
   function findSettlementForEmployee(employeeId) {
@@ -1010,6 +1052,7 @@ function App({ me, onSignOut }) {
 
     setSelectedEmp(employee);
     setDisbursementResult(null);
+    loadEmployeeLeaves(employee.id);
 
     setPayrollForm({
       employeeId: employee.id,
@@ -1493,6 +1536,67 @@ function App({ me, onSignOut }) {
       setSuccess('Nómina calculada correctamente.');
 
       await loadSettlements(selectedPeriod.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openLeaveModal() {
+    clearMessages();
+
+    setLeaveForm({
+      leaveType: 'GENERAL_INCAPACITY',
+      startDate: '',
+      endDate: '',
+      accumulatedDaysBefore: 0,
+      notes: ''
+    });
+
+    setLeaveModal(true);
+  }
+
+  async function saveLeave() {
+    try {
+      clearMessages();
+
+      if (!selectedEmp) {
+        throw new Error('Selecciona un empleado.');
+      }
+
+      if (!leaveForm.startDate || !leaveForm.endDate) {
+        throw new Error('La fecha de inicio y de fin son obligatorias.');
+      }
+
+      if (leaveForm.endDate < leaveForm.startDate) {
+        throw new Error('La fecha de fin no puede ser anterior a la de inicio.');
+      }
+
+      setLoading(true);
+
+      await api('/api/employee-leaves', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          employeeId: selectedEmp.id,
+          leaveType: leaveForm.leaveType,
+          startDate: leaveForm.startDate,
+          endDate: leaveForm.endDate,
+          accumulatedDaysBefore:
+            leaveForm.leaveType === 'GENERAL_INCAPACITY'
+              ? Number(leaveForm.accumulatedDaysBefore) || 0
+              : 0,
+          notes: leaveForm.notes
+        })
+      });
+
+      setSuccess('Incapacidad/licencia registrada correctamente.');
+      setLeaveModal(false);
+
+      await loadEmployeeLeaves(selectedEmp.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2050,10 +2154,22 @@ function App({ me, onSignOut }) {
             </div>
 
             <div className="result-row">
+              <span>Incapacidad/licencia</span>
+              <strong>{formatCOP(payrollResult.leaveValue)}</strong>
+            </div>
+
+            <div className="result-row">
               <span>Total devengado</span>
               <strong>{formatCOP(payrollResult.grossEarnings)}</strong>
             </div>
           </div>
+
+          {payrollResult.leaveValue > 0 && (
+            <div className="info-box" style={{margin: '0 18px 18px'}}>
+              De la incapacidad/licencia, {formatCOP(payrollResult.reimbursableAmount)}{' '}
+              son recobrables a EPS/ARL.
+            </div>
+          )}
 
           <div className="result-section">
             <h3>📉 Deducciones empleado</h3>
@@ -3183,6 +3299,36 @@ function App({ me, onSignOut }) {
 
                 <div className="section">
                   <div className="section-title">
+                    🩹 Incapacidades y licencias
+                  </div>
+
+                  {detectedLeave ? (
+                    <div className="info-box">
+                      Se detectó: {LEAVE_TYPE_LABELS[detectedLeave.leaveType]},
+                      {' '}{detectedLeave.totalDays} días, del {detectedLeave.startDate}{' '}
+                      al {detectedLeave.endDate}. El motor la aplicará
+                      automáticamente al calcular la nómina de este periodo.
+                    </div>
+                  ) : (
+                    <div className="info-box">
+                      No se detectó ninguna incapacidad o licencia de este
+                      empleado que se solape con el periodo seleccionado.
+                    </div>
+                  )}
+
+                  <div className="button-row" style={{marginTop: '10px'}}>
+                    <button
+                      className="btn"
+                      onClick={openLeaveModal}
+                      disabled={currentSettlementStatus === 'GENERATED'}
+                    >
+                      + Registrar incapacidad/licencia
+                    </button>
+                  </div>
+                </div>
+
+                <div className="section">
+                  <div className="section-title">
                     ⏱️ Horas extras y recargos
                   </div>
 
@@ -4005,6 +4151,120 @@ function App({ me, onSignOut }) {
                 disabled={loading}
               >
                 {loading ? 'Creando...' : 'Crear periodo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leaveModal && selectedEmp && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Registrar incapacidad/licencia</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setLeaveModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group full">
+                  <label>Tipo</label>
+                  <select
+                    value={leaveForm.leaveType}
+                    onChange={function(e) {
+                      setLeaveForm({
+                        ...leaveForm,
+                        leaveType: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="GENERAL_INCAPACITY">Incapacidad general (enfermedad común)</option>
+                    <option value="WORK_INCAPACITY">Incapacidad laboral (ARL)</option>
+                    <option value="MATERNITY_LEAVE">Licencia de maternidad</option>
+                    <option value="PATERNITY_LEAVE">Licencia de paternidad</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Fecha inicio</label>
+                  <input
+                    type="date"
+                    value={leaveForm.startDate}
+                    onChange={function(e) {
+                      setLeaveForm({
+                        ...leaveForm,
+                        startDate: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Fecha fin</label>
+                  <input
+                    type="date"
+                    value={leaveForm.endDate}
+                    onChange={function(e) {
+                      setLeaveForm({
+                        ...leaveForm,
+                        endDate: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                {leaveForm.leaveType === 'GENERAL_INCAPACITY' && (
+                  <div className="form-group full">
+                    <label>Días acumulados de incapacidad continua ANTES de esta</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={leaveForm.accumulatedDaysBefore}
+                      onChange={function(e) {
+                        setLeaveForm({
+                          ...leaveForm,
+                          accumulatedDaysBefore: e.target.value
+                        });
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="form-group full">
+                  <label>Notas (opcional)</label>
+                  <input
+                    value={leaveForm.notes}
+                    onChange={function(e) {
+                      setLeaveForm({
+                        ...leaveForm,
+                        notes: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setLeaveModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={saveLeave}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Registrar'}
               </button>
             </div>
           </div>
