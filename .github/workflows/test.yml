@@ -29,7 +29,7 @@ jobs:
           python-version: '3.12'
 
       - name: Instalar Dependencias de Node.js
-        run: npm install
+        run: npm ci
 
       - name: Instalar Dependencias de Python
         run: |
@@ -42,8 +42,16 @@ jobs:
       - name: Ejecutar Pruebas Automatizadas de Nómina (Python)
         run: python3 tests/test_colombia_payroll_and_dian.py
 
-      - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
-        run: npx ts-node tests/payrollAndDian.test.ts
+      - name: Ejecutar Pruebas Automatizadas (Jest)
+        run: npx jest
+
+      - name: Aplicar Migraciones D1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply gestion_future_db --remote
 
       - name: Desplegar a Cloudflare Workers
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

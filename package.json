@@ -11,7 +11,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "firebase-admin": "^12.0.0"
+    "jose": "^5.10.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240108.0",
