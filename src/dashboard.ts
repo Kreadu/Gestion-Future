@@ -2510,12 +2510,22 @@ function App({ me, onSignOut }) {
                     )}
                   </div>
 
-                  <button
-                    className="btn"
-                    onClick={() => setShowPayrollPreview(false)}
-                  >
-                    ✕ Cerrar
-                  </button>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '14px'}}>
+                    {selectedCompany && selectedCompany.logo && (
+                      <img
+                        src={selectedCompany.logo}
+                        alt={'Logo de ' + selectedCompany.name}
+                        style={{maxHeight: '42px', maxWidth: '120px', objectFit: 'contain'}}
+                      />
+                    )}
+
+                    <button
+                      className="btn"
+                      onClick={() => setShowPayrollPreview(false)}
+                    >
+                      ✕ Cerrar
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{padding: '28px'}}>
