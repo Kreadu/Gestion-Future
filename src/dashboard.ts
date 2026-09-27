@@ -12,7 +12,7 @@ export function getDashboardHtml(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kreadu Gestión-Future | Dashboard Nómina</title>
+  <title>Kreadu Gestion-Future | Dashboard Nómina</title>
 
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -33,6 +33,8 @@ export function getDashboardHtml(
       font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #07111f;
       color: #e5edf7;
+      /* Deja espacio para el pie institucional fijo (PageFooter). */
+      padding-bottom: 34px;
     }
 
     button,
@@ -650,7 +652,7 @@ function LoginScreen({ error, loading, onSignIn }) {
         </div>
 
         <h1 style={{ fontSize: '18px', margin: '0 0 6px' }}>
-          Kreadu Gestión-Future
+          Kreadu Gestion-Future
         </h1>
 
         <p style={{ color: '#8193aa', fontSize: '13px', margin: '0 0 24px' }}>
@@ -683,6 +685,8 @@ function LoginScreen({ error, loading, onSignIn }) {
           {loading ? 'Conectando...' : '🔐 Iniciar sesión con Google'}
         </button>
       </div>
+
+      <PageFooter />
     </div>
   );
 }
@@ -2368,7 +2372,7 @@ function App({ me, onSignOut }) {
                         letterSpacing: '1px'
                       }}
                     >
-                      KREADU GESTIÓN-FUTURE
+                      KREADU GESTION-FUTURE
                     </div>
 
                     <h2 style={{margin: '5px 0', fontSize: '22px'}}>
@@ -2378,6 +2382,15 @@ function App({ me, onSignOut }) {
                     <div style={{fontSize: '13px', color: '#64748b'}}>
                       Liquidación de nómina · Colombia
                     </div>
+
+                    {selectedCompany && (
+                      <div style={{fontSize: '13px', marginTop: '4px'}}>
+                        {selectedCompany.name}
+                        {selectedCompany.nit && (
+                          <> · NIT {selectedCompany.nit}{selectedCompany.dv ? '-' + selectedCompany.dv : ''}</>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -2422,9 +2435,17 @@ function App({ me, onSignOut }) {
                         Documento: {payrollResult.taxId}
                       </div>
 
-                      <div style={{marginTop: '5px', fontSize: '13px'}}>
-                        ID empleado: {payrollResult.employeeId}
-                      </div>
+                      {selectedEmp && selectedEmp.position && (
+                        <div style={{marginTop: '5px', fontSize: '13px'}}>
+                          Cargo: {selectedEmp.position}
+                        </div>
+                      )}
+
+                      {selectedEmp && selectedEmp.hireDate && (
+                        <div style={{marginTop: '5px', fontSize: '13px'}}>
+                          Fecha de ingreso: {selectedEmp.hireDate}
+                        </div>
+                      )}
                     </div>
 
                     <div
@@ -2447,7 +2468,13 @@ function App({ me, onSignOut }) {
                         Nómina mensual
                       </strong>
 
-                      <div style={{marginTop: '7px', fontSize: '13px'}}>
+                      {selectedPeriod && (
+                        <div style={{marginTop: '7px', fontSize: '13px'}}>
+                          Del {selectedPeriod.periodStart} al {selectedPeriod.periodEnd}
+                        </div>
+                      )}
+
+                      <div style={{marginTop: '5px', fontSize: '13px'}}>
                         Días trabajados: {payrollResult.daysWorked}
                       </div>
 
@@ -2539,6 +2566,32 @@ function App({ me, onSignOut }) {
                       </tr>
 
                       <tr>
+                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
+                          Dominical/festivo
+                        </td>
+                        <td style={{
+                          padding: '9px 5px',
+                          borderBottom: '1px solid #e5e7eb',
+                          textAlign: 'right'
+                        }}>
+                          {formatCOP(payrollResult.dominicalFestivoValue)}
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
+                          Incapacidad/licencia
+                        </td>
+                        <td style={{
+                          padding: '9px 5px',
+                          borderBottom: '1px solid #e5e7eb',
+                          textAlign: 'right'
+                        }}>
+                          {formatCOP(payrollResult.leaveValue)}
+                        </td>
+                      </tr>
+
+                      <tr>
                         <td style={{
                           padding: '12px 5px',
                           fontWeight: '800'
@@ -2612,6 +2665,19 @@ function App({ me, onSignOut }) {
                       </tr>
 
                       <tr>
+                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
+                          Retención en la fuente
+                        </td>
+                        <td style={{
+                          padding: '9px 5px',
+                          borderBottom: '1px solid #e5e7eb',
+                          textAlign: 'right'
+                        }}>
+                          {formatCOP(deductions.retencionFuente)}
+                        </td>
+                      </tr>
+
+                      <tr>
                         <td style={{
                           padding: '12px 5px',
                           fontWeight: '800'
@@ -2677,11 +2743,13 @@ function App({ me, onSignOut }) {
                     fontSize: '11px',
                     color: '#64748b'
                   }}>
-                    Documento generado por Kreadu Gestión-Future.
+                    Documento generado por Kreadu Gestion-Future.
                     Esta vista es una representación visual de la liquidación.
                     El documento técnico para nómina electrónica se encuentra
                     en el XML DIAN.
                   </div>
+
+                  {renderKreaduFooter()}
 
                 </div>
               </div>
@@ -2950,12 +3018,14 @@ function App({ me, onSignOut }) {
 
   return (
     <div className="app">
+      <PageFooter />
+
       <header className="header">
         <div className="brand">
           <div className="brand-logo">K</div>
 
           <div>
-            <h1>Kreadu Gestión-Future</h1>
+            <h1>Kreadu Gestion-Future</h1>
             <p>Sistema de gestión de nómina multiempresa</p>
           </div>
         </div>
@@ -3330,6 +3400,13 @@ function App({ me, onSignOut }) {
                 <div className="section">
                   <div className="section-title">
                     ⏱️ Horas extras y recargos
+                  </div>
+
+                  <div className="info-box" style={{marginBottom: '13px'}}>
+                    Las horas se escriben en formato decimal (minutos ÷ 60),
+                    no en horas y minutos: 15 min = 0.25, 30 min = 0.5,
+                    45 min = 0.75. Ej: 1 hora 15 minutos se escribe{' '}
+                    <strong>1.25</strong>.
                   </div>
 
                   <div className="form-grid">
@@ -4977,6 +5054,8 @@ function App({ me, onSignOut }) {
               </div>
 
               <pre>{settlementResult.dianDocument.xmlContent}</pre>
+
+              {renderKreaduFooter()}
             </div>
           </div>
         </div>
@@ -4994,6 +5073,54 @@ function getEmployeeName(employee) {
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+// Pie institucional obligatorio, fijo al fondo de TODA la página
+// (login y dashboard) — distinto de renderKreaduFooter(), que es el
+// mismo texto pero en flujo normal al final de un documento
+// imprimible (no fijo, porque ahí ya está dentro de un contenedor).
+function PageFooter() {
+  return (
+    <div style={{
+      position: 'fixed',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 500,
+      padding: '7px 16px',
+      textAlign: 'center',
+      fontSize: '11px',
+      color: '#8193aa',
+      background: 'rgba(7, 17, 31, 0.92)',
+      borderTop: '1px solid #1d3047'
+    }}>
+      <strong>KREADU S.A.S.</strong> - Empresa AI Business Systems Lab -
+      Academy - KREADU School
+      {' · '}
+      Contacto: is@kreadu.com; (+57) 3235297951; (+57) 3225832662
+    </div>
+  );
+}
+
+// Pie institucional obligatorio: debe ir al final de todo documento
+// imprimible/visual (nómina individual, y cualquier otro que se
+// agregue a futuro — reutilizar esta función, no copiar el texto).
+function renderKreaduFooter() {
+  return (
+    <div style={{
+      marginTop: '12px',
+      paddingTop: '12px',
+      borderTop: '1px solid #e5e7eb',
+      textAlign: 'center',
+      fontSize: '11px',
+      color: '#64748b'
+    }}>
+      <strong>KREADU S.A.S.</strong> - Empresa AI Business Systems Lab -
+      Academy - KREADU School
+      <br />
+      Contacto: is@kreadu.com; (+57) 3235297951; (+57) 3225832662
+    </div>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
