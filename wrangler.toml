@@ -4,8 +4,23 @@ compatibility_date = "2024-01-01"
 
 [vars]
 ENVIRONMENT = "production"
+# Config pública del proyecto Firebase (Authentication) usada por el
+# dashboard y por el Worker para verificar los ID tokens. No son
+# secretos: reemplázalos por los de tu propio proyecto Firebase.
+FIREBASE_PROJECT_ID = "TU-FIREBASE-PROJECT-ID"
+FIREBASE_API_KEY = "TU-FIREBASE-API-KEY"
+FIREBASE_AUTH_DOMAIN = "TU-FIREBASE-PROJECT-ID.firebaseapp.com"
+
+# DIAN_SOFTWARE_ID y DIAN_SOFTWARE_PIN sí son secretos: no van aquí.
+# Configúralos con:
+#   npx wrangler secret put DIAN_SOFTWARE_ID
+#   npx wrangler secret put DIAN_SOFTWARE_PIN
+# Mientras no se configuren, el Worker usa los valores de prueba
+# 'SOFT-KREADU-2026' / '12345' (sólo válidos para el ambiente de
+# habilitación de la DIAN, nunca para producción).
 
 [[d1_databases]]
 binding = "DB"
 database_name = "gestion_future_db"
 database_id = "272ce3a6-51d7-4fd3-9353-37347f174edb"
+migrations_dir = "migrations"
