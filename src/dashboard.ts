@@ -850,6 +850,7 @@ function App({ me, onSignOut }) {
 
   const [employeeLeaves, setEmployeeLeaves] = useState([]);
   const [leaveModal, setLeaveModal] = useState(false);
+  const [editingLeave, setEditingLeave] = useState(null);
   const [leaveForm, setLeaveForm] = useState({
     leaveType: 'GENERAL_INCAPACITY',
     startDate: '',
@@ -1577,16 +1578,27 @@ function App({ me, onSignOut }) {
     }
   }
 
-  function openLeaveModal() {
+  function openLeaveModal(leave) {
     clearMessages();
+    setEditingLeave(leave || null);
 
-    setLeaveForm({
-      leaveType: 'GENERAL_INCAPACITY',
-      startDate: '',
-      endDate: '',
-      accumulatedDaysBefore: 0,
-      notes: ''
-    });
+    setLeaveForm(
+      leave
+        ? {
+            leaveType: leave.leaveType,
+            startDate: leave.startDate,
+            endDate: leave.endDate,
+            accumulatedDaysBefore: leave.accumulatedDaysBefore || 0,
+            notes: leave.notes || ''
+          }
+        : {
+            leaveType: 'GENERAL_INCAPACITY',
+            startDate: '',
+            endDate: '',
+            accumulatedDaysBefore: 0,
+            notes: ''
+          }
+    );
 
     setLeaveModal(true);
   }
@@ -1609,26 +1621,73 @@ function App({ me, onSignOut }) {
 
       setLoading(true);
 
-      await api('/api/employee-leaves', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: selectedEmp.id,
-          leaveType: leaveForm.leaveType,
-          startDate: leaveForm.startDate,
-          endDate: leaveForm.endDate,
-          accumulatedDaysBefore:
-            leaveForm.leaveType === 'GENERAL_INCAPACITY'
-              ? Number(leaveForm.accumulatedDaysBefore) || 0
-              : 0,
-          notes: leaveForm.notes
-        })
+      const payload = {
+        employeeId: selectedEmp.id,
+        leaveType: leaveForm.leaveType,
+        startDate: leaveForm.startDate,
+        endDate: leaveForm.endDate,
+        accumulatedDaysBefore:
+          leaveForm.leaveType === 'GENERAL_INCAPACITY'
+            ? Number(leaveForm.accumulatedDaysBefore) || 0
+            : 0,
+        notes: leaveForm.notes
+      };
+
+      if (editingLeave) {
+        await api('/api/employee-leaves/' + encodeURIComponent(editingLeave.id), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        setSuccess('Incapacidad/licencia actualizada correctamente.');
+      } else {
+        await api('/api/employee-leaves', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        setSuccess('Incapacidad/licencia registrada correctamente.');
+      }
+
+      setLeaveModal(false);
+      setEditingLeave(null);
+
+      await loadEmployeeLeaves(selectedEmp.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteLeave(leave) {
+    if (!selectedEmp) {
+      return;
+    }
+
+    if (!window.confirm(
+      '¿Eliminar esta incapacidad/licencia (' +
+      LEAVE_TYPE_LABELS[leave.leaveType] + ', del ' + leave.startDate +
+      ' al ' + leave.endDate + ')?'
+    )) {
+      return;
+    }
+
+    try {
+      clearMessages();
+      setLoading(true);
+
+      await api('/api/employee-leaves/' + encodeURIComponent(leave.id), {
+        method: 'DELETE'
       });
 
-      setSuccess('Incapacidad/licencia registrada correctamente.');
-      setLeaveModal(false);
+      setSuccess('Incapacidad/licencia eliminada correctamente.');
 
       await loadEmployeeLeaves(selectedEmp.id);
     } catch (err) {
@@ -3473,10 +3532,56 @@ function App({ me, onSignOut }) {
                     </div>
                   )}
 
+                  {employeeLeaves.length > 0 && (
+                    <div style={{marginTop: '10px'}}>
+                      {employeeLeaves.map(function(lv) {
+                        return (
+                          <div
+                            key={lv.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '10px',
+                              padding: '8px 10px',
+                              border: '1px solid #203750',
+                              borderRadius: '8px',
+                              marginBottom: '6px',
+                              fontSize: '12px'
+                            }}
+                          >
+                            <span>
+                              {LEAVE_TYPE_LABELS[lv.leaveType]}
+                              {' — '}{lv.totalDays} días, del {lv.startDate} al {lv.endDate}
+                            </span>
+
+                            <span style={{display: 'flex', gap: '6px', flexShrink: 0}}>
+                              <button
+                                className="btn"
+                                style={{padding: '4px 9px', fontSize: '12px'}}
+                                onClick={function() { openLeaveModal(lv); }}
+                              >
+                                ✏️ Editar
+                              </button>
+
+                              <button
+                                className="btn"
+                                style={{padding: '4px 9px', fontSize: '12px'}}
+                                onClick={function() { deleteLeave(lv); }}
+                              >
+                                🗑️ Eliminar
+                              </button>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className="button-row" style={{marginTop: '10px'}}>
                     <button
                       className="btn"
-                      onClick={openLeaveModal}
+                      onClick={function() { openLeaveModal(); }}
                       disabled={currentSettlementStatus === 'GENERATED'}
                     >
                       + Registrar incapacidad/licencia
@@ -4325,11 +4430,11 @@ function App({ me, onSignOut }) {
         <div className="modal-backdrop">
           <div className="modal">
             <div className="modal-header">
-              <h3>Registrar incapacidad/licencia</h3>
+              <h3>{editingLeave ? 'Editar incapacidad/licencia' : 'Registrar incapacidad/licencia'}</h3>
 
               <button
                 className="btn"
-                onClick={function() { setLeaveModal(false); }}
+                onClick={function() { setLeaveModal(false); setEditingLeave(null); }}
               >
                 ✕
               </button>
@@ -4418,7 +4523,7 @@ function App({ me, onSignOut }) {
             <div className="modal-footer">
               <button
                 className="btn"
-                onClick={function() { setLeaveModal(false); }}
+                onClick={function() { setLeaveModal(false); setEditingLeave(null); }}
               >
                 Cancelar
               </button>
@@ -4428,7 +4533,7 @@ function App({ me, onSignOut }) {
                 onClick={saveLeave}
                 disabled={loading}
               >
-                {loading ? 'Guardando...' : 'Registrar'}
+                {loading ? 'Guardando...' : editingLeave ? 'Guardar cambios' : 'Registrar'}
               </button>
             </div>
           </div>

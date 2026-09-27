@@ -1357,6 +1357,163 @@ export default {
 
       if (
         employeeLeaveMatch &&
+        request.method === 'PUT'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        const body = await request.json() as any;
+
+        const leaveType = String(body.leaveType || '').trim();
+        const startDate = String(body.startDate || '').trim();
+        const endDate = String(body.endDate || '').trim();
+
+        if (!leaveType || !startDate || !endDate) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType, startDate y endDate son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (
+          !EMPLOYEE_LEAVE_TYPES.includes(leaveType as EmployeeLeaveType)
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
+                'MATERNITY_LEAVE o PATERNITY_LEAVE.',
+            },
+            400
+          );
+        }
+
+        const start = new Date(`${startDate}T00:00:00Z`);
+        const end = new Date(`${endDate}T00:00:00Z`);
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+          return sendJson(
+            { success: false, error: 'startDate/endDate inválidas.' },
+            400
+          );
+        }
+
+        const totalDays =
+          Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+
+        if (totalDays < 1) {
+          return sendJson(
+            {
+              success: false,
+              error: 'endDate debe ser igual o posterior a startDate.',
+            },
+            400
+          );
+        }
+
+        // Excluye la propia licencia al validar solapes con otras del
+        // mismo empleado.
+        const overlappingExisting = await env.DB
+          .prepare(`
+            SELECT id
+            FROM employee_leaves
+            WHERE employeeId = ?1
+              AND id != ?2
+              AND startDate <= ?3
+              AND endDate >= ?4
+          `)
+          .bind(String(existing.employeeId), leaveId, endDate, startDate)
+          .first();
+
+        if (overlappingExisting) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Ya existe otra incapacidad/licencia registrada para ' +
+                'este empleado que se solapa con estas fechas.',
+            },
+            400
+          );
+        }
+
+        // Sólo aplica (y sólo se persiste) para incapacidad general —
+        // en el resto de tipos siempre es 0.
+        const accumulatedDaysBefore =
+          leaveType === 'GENERAL_INCAPACITY'
+            ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
+            : 0;
+
+        await env.DB
+          .prepare(`
+            UPDATE employee_leaves
+            SET
+              leaveType = ?1,
+              startDate = ?2,
+              endDate = ?3,
+              totalDays = ?4,
+              accumulatedDaysBefore = ?5,
+              notes = ?6
+            WHERE id = ?7
+          `)
+          .bind(
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            body.notes || null,
+            leaveId
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          data: {
+            id: leaveId,
+            employeeId: String(existing.employeeId),
+            companyId: String(existing.companyId),
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            notes: body.notes || null,
+            createdAt: existing.createdAt ?? null,
+          },
+        });
+      }
+
+      if (
+        employeeLeaveMatch &&
         request.method === 'DELETE'
       ) {
         const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
