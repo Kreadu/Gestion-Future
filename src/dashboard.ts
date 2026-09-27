@@ -1002,6 +1002,22 @@ function App({ me, onSignOut }) {
     }
   }, [selectedCompanyId, activeSection]);
 
+  // Si hay licencias detectadas para el periodo y "Días trabajados"
+  // ya no cabe junto con ellas (ej. se acaba de registrar una nueva
+  // y el campo se quedó en 30), se ajusta solo — evita que el
+  // cálculo se rechace en silencio por un valor que quedó
+  // desactualizado, sin que la persona tenga que restar a mano.
+  useEffect(function() {
+    if (
+      detectedLeavesDaysInPeriod > 0 &&
+      Number(payrollForm.daysWorked) > maxDaysWorkedWithLeaves
+    ) {
+      setPayrollForm(function(prev) {
+        return { ...prev, daysWorked: maxDaysWorkedWithLeaves };
+      });
+    }
+  }, [detectedLeavesDaysInPeriod]);
+
   async function loadCompanies() {
     try {
       setError('');
