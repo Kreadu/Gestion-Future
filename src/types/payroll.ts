@@ -211,11 +211,14 @@ export interface ColombiaPayrollInput {
   isIntegralSalary?: boolean;
 
   /**
-   * Incapacidad o licencia que cae dentro del período liquidado.
-   * `daysWorked` sigue representando sólo los días NORMALES
-   * trabajados; estos días son adicionales, no un subconjunto.
+   * Incapacidades/licencias que caen dentro del período liquidado.
+   * Un mismo período puede tener más de una (ej. 3 días de
+   * incapacidad a inicios de mes + 5 días más adelante) — cada una
+   * se calcula independientemente y se suman. `daysWorked` sigue
+   * representando sólo los días NORMALES trabajados; estos días son
+   * adicionales, no un subconjunto.
    */
-  leave?: EmployeeLeaveInput;
+  leaves?: EmployeeLeaveInput[];
 }
 
 export type EmployeeLeaveType =

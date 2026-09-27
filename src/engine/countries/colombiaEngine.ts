@@ -14,6 +14,7 @@
 import {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
+  EmployeeLeaveInput,
   RiskClass,
 } from '../../types/payroll';
 
@@ -131,7 +132,7 @@ export class ColombiaPayrollEngine {
 
   private static calculateLeaveValue(
     baseSalary: number,
-    leave: NonNullable<ColombiaPayrollInput['leave']>
+    leave: EmployeeLeaveInput
   ): number {
 
     const dailyRate = baseSalary / 30;
@@ -166,7 +167,7 @@ export class ColombiaPayrollEngine {
   private static calculateReimbursableAmount(
     baseSalary: number,
     leaveValue: number,
-    leave: NonNullable<ColombiaPayrollInput['leave']>
+    leave: EmployeeLeaveInput
   ): number {
 
     if (leave.type !== 'GENERAL_INCAPACITY') {
@@ -210,11 +211,23 @@ export class ColombiaPayrollEngine {
     const daysWorkedRaw =
       Number(input.daysWorked);
 
-    // 0 días normales sólo es válido cuando hay una incapacidad/
-    // licencia que cubre el resto del período (ej. licencia de
-    // maternidad de mes completo). Sin `leave`, 0 sigue sin ser un
-    // valor válido y cae al default de 30.
-    const minDaysWorked = input.leave ? 0 : 1;
+    // Un mismo período puede tener MÁS DE UNA incapacidad/licencia
+    // (ej. 3 días de incapacidad a inicios de mes + 5 días más
+    // adelante): se suman independientemente, cada una con su propio
+    // `accumulatedDaysBefore` si aplica — no se modela continuidad
+    // entre ellas (eso sigue siendo criterio de quien las registra).
+    const leaves = input.leaves ?? [];
+
+    const totalLeaveDays = leaves.reduce(
+      (sum, leave) => sum + leave.daysInPeriod,
+      0
+    );
+
+    // 0 días normales sólo es válido cuando hay incapacidad/licencia
+    // que cubre el resto del período (ej. licencia de maternidad de
+    // mes completo). Sin `leaves`, 0 sigue sin ser un valor válido y
+    // cae al default de 30.
+    const minDaysWorked = leaves.length > 0 ? 0 : 1;
 
     const daysWorked =
       Number.isFinite(daysWorkedRaw) &&
@@ -224,8 +237,8 @@ export class ColombiaPayrollEngine {
         : 30;
 
     if (
-      input.leave &&
-      daysWorked + input.leave.daysInPeriod > 30
+      totalLeaveDays > 0 &&
+      daysWorked + totalLeaveDays > 30
     ) {
       throw new ColombiaPayrollEngineError(
         'Los días trabajados y los días de incapacidad/licencia del ' +
@@ -371,15 +384,21 @@ export class ColombiaPayrollEngine {
     // INCAPACIDAD / LICENCIA
     // --------------------------------------------------------
 
-    const leaveValue =
-      input.leave
-        ? this.calculateLeaveValue(baseSalary, input.leave)
-        : 0;
+    const leaveValue = leaves.reduce(
+      (sum, leave) => sum + this.calculateLeaveValue(baseSalary, leave),
+      0
+    );
 
-    const reimbursableAmount =
-      input.leave
-        ? this.calculateReimbursableAmount(baseSalary, leaveValue, input.leave)
-        : 0;
+    const reimbursableAmount = leaves.reduce(
+      (sum, leave) =>
+        sum +
+        this.calculateReimbursableAmount(
+          baseSalary,
+          this.calculateLeaveValue(baseSalary, leave),
+          leave
+        ),
+      0
+    );
 
     // --------------------------------------------------------
     // TOTAL DEVENGADO
@@ -422,7 +441,7 @@ export class ColombiaPayrollEngine {
       Math.min(ibcUncapped, ibcMax);
 
     const daysCoveredInPeriod =
-      daysWorked + (input.leave?.daysInPeriod ?? 0);
+      daysWorked + totalLeaveDays;
 
     if (daysCoveredInPeriod === 30 && !isIntegralSalary) {
       ibcSecuritySocial =
@@ -598,17 +617,17 @@ export class ColombiaPayrollEngine {
       );
     }
 
-    if (input.leave?.type === 'GENERAL_INCAPACITY') {
-      const before = input.leave.accumulatedDaysBefore ?? 0;
-      const diasCubiertos = clamp(
-        180 - before,
-        0,
-        input.leave.daysInPeriod
-      );
+    for (const leave of leaves) {
+      if (leave.type !== 'GENERAL_INCAPACITY') {
+        continue;
+      }
 
-      if (diasCubiertos < input.leave.daysInPeriod) {
+      const before = leave.accumulatedDaysBefore ?? 0;
+      const diasCubiertos = clamp(180 - before, 0, leave.daysInPeriod);
+
+      if (diasCubiertos < leave.daysInPeriod) {
         complianceNotes.push(
-          `${input.leave.daysInPeriod - diasCubiertos} día(s) de esta ` +
+          `${leave.daysInPeriod - diasCubiertos} día(s) de una ` +
           'incapacidad superan los 180 días acumulados: no se pagan ' +
           'desde nómina, pasan a cargo del Fondo de Pensiones.'
         );

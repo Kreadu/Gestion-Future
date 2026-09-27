@@ -26,11 +26,11 @@ describe('Incapacidad general (enfermedad común)', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 10,
           accumulatedDaysBefore: 0,
-        },
+        }],
       })
     );
 
@@ -48,11 +48,11 @@ describe('Incapacidad general (enfermedad común)', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 5,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 10,
           accumulatedDaysBefore: 85,
-        },
+        }],
       })
     );
 
@@ -73,11 +73,11 @@ describe('Incapacidad general (enfermedad común)', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 10,
           accumulatedDaysBefore: 178,
-        },
+        }],
       })
     );
 
@@ -93,11 +93,11 @@ describe('Incapacidad general (enfermedad común)', () => {
       baseInput({
         baseSalaryMonthly: CONSTANTS_2026.SMMLV,
         daysWorked: 0,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 5,
           accumulatedDaysBefore: 0,
-        },
+        }],
       })
     );
 
@@ -113,7 +113,7 @@ describe('Incapacidad laboral y licencias de maternidad/paternidad', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: { type: 'WORK_INCAPACITY', daysInPeriod: 10 },
+        leaves: [{ type: 'WORK_INCAPACITY', daysInPeriod: 10 }],
       })
     );
 
@@ -126,7 +126,7 @@ describe('Incapacidad laboral y licencias de maternidad/paternidad', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 0,
-        leave: { type: 'MATERNITY_LEAVE', daysInPeriod: 30 },
+        leaves: [{ type: 'MATERNITY_LEAVE', daysInPeriod: 30 }],
       })
     );
 
@@ -139,7 +139,7 @@ describe('Incapacidad laboral y licencias de maternidad/paternidad', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 16,
-        leave: { type: 'PATERNITY_LEAVE', daysInPeriod: 14 },
+        leaves: [{ type: 'PATERNITY_LEAVE', daysInPeriod: 14 }],
       })
     );
 
@@ -154,11 +154,11 @@ describe('Monto recobrable a EPS/ARL', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 10,
           accumulatedDaysBefore: 0,
-        },
+        }],
       })
     );
 
@@ -177,11 +177,11 @@ describe('Monto recobrable a EPS/ARL', () => {
     const result = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: {
+        leaves: [{
           type: 'GENERAL_INCAPACITY',
           daysInPeriod: 10,
           accumulatedDaysBefore: 5, // ya pasó el día 2 en un período anterior
-        },
+        }],
       })
     );
 
@@ -192,7 +192,7 @@ describe('Monto recobrable a EPS/ARL', () => {
     const workResult = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: { type: 'WORK_INCAPACITY', daysInPeriod: 10 },
+        leaves: [{ type: 'WORK_INCAPACITY', daysInPeriod: 10 }],
       })
     );
 
@@ -204,7 +204,7 @@ describe('Monto recobrable a EPS/ARL', () => {
     const maternityResult = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 0,
-        leave: { type: 'MATERNITY_LEAVE', daysInPeriod: 30 },
+        leaves: [{ type: 'MATERNITY_LEAVE', daysInPeriod: 30 }],
       })
     );
 
@@ -224,7 +224,7 @@ describe('Integración con IBC, aportes y provisiones', () => {
     const withLeave = ColombiaPayrollEngine.calculate(
       baseInput({
         daysWorked: 20,
-        leave: { type: 'GENERAL_INCAPACITY', daysInPeriod: 10 },
+        leaves: [{ type: 'GENERAL_INCAPACITY', daysInPeriod: 10 }],
       })
     );
 
@@ -242,12 +242,74 @@ describe('Integración con IBC, aportes y provisiones', () => {
       baseInput({
         baseSalaryMonthly: CONSTANTS_2026.SMMLV,
         daysWorked: 20,
-        leave: { type: 'GENERAL_INCAPACITY', daysInPeriod: 10 },
+        leaves: [{ type: 'GENERAL_INCAPACITY', daysInPeriod: 10 }],
       })
     );
 
     expect(result.ibcSecuritySocial).toBeGreaterThanOrEqual(
       CONSTANTS_2026.SMMLV
     );
+  });
+});
+
+describe('Más de una incapacidad/licencia en el mismo período', () => {
+  // Caso real: un empleado puede tener, p.ej., 3 días de incapacidad
+  // a inicios de mes y luego 5 días más adelante en el mismo período
+  // — dos eventos distintos, no continuos entre sí.
+  test('se suman los valores de cada una independientemente', () => {
+    const dailyRate = 3_000_000 / 30;
+
+    const combined = ColombiaPayrollEngine.calculate(
+      baseInput({
+        daysWorked: 22,
+        leaves: [
+          { type: 'GENERAL_INCAPACITY', daysInPeriod: 3, accumulatedDaysBefore: 0 },
+          { type: 'WORK_INCAPACITY', daysInPeriod: 5 },
+        ],
+      })
+    );
+
+    const expectedGeneral = 3 * dailyRate * 0.6667;
+    const expectedWork = 5 * dailyRate;
+
+    expect(combined.leaveValue).toBeCloseTo(expectedGeneral + expectedWork, 2);
+    expect(combined.reimbursableAmount).toBeCloseTo(
+      // Los 2 primeros días de la incapacidad general no son
+      // recobrables; la incapacidad laboral es 100% recobrable.
+      (expectedGeneral - 2 * dailyRate * 0.6667) + expectedWork,
+      2
+    );
+  });
+
+  test('los días de todas las licencias del período cuentan para el tope de 30 con daysWorked', () => {
+    expect(() =>
+      ColombiaPayrollEngine.calculate(
+        baseInput({
+          daysWorked: 20,
+          leaves: [
+            { type: 'GENERAL_INCAPACITY', daysInPeriod: 6 },
+            { type: 'WORK_INCAPACITY', daysInPeriod: 6 },
+          ],
+        })
+      )
+    ).toThrow(/no pueden sumar más de 30/);
+  });
+
+  test('cada GENERAL_INCAPACITY del período genera su propia advertencia de >180 días si aplica', () => {
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({
+        daysWorked: 10,
+        leaves: [
+          { type: 'GENERAL_INCAPACITY', daysInPeriod: 10, accumulatedDaysBefore: 175 },
+          { type: 'GENERAL_INCAPACITY', daysInPeriod: 10, accumulatedDaysBefore: 190 },
+        ],
+      })
+    );
+
+    const warnings = result.complianceNotes.filter(note =>
+      note.includes('180 días')
+    );
+
+    expect(warnings.length).toBe(2);
   });
 });

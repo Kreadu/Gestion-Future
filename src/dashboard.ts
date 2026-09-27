@@ -927,11 +927,14 @@ function App({ me, onSignOut }) {
     return p.id === selectedPeriodId;
   });
 
-  const detectedLeave = selectedPeriod
-    ? employeeLeaves.find(function(lv) {
+  // El motor soporta varias incapacidades/licencias dentro de un
+  // mismo periodo (se suman), así que se detectan TODAS las que
+  // se solapen, no solo la primera.
+  const detectedLeaves = selectedPeriod
+    ? employeeLeaves.filter(function(lv) {
         return leaveOverlapsPeriod(lv, selectedPeriod);
       })
-    : null;
+    : [];
 
   const isSuperAdmin = me.role === 'SUPER_ADMIN';
 
@@ -3372,12 +3375,38 @@ function App({ me, onSignOut }) {
                     🩹 Incapacidades y licencias
                   </div>
 
-                  {detectedLeave ? (
+                  {detectedLeaves.length > 0 ? (
                     <div className="info-box">
-                      Se detectó: {LEAVE_TYPE_LABELS[detectedLeave.leaveType]},
-                      {' '}{detectedLeave.totalDays} días, del {detectedLeave.startDate}{' '}
-                      al {detectedLeave.endDate}. El motor la aplicará
-                      automáticamente al calcular la nómina de este periodo.
+                      {detectedLeaves.length === 1
+                        ? 'Se detectó: '
+                        : 'Se detectaron ' + detectedLeaves.length + ': '}
+                      {detectedLeaves.map(function(lv, index) {
+                        return (
+                          <span key={lv.id}>
+                            {index > 0 ? ' · ' : ''}
+                            {LEAVE_TYPE_LABELS[lv.leaveType]}
+                            {' '}({lv.totalDays} días, del {lv.startDate} al {lv.endDate})
+                          </span>
+                        );
+                      })}
+                      . El motor {detectedLeaves.length === 1 ? 'la aplicará' : 'las sumará'} automáticamente al calcular la nómina de este periodo.
+                    </div>
+                  ) : employeeLeaves.length > 0 ? (
+                    <div className="info-box">
+                      ⚠️ Este empleado tiene {employeeLeaves.length === 1 ? 'una incapacidad/licencia registrada' : employeeLeaves.length + ' incapacidades/licencias registradas'},
+                      {' '}pero ninguna cae dentro de las fechas de este periodo
+                      {selectedPeriod ? ' (' + selectedPeriod.periodStart + ' al ' + selectedPeriod.periodEnd + ')' : ''}:
+                      {' '}
+                      {employeeLeaves.map(function(lv, index) {
+                        return (
+                          <span key={lv.id}>
+                            {index > 0 ? ' · ' : ''}
+                            {LEAVE_TYPE_LABELS[lv.leaveType]}
+                            {' '}(del {lv.startDate} al {lv.endDate})
+                          </span>
+                        );
+                      })}
+                      . Revisa si el periodo o las fechas de la licencia están bien.
                     </div>
                   ) : (
                     <div className="info-box">

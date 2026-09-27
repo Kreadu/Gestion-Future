@@ -1255,6 +1255,32 @@ export default {
           );
         }
 
+        // Un empleado no puede tener dos incapacidades/licencias
+        // simultáneas (sí puede tener varias en el mismo MES, una
+        // tras otra — eso el motor lo suma sin problema al liquidar).
+        const overlappingExisting = await env.DB
+          .prepare(`
+            SELECT id
+            FROM employee_leaves
+            WHERE employeeId = ?1
+              AND startDate <= ?2
+              AND endDate >= ?3
+          `)
+          .bind(employeeId, endDate, startDate)
+          .first();
+
+        if (overlappingExisting) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Ya existe una incapacidad/licencia registrada para ' +
+                'este empleado que se solapa con estas fechas.',
+            },
+            400
+          );
+        }
+
         // Sólo aplica (y sólo se persiste) para incapacidad general —
         // en el resto de tipos siempre es 0.
         const accumulatedDaysBefore =
@@ -1779,54 +1805,51 @@ export default {
 
         const overlappingLeaves = overlappingLeavesResult.results || [];
 
-        if (overlappingLeaves.length > 1) {
+        // Un mismo período puede tener más de una incapacidad/licencia
+        // (ej. 3 días a inicios de mes + 5 días más adelante) — se
+        // pasan todas al motor y él las suma. No pueden solaparse
+        // ENTRE SÍ porque eso ya se valida al registrarlas
+        // (POST /api/employee-leaves).
+        const leaves: EmployeeLeaveInput[] = overlappingLeaves.map(
+          (row) => {
+            const leaveRow = normalizeEmployeeLeave(row);
+
+            // Ya sabemos que se solapan con el periodo (la consulta
+            // SQL lo garantiza), así que la intersección nunca es
+            // null aquí.
+            const intersection = intersectDateRanges(
+              leaveRow.startDate,
+              leaveRow.endDate,
+              String(periodRow.periodStart),
+              String(periodRow.periodEnd)
+            )!;
+
+            return {
+              type: leaveRow.leaveType,
+              daysInPeriod: intersection.days,
+              accumulatedDaysBefore:
+                leaveRow.leaveType === 'GENERAL_INCAPACITY'
+                  ? leaveRow.accumulatedDaysBefore
+                  : undefined,
+            };
+          }
+        );
+
+        const totalLeaveDays = leaves.reduce(
+          (sum, l) => sum + l.daysInPeriod,
+          0
+        );
+
+        if (totalLeaveDays > 0 && daysWorked + totalLeaveDays > 30) {
           return sendJson(
             {
               success: false,
               error:
-                'Hay más de una incapacidad/licencia solapando este ' +
-                'periodo; liquídalas en periodos separados.',
+                'Días trabajados + días de incapacidad/licencia no ' +
+                'pueden superar 30.',
             },
             400
           );
-        }
-
-        let leave: EmployeeLeaveInput | undefined;
-
-        if (overlappingLeaves.length === 1) {
-          const leaveRow = normalizeEmployeeLeave(overlappingLeaves[0]);
-
-          // Ya sabemos que se solapan (la consulta SQL lo garantiza),
-          // así que la intersección nunca es null aquí.
-          const intersection = intersectDateRanges(
-            leaveRow.startDate,
-            leaveRow.endDate,
-            String(periodRow.periodStart),
-            String(periodRow.periodEnd)
-          )!;
-
-          const daysInPeriod = intersection.days;
-
-          if (daysWorked + daysInPeriod > 30) {
-            return sendJson(
-              {
-                success: false,
-                error:
-                  'Días trabajados + días de incapacidad/licencia no ' +
-                  'pueden superar 30.',
-              },
-              400
-            );
-          }
-
-          leave = {
-            type: leaveRow.leaveType,
-            daysInPeriod,
-            accumulatedDaysBefore:
-              leaveRow.leaveType === 'GENERAL_INCAPACITY'
-                ? leaveRow.accumulatedDaysBefore
-                : undefined,
-          };
         }
 
         const overtimeHours = body.overtimeHours || {};
@@ -1883,7 +1906,7 @@ export default {
           horasExtraDominicalFestivo,
           isIntegralSalary: !!body.isIntegralSalary,
 
-          leave,
+          leaves,
 
           overtimeHours: {
             extraDiurna,
