@@ -473,19 +473,41 @@ export function getDashboardHtml(
     }
 
     .alert {
-      margin: 14px 18px;
+      /* Fijo y por encima de CUALQUIER overlay (modales z-index 100,
+         vistas previas z-index 9999): un error dentro de un modal
+         (ej. al guardar) antes quedaba renderizado detrás del fondo
+         del modal — invisible, aunque el mensaje sí existía. */
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10000;
+      width: min(560px, calc(100vw - 32px));
+      margin: 0;
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #7f1d1d;
+      background: #2a0f10;
+      color: #fecaca;
+      font-size: 13px;
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .5);
+    }
+
+    .success {
+      border-color: #065f46;
+      background: #0a2b22;
+      color: #a7f3d0;
+    }
+
+    /* Aviso EN FLUJO normal (no flotante) dentro de un modal — el
+       estilo visual que .alert tenía antes de volverse un toast fijo. */
+    .inline-warning {
       padding: 11px 13px;
       border-radius: 8px;
       border: 1px solid #7f1d1d;
       background: rgba(127, 29, 29, .2);
       color: #fecaca;
       font-size: 12px;
-    }
-
-    .success {
-      border-color: #065f46;
-      background: rgba(6, 95, 70, .18);
-      color: #a7f3d0;
     }
 
     @media (max-width: 1250px) {
@@ -5322,7 +5344,7 @@ function App({ me, onSignOut }) {
             </div>
 
             <div className="modal-body">
-              <div className="alert" style={{margin: '0 0 15px'}}>
+              <div className="inline-warning" style={{marginBottom: '15px'}}>
                 {settlementResult.dianDocument.disclaimer ||
                   'Documento generado sin firma digital ni habilitación real ante la DIAN. Debe validarse antes de producción.'}
               </div>
