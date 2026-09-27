@@ -17,56 +17,13 @@ import {
   RiskClass,
 } from '../../types/payroll';
 
-// ============================================================
-// CONSTANTES COLOMBIA 2026
-// ============================================================
+import { CONSTANTS_2026 } from './constants2026';
 
-export const CONSTANTS_2026 = {
-  SMMLV: 1_750_905,
-
-  AUXILIO_TRANSPORTE: 249_095,
-
-  SMMLV_LIMIT_AUX:
-    2 * 1_750_905,
-
-  /**
-   * Jornada mensual utilizada para cálculo
-   * de valor hora.
-   */
-  MONTHLY_ORDINARY_HOURS: 210,
-
-  EXTRA_DIURNA_MULTIPLIER: 1.25,
-
-  EXTRA_NOCTURNA_MULTIPLIER: 1.75,
-
-  RECARGO_NOCTURNO_FACTOR: 0.35,
-
-  HEALTH_EMPLOYEE: 0.04,
-
-  PENSION_EMPLOYEE: 0.04,
-
-  HEALTH_EMPLOYER: 0.085,
-
-  PENSION_EMPLOYER: 0.12,
-
-  SENA: 0.02,
-
-  ICBF: 0.03,
-
-  CCF: 0.04,
-
-  CESANTIAS_RATE:
-    1 / 12,
-
-  INTERESES_CESANTIAS_RATE:
-    0.01,
-
-  PRIMA_RATE:
-    1 / 12,
-
-  VACACIONES_RATE:
-    1 / 24,
-};
+// Las constantes legales viven en constants2026.ts, compartidas con
+// los motores de personal por horas (jornada parcial, contratistas
+// independientes). Se re-exporta aquí para no romper importadores
+// existentes de `CONSTANTS_2026` desde este módulo.
+export { CONSTANTS_2026 };
 
 // ============================================================
 // MOTOR
