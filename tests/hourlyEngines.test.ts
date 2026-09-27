@@ -200,19 +200,44 @@ describe('IndependentContractorEngine', () => {
     expect(result.netAmount).toBeCloseTo(result.grossAmount, 2);
   });
 
-  test('concepto HONORARIOS usa la tarifa plana configurada', () => {
+  test('concepto HONORARIOS exige una tarifa de retención manual', () => {
+    expect(() =>
+      IndependentContractorEngine.calculate(
+        baseIndependentInput({
+          hourlyRate: 80_000,
+          hoursWorked: 40,
+          retentionConcept: 'HONORARIOS',
+        })
+      )
+    ).toThrow(IndependentContractorEngineError);
+  });
+
+  test('concepto HONORARIOS usa la tarifa manual indicada por quien liquida', () => {
     const result = IndependentContractorEngine.calculate(
       baseIndependentInput({
         hourlyRate: 80_000,
         hoursWorked: 40,
         retentionConcept: 'HONORARIOS',
+        manualRetentionRate: 0.11,
       })
     );
 
-    expect(result.retentionRate).toBeCloseTo(
-      CONSTANTS_2026.RETENTION_HONORARIOS_FLAT_RATE,
-      5
+    expect(result.retentionRate).toBeCloseTo(0.11, 5);
+    expect(result.retentionAmount).toBeCloseTo(
+      80_000 * 40 * 0.11,
+      2
     );
+  });
+
+  test('rechaza una tarifa manual de honorarios fuera de 0-1', () => {
+    expect(() =>
+      IndependentContractorEngine.calculate(
+        baseIndependentInput({
+          retentionConcept: 'HONORARIOS',
+          manualRetentionRate: 1.5,
+        })
+      )
+    ).toThrow(IndependentContractorEngineError);
   });
 
   test('el IBC mínimo sugerido es 40% del bruto, con piso de 1 SMMLV', () => {

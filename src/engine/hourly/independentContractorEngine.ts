@@ -9,11 +9,15 @@
  * la fuente, y el neto — y se sugiere (informativamente) el IBC
  * mínimo que el propio contratista debe cotizar.
  *
- * IMPORTANTE: la tarifa de retención por "honorarios" implementada
- * aquí es una tarifa plana simplificada para el MVP. La tabla real
- * de retención por honorarios es progresiva por tramos de UVT y
- * depende de si el beneficiario es persona natural o jurídica.
- * Validar con el contador antes de usar en producción.
+ * RETENCIÓN SEGÚN EL CONCEPTO:
+ * - "SERVICIOS": tarifa fija de ley (4% declarante / 6% no
+ *   declarante, base mínima 2 UVT) — no depende del negocio, se
+ *   calcula automáticamente a partir de `isIncomeTaxFiler`.
+ * - "HONORARIOS": la tabla real es progresiva por tramos de UVT y el
+ *   tramo aplicable depende del monto de CADA pago, no es una tarifa
+ *   fija. Por eso aquí NO se calcula sola: quien liquida debe
+ *   capturar la tarifa vigente (`manualRetentionRate`), revisándola
+ *   en la tabla oficial de la DIAN para ese monto y ese contratista.
  */
 
 import { CONSTANTS_2026 } from '../countries/constants2026';
@@ -32,10 +36,28 @@ export class IndependentContractorEngine {
   ): number {
 
     if (input.retentionConcept === 'HONORARIOS') {
-      return CONSTANTS_2026.RETENTION_HONORARIOS_FLAT_RATE;
+      const manualRate = input.manualRetentionRate;
+
+      if (
+        manualRate === undefined ||
+        manualRate === null ||
+        !Number.isFinite(manualRate) ||
+        manualRate < 0 ||
+        manualRate > 1
+      ) {
+        throw new IndependentContractorEngineError(
+          'Para el concepto "Honorarios" debes indicar la tarifa de ' +
+          'retención vigente (la tabla es progresiva por tramos de UVT ' +
+          'y depende del monto de cada pago; consúltala en la tabla ' +
+          'oficial de la DIAN).'
+        );
+      }
+
+      return manualRate;
     }
 
-    // SERVICIOS: sólo aplica si supera la base mínima de 2 UVT.
+    // SERVICIOS: tarifa fija de ley, sólo aplica si supera la base
+    // mínima de 2 UVT.
     const minBase =
       CONSTANTS_2026.RETENTION_SERVICIOS_MIN_BASE_UVT * CONSTANTS_2026.UVT;
 

@@ -2385,6 +2385,13 @@ export default {
               retentionConcept:
                 (engagement.retentionConcept as RetentionConcept) || 'SERVICIOS',
               isIncomeTaxFiler: !!engagement.isIncomeTaxFiler,
+              // Sólo aplica (y es obligatoria) para concepto HONORARIOS:
+              // la tabla es progresiva por tramos de UVT, así que la
+              // captura quien liquida en vez de calcularla el sistema.
+              manualRetentionRate:
+                body.retentionRate === undefined || body.retentionRate === null
+                  ? undefined
+                  : Number(body.retentionRate),
             };
 
             const settlementResult = IndependentContractorEngine.calculate(input);

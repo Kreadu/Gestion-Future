@@ -160,6 +160,15 @@ export interface IndependentContractorInput {
 
   retentionConcept: RetentionConcept;
   isIncomeTaxFiler: boolean;
+
+  /**
+   * Obligatoria cuando `retentionConcept` es 'HONORARIOS': la tabla
+   * de retención por honorarios es progresiva por tramos de UVT y
+   * depende del monto de cada pago, así que no se calcula sola —
+   * quien liquida la captura, como fracción (ej. 0.11 = 11%).
+   * Se ignora cuando el concepto es 'SERVICIOS'.
+   */
+  manualRetentionRate?: number;
 }
 
 export interface IndependentContractorResult {

@@ -91,13 +91,12 @@ export const CONSTANTS_2026 = {
   RETENTION_SERVICIOS_NO_DECLARANTE: 0.06,
   RETENTION_SERVICIOS_MIN_BASE_UVT: 2,
 
-  /**
-   * Retención en la fuente sobre honorarios (predomina el trabajo
-   * intelectual/profesional). La tabla real es progresiva por
-   * tramos de UVT; esta es una tarifa plana simplificada para el
-   * MVP y DEBE validarse con el contador antes de producción.
+  /*
+   * No hay constante para la retención por "honorarios": la tabla
+   * real es progresiva por tramos de UVT y el tramo aplicable
+   * depende del monto de cada pago, no es una tarifa fija. Quien
+   * liquida la captura manualmente (ver IndependentContractorEngine).
    */
-  RETENTION_HONORARIOS_FLAT_RATE: 0.11,
 } as const;
 
 export default CONSTANTS_2026;

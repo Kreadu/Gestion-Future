@@ -868,7 +868,8 @@ function App({ me, onSignOut }) {
   const [settlementModal, setSettlementModal] = useState(false);
   const [settlementForm, setSettlementForm] = useState({
     periodStart: '',
-    periodEnd: ''
+    periodEnd: '',
+    retentionRatePercent: ''
   });
   const [settlementResult, setSettlementResult] = useState(null);
   const [showSettlementPreview, setShowSettlementPreview] = useState(false);
@@ -1751,7 +1752,7 @@ function App({ me, onSignOut }) {
   function openSettlementModal() {
     clearMessages();
 
-    setSettlementForm({ periodStart: '', periodEnd: '' });
+    setSettlementForm({ periodStart: '', periodEnd: '', retentionRatePercent: '' });
     setSettlementResult(null);
     setSettlementModal(true);
   }
@@ -1768,6 +1769,23 @@ function App({ me, onSignOut }) {
         throw new Error('El periodo (inicio y fin) es obligatorio.');
       }
 
+      const isHonorarios =
+        selectedEngagement.retentionConcept === 'HONORARIOS';
+
+      let retentionRate;
+
+      if (isHonorarios) {
+        const percent = Number(settlementForm.retentionRatePercent);
+
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          throw new Error(
+            'Indica la tarifa de retención vigente para honorarios (0 a 100%).'
+          );
+        }
+
+        retentionRate = percent / 100;
+      }
+
       setLoading(true);
 
       const result = await api('/api/hourly/settlements/calculate', {
@@ -1778,7 +1796,8 @@ function App({ me, onSignOut }) {
         body: JSON.stringify({
           engagementId: selectedEngagement.id,
           periodStart: settlementForm.periodStart,
-          periodEnd: settlementForm.periodEnd
+          periodEnd: settlementForm.periodEnd,
+          retentionRate: retentionRate
         })
       });
 
@@ -4212,6 +4231,26 @@ function App({ me, onSignOut }) {
                     }}
                   />
                 </div>
+
+                {selectedEngagement.retentionConcept === 'HONORARIOS' && (
+                  <div className="form-group full">
+                    <label>Tarifa de retención vigente (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={settlementForm.retentionRatePercent}
+                      onChange={function(e) {
+                        setSettlementForm({
+                          ...settlementForm,
+                          retentionRatePercent: e.target.value
+                        });
+                      }}
+                      placeholder="Consúltala en la tabla de honorarios de la DIAN"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
