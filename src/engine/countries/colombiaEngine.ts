@@ -27,6 +27,10 @@ export { CONSTANTS_2026 };
 
 export class ColombiaPayrollEngineError extends Error {}
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 // ============================================================
 // MOTOR
 // ============================================================
@@ -114,6 +118,81 @@ export class ColombiaPayrollEngine {
   }
 
   // ==========================================================
+  // INCAPACIDADES Y LICENCIAS
+  //
+  // Incapacidad general (enfermedad común): 66.67% del salario
+  // diario durante los primeros 90 días acumulados de incapacidad
+  // continua, 50% entre el día 91 y 180 (nunca menos de 1 SMMLV
+  // diario), y desde el día 181 no hay pago a cargo de la empresa
+  // (pasa al Fondo de Pensiones). Incapacidad laboral (ARL) y
+  // licencias de maternidad/paternidad: 100% del salario diario,
+  // sin tramos, desde el día 1.
+  // ==========================================================
+
+  private static calculateLeaveValue(
+    baseSalary: number,
+    leave: NonNullable<ColombiaPayrollInput['leave']>
+  ): number {
+
+    const dailyRate = baseSalary / 30;
+
+    if (leave.type !== 'GENERAL_INCAPACITY') {
+      return leave.daysInPeriod * dailyRate;
+    }
+
+    const before = leave.accumulatedDaysBefore ?? 0;
+
+    const dias90 = clamp(90 - before, 0, leave.daysInPeriod);
+    const dias180 = clamp(
+      180 - Math.max(before, 90),
+      0,
+      leave.daysInPeriod - dias90
+    );
+
+    const pisoDiario = CONSTANTS_2026.SMMLV / 30;
+
+    return (
+      dias90 * Math.max(dailyRate * 0.6667, pisoDiario) +
+      dias180 * Math.max(dailyRate * 0.50, pisoDiario)
+    );
+    // Los días restantes (> 180 acumulados) no suman: no los paga
+    // la empresa, pasan a cargo del Fondo de Pensiones.
+  }
+
+  /**
+   * Cuánto del valor pagado por incapacidad/licencia es recobrable a
+   * EPS/ARL. Sólo informativo: no afecta lo que recibe el empleado.
+   */
+  private static calculateReimbursableAmount(
+    baseSalary: number,
+    leaveValue: number,
+    leave: NonNullable<ColombiaPayrollInput['leave']>
+  ): number {
+
+    if (leave.type !== 'GENERAL_INCAPACITY') {
+      // Incapacidad laboral y licencias de maternidad/paternidad son
+      // 100% recobrables desde el día 1.
+      return leaveValue;
+    }
+
+    // Los primeros 2 días de la incapacidad general (posición
+    // absoluta, no necesariamente los primeros días de ESTE
+    // período) los asume el empleador y no son recobrables.
+    const before = leave.accumulatedDaysBefore ?? 0;
+    const dailyRate = baseSalary / 30;
+    const pisoDiario = CONSTANTS_2026.SMMLV / 30;
+
+    const diasNoRecobrables = clamp(2 - before, 0, leave.daysInPeriod);
+
+    // Los días no recobrables siempre caen en el tramo del 66.67%
+    // (2 < 90), así que se valoran con esa misma tarifa.
+    const valorNoRecobrable =
+      diasNoRecobrables * Math.max(dailyRate * 0.6667, pisoDiario);
+
+    return Math.max(leaveValue - valorNoRecobrable, 0);
+  }
+
+  // ==========================================================
   // CÁLCULO PRINCIPAL
   // ==========================================================
 
@@ -131,12 +210,28 @@ export class ColombiaPayrollEngine {
     const daysWorkedRaw =
       Number(input.daysWorked);
 
+    // 0 días normales sólo es válido cuando hay una incapacidad/
+    // licencia que cubre el resto del período (ej. licencia de
+    // maternidad de mes completo). Sin `leave`, 0 sigue sin ser un
+    // valor válido y cae al default de 30.
+    const minDaysWorked = input.leave ? 0 : 1;
+
     const daysWorked =
       Number.isFinite(daysWorkedRaw) &&
-      daysWorkedRaw >= 1 &&
+      daysWorkedRaw >= minDaysWorked &&
       daysWorkedRaw <= 30
         ? Math.floor(daysWorkedRaw)
         : 30;
+
+    if (
+      input.leave &&
+      daysWorked + input.leave.daysInPeriod > 30
+    ) {
+      throw new ColombiaPayrollEngineError(
+        'Los días trabajados y los días de incapacidad/licencia del ' +
+        'período no pueden sumar más de 30.'
+      );
+    }
 
     const isIntegralSalary =
       input.isIntegralSalary ?? false;
@@ -273,6 +368,20 @@ export class ColombiaPayrollEngine {
       recargoNocturnoValue;
 
     // --------------------------------------------------------
+    // INCAPACIDAD / LICENCIA
+    // --------------------------------------------------------
+
+    const leaveValue =
+      input.leave
+        ? this.calculateLeaveValue(baseSalary, input.leave)
+        : 0;
+
+    const reimbursableAmount =
+      input.leave
+        ? this.calculateReimbursableAmount(baseSalary, leaveValue, input.leave)
+        : 0;
+
+    // --------------------------------------------------------
     // TOTAL DEVENGADO
     // --------------------------------------------------------
 
@@ -280,7 +389,8 @@ export class ColombiaPayrollEngine {
       baseSalaryEarned +
       earnedAuxTransporte +
       overtimeTotal +
-      dominicalFestivoValue;
+      dominicalFestivoValue +
+      leaveValue;
 
     // --------------------------------------------------------
     // IBC
@@ -295,7 +405,8 @@ export class ColombiaPayrollEngine {
     let ibcUncapped =
       baseSalaryEarned +
       overtimeTotal +
-      dominicalFestivoValue;
+      dominicalFestivoValue +
+      leaveValue;
 
     if (isIntegralSalary) {
       ibcUncapped =
@@ -310,7 +421,10 @@ export class ColombiaPayrollEngine {
     let ibcSecuritySocial =
       Math.min(ibcUncapped, ibcMax);
 
-    if (daysWorked === 30 && !isIntegralSalary) {
+    const daysCoveredInPeriod =
+      daysWorked + (input.leave?.daysInPeriod ?? 0);
+
+    if (daysCoveredInPeriod === 30 && !isIntegralSalary) {
       ibcSecuritySocial =
         Math.max(ibcSecuritySocial, CONSTANTS_2026.SMMLV);
     }
@@ -484,6 +598,23 @@ export class ColombiaPayrollEngine {
       );
     }
 
+    if (input.leave?.type === 'GENERAL_INCAPACITY') {
+      const before = input.leave.accumulatedDaysBefore ?? 0;
+      const diasCubiertos = clamp(
+        180 - before,
+        0,
+        input.leave.daysInPeriod
+      );
+
+      if (diasCubiertos < input.leave.daysInPeriod) {
+        complianceNotes.push(
+          `${input.leave.daysInPeriod - diasCubiertos} día(s) de esta ` +
+          'incapacidad superan los 180 días acumulados: no se pagan ' +
+          'desde nómina, pasan a cargo del Fondo de Pensiones.'
+        );
+      }
+    }
+
     // --------------------------------------------------------
     // RESULTADO
     // --------------------------------------------------------
@@ -539,6 +670,12 @@ export class ColombiaPayrollEngine {
 
       dominicalFestivoValue:
         round(dominicalFestivoValue),
+
+      leaveValue:
+        round(leaveValue),
+
+      reimbursableAmount:
+        round(reimbursableAmount),
 
       overtimeTotal:
         round(overtimeTotal),

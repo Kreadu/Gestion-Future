@@ -4,6 +4,8 @@ import ColombiaPayrollEngine, {
 import type {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
+  EmployeeLeaveInput,
+  EmployeeLeaveType,
 } from './types/payroll';
 
 import { DianNominaXmlService } from './services/dianNominaXmlService';
@@ -51,6 +53,7 @@ import {
 
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
+import { intersectDateRanges } from './services/dateRanges';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -123,6 +126,19 @@ interface Employee {
   createdAt?: string | null;
 }
 
+interface EmployeeLeave {
+  id: string;
+  employeeId: string;
+  companyId: string;
+  leaveType: EmployeeLeaveType;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  accumulatedDaysBefore: number;
+  notes?: string | null;
+  createdAt?: string | null;
+}
+
 function sendJson(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -176,6 +192,21 @@ function normalizeEmployee(row: any): Employee {
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
     active: !!row.active,
+    createdAt: row.createdAt ?? null,
+  };
+}
+
+function normalizeEmployeeLeave(row: any): EmployeeLeave {
+  return {
+    id: String(row.id),
+    employeeId: String(row.employeeId),
+    companyId: String(row.companyId),
+    leaveType: row.leaveType as EmployeeLeaveType,
+    startDate: String(row.startDate ?? ''),
+    endDate: String(row.endDate ?? ''),
+    totalDays: Number(row.totalDays ?? 0),
+    accumulatedDaysBefore: Number(row.accumulatedDaysBefore ?? 0),
+    notes: row.notes ?? null,
     createdAt: row.createdAt ?? null,
   };
 }
@@ -1092,6 +1123,245 @@ export default {
 
       /*
        * ============================================================
+       * INCAPACIDADES Y LICENCIAS DE MATERNIDAD/PATERNIDAD
+       *
+       * No se rastrea automáticamente la continuidad entre
+       * incapacidades: quien registra una incapacidad general indica
+       * manualmente `accumulatedDaysBefore` (ver migrations/0005).
+       * ============================================================
+       */
+
+      const EMPLOYEE_LEAVE_TYPES: EmployeeLeaveType[] = [
+        'GENERAL_INCAPACITY',
+        'WORK_INCAPACITY',
+        'MATERNITY_LEAVE',
+        'PATERNITY_LEAVE',
+      ];
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'GET'
+      ) {
+        const employeeId = url.searchParams.get('employeeId');
+
+        if (!employeeId) {
+          return sendJson(
+            { success: false, error: 'employeeId es obligatorio.' },
+            400
+          );
+        }
+
+        const employeeRow = await env.DB
+          .prepare(`SELECT id, companyId FROM employees WHERE id = ?1`)
+          .bind(employeeId)
+          .first();
+
+        if (!employeeRow) {
+          return sendJson(
+            { success: false, error: 'Empleado no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(employeeRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+            ORDER BY startDate DESC
+          `)
+          .bind(employeeId)
+          .all();
+
+        const leaves = (result.results || []).map(normalizeEmployeeLeave);
+
+        return sendJson({ success: true, data: leaves });
+      }
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const employeeId = String(body.employeeId || '').trim();
+        const leaveType = String(body.leaveType || '').trim();
+        const startDate = String(body.startDate || '').trim();
+        const endDate = String(body.endDate || '').trim();
+
+        if (!employeeId || !leaveType || !startDate || !endDate) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'employeeId, leaveType, startDate y endDate son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (
+          !EMPLOYEE_LEAVE_TYPES.includes(leaveType as EmployeeLeaveType)
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
+                'MATERNITY_LEAVE o PATERNITY_LEAVE.',
+            },
+            400
+          );
+        }
+
+        const employeeRow = await env.DB
+          .prepare(`SELECT id, companyId FROM employees WHERE id = ?1 AND active = 1`)
+          .bind(employeeId)
+          .first();
+
+        if (!employeeRow) {
+          return sendJson(
+            { success: false, error: 'Empleado no encontrado o inactivo.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(employeeRow.companyId));
+
+        const start = new Date(`${startDate}T00:00:00Z`);
+        const end = new Date(`${endDate}T00:00:00Z`);
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+          return sendJson(
+            { success: false, error: 'startDate/endDate inválidas.' },
+            400
+          );
+        }
+
+        const totalDays =
+          Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+
+        if (totalDays < 1) {
+          return sendJson(
+            {
+              success: false,
+              error: 'endDate debe ser igual o posterior a startDate.',
+            },
+            400
+          );
+        }
+
+        // Sólo aplica (y sólo se persiste) para incapacidad general —
+        // en el resto de tipos siempre es 0.
+        const accumulatedDaysBefore =
+          leaveType === 'GENERAL_INCAPACITY'
+            ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
+            : 0;
+
+        const id = `LV-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO employee_leaves (
+              id, employeeId, companyId, leaveType, startDate, endDate,
+              totalDays, accumulatedDaysBefore, notes, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          `)
+          .bind(
+            id,
+            employeeId,
+            String(employeeRow.companyId),
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            body.notes || null,
+            createdAt
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'employee_leave',
+          id,
+          String(employeeRow.companyId)
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id,
+              employeeId,
+              companyId: String(employeeRow.companyId),
+              leaveType,
+              startDate,
+              endDate,
+              totalDays,
+              accumulatedDaysBefore,
+              notes: body.notes || null,
+              createdAt,
+            },
+          },
+          201
+        );
+      }
+
+      const employeeLeaveMatch =
+        url.pathname.match(/^\/api\/employee-leaves\/([^/]+)$/);
+
+      if (
+        employeeLeaveMatch &&
+        request.method === 'DELETE'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT id, companyId FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        await env.DB
+          .prepare(`DELETE FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Incapacidad/licencia eliminada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
        * NÓMINA PERSISTENTE — PERIODOS
        *
        * Antes de esta fase, calcular una nómina no se guardaba en
@@ -1491,6 +1761,74 @@ export default {
           );
         }
 
+        // Incapacidades/licencias que se solapen con el periodo: se
+        // detectan aquí (no las elige el frontend), y `daysWorked` del
+        // body son siempre los días NORMALES — el backend nunca los
+        // sobreescribe, sólo valida que quepan junto con la licencia
+        // dentro del mes.
+        const overlappingLeavesResult = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+              AND startDate <= ?2
+              AND endDate >= ?3
+          `)
+          .bind(employeeId, String(periodRow.periodEnd), String(periodRow.periodStart))
+          .all();
+
+        const overlappingLeaves = overlappingLeavesResult.results || [];
+
+        if (overlappingLeaves.length > 1) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Hay más de una incapacidad/licencia solapando este ' +
+                'periodo; liquídalas en periodos separados.',
+            },
+            400
+          );
+        }
+
+        let leave: EmployeeLeaveInput | undefined;
+
+        if (overlappingLeaves.length === 1) {
+          const leaveRow = normalizeEmployeeLeave(overlappingLeaves[0]);
+
+          // Ya sabemos que se solapan (la consulta SQL lo garantiza),
+          // así que la intersección nunca es null aquí.
+          const intersection = intersectDateRanges(
+            leaveRow.startDate,
+            leaveRow.endDate,
+            String(periodRow.periodStart),
+            String(periodRow.periodEnd)
+          )!;
+
+          const daysInPeriod = intersection.days;
+
+          if (daysWorked + daysInPeriod > 30) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Días trabajados + días de incapacidad/licencia no ' +
+                  'pueden superar 30.',
+              },
+              400
+            );
+          }
+
+          leave = {
+            type: leaveRow.leaveType,
+            daysInPeriod,
+            accumulatedDaysBefore:
+              leaveRow.leaveType === 'GENERAL_INCAPACITY'
+                ? leaveRow.accumulatedDaysBefore
+                : undefined,
+          };
+        }
+
         const overtimeHours = body.overtimeHours || {};
 
         const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
@@ -1544,6 +1882,8 @@ export default {
           horasDominicalFestivo,
           horasExtraDominicalFestivo,
           isIntegralSalary: !!body.isIntegralSalary,
+
+          leave,
 
           overtimeHours: {
             extraDiurna,

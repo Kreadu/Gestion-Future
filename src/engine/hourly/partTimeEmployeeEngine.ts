@@ -219,11 +219,13 @@ export class PartTimeEmployeeEngine {
       extraDiurnaValue: 0,
       extraNocturnaValue: 0,
       recargoNocturnoValue: 0,
-      // Recargo dominical/festivo, tope de IBC, salario integral y
-      // retención en la fuente aún no se implementan para jornada
-      // parcial (sólo para nómina mensual, ColombiaPayrollEngine) —
-      // pendiente como seguimiento de la Fase 3.
+      // Recargo dominical/festivo, tope de IBC, salario integral,
+      // retención en la fuente e incapacidades/licencias aún no se
+      // implementan para jornada parcial (sólo para nómina mensual,
+      // ColombiaPayrollEngine) — pendiente como seguimiento.
       dominicalFestivoValue: 0,
+      leaveValue: 0,
+      reimbursableAmount: 0,
       overtimeTotal: 0,
       grossEarnings: round(grossEarnings),
 

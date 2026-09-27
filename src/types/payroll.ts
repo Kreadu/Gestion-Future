@@ -209,6 +209,37 @@ export interface ColombiaPayrollInput {
    * incluidas en el factor prestacional del salario integral).
    */
   isIntegralSalary?: boolean;
+
+  /**
+   * Incapacidad o licencia que cae dentro del período liquidado.
+   * `daysWorked` sigue representando sólo los días NORMALES
+   * trabajados; estos días son adicionales, no un subconjunto.
+   */
+  leave?: EmployeeLeaveInput;
+}
+
+export type EmployeeLeaveType =
+  | 'GENERAL_INCAPACITY'
+  | 'WORK_INCAPACITY'
+  | 'MATERNITY_LEAVE'
+  | 'PATERNITY_LEAVE';
+
+export interface EmployeeLeaveInput {
+  type: EmployeeLeaveType;
+
+  /**
+   * Días de esta incapacidad/licencia que caen en el período
+   * liquidado (puede ser menor al total si la incapacidad abarca
+   * varios períodos de nómina).
+   */
+  daysInPeriod: number;
+
+  /**
+   * Sólo GENERAL_INCAPACITY: días acumulados de incapacidad general
+   * continua ANTES de este período (determina si aplica la tarifa
+   * de los primeros 90 días, la de 91-180, o si ya no hay pago).
+   */
+  accumulatedDaysBefore?: number;
 }
 
 // ============================================================
@@ -253,6 +284,19 @@ export interface ColombiaPayrollResult {
    * horas extra trabajadas en domingo/festivo.
    */
   dominicalFestivoValue: number;
+
+  /**
+   * Valor pagado por incapacidad/licencia en este período (0 si no
+   * aplica). Ya incluido en `grossEarnings`.
+   */
+  leaveValue: number;
+
+  /**
+   * Cuánto de `leaveValue` es recobrable a EPS/ARL (informativo — no
+   * afecta lo que recibe el empleado, sólo el flujo de caja de la
+   * empresa). 0 si no hay incapacidad/licencia en el período.
+   */
+  reimbursableAmount: number;
 
   overtimeTotal: number;
 
