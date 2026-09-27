@@ -174,6 +174,19 @@ export interface ColombiaPayrollInput {
   recargoNocturno?: number;
 
   /**
+   * Horas ordinarias (no extra) trabajadas en domingo o festivo.
+   * Recargo del 90% desde jul-2026 (Ley 2466 de 2025).
+   */
+  horasDominicalFestivo?: number;
+
+  /**
+   * Horas extra trabajadas en domingo o festivo. Los recargos se
+   * suman (25% de extra diurna + 90% dominical/festivo), no se
+   * multiplican.
+   */
+  horasExtraDominicalFestivo?: number;
+
+  /**
    * Formato alternativo de novedades.
    * Se conserva para compatibilidad con pruebas
    * y clientes existentes.
@@ -188,6 +201,14 @@ export interface ColombiaPayrollInput {
    * Exención Art. 114-1 E.T.
    */
   isExempt114_1?: boolean;
+
+  /**
+   * Salario integral (art. 132 CST): mínimo 13 SMMLV. El IBC de
+   * seguridad social se calcula sobre el 70% del valor devengado, y
+   * no se provisionan cesantías/prima/vacaciones aparte (ya están
+   * incluidas en el factor prestacional del salario integral).
+   */
+  isIntegralSalary?: boolean;
 }
 
 // ============================================================
@@ -227,6 +248,12 @@ export interface ColombiaPayrollResult {
 
   recargoNocturnoValue: number;
 
+  /**
+   * Recargo dominical/festivo: incluye tanto horas ordinarias como
+   * horas extra trabajadas en domingo/festivo.
+   */
+  dominicalFestivoValue: number;
+
   overtimeTotal: number;
 
   grossEarnings: number;
@@ -253,6 +280,12 @@ export interface ColombiaPayrollResult {
      */
     fsp: number;
 
+    /**
+     * Retención en la fuente (procedimiento 1, simplificado — ver
+     * `complianceNotes`). 0 si el ingreso gravable no supera 95 UVT.
+     */
+    retencionFuente: number;
+
     totalDeductions: number;
   };
 
@@ -261,6 +294,14 @@ export interface ColombiaPayrollResult {
   // ----------------------------------------------------------
 
   netPay: number;
+
+  /**
+   * Advertencias de cumplimiento activas en este cálculo (ej.
+   * retención en la fuente simplificada). Vacío si no aplica
+   * ninguna. El dashboard las muestra tal cual, sin hardcodear el
+   * texto ahí.
+   */
+  complianceNotes: string[];
 
   // ----------------------------------------------------------
   // APORTES EMPLEADOR

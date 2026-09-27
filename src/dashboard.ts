@@ -802,7 +802,10 @@ function App({ me, onSignOut }) {
     daysWorked: 30,
     extraDiurna: 0,
     extraNocturna: 0,
-    recargoNocturno: 0
+    recargoNocturno: 0,
+    horasDominicalFestivo: 0,
+    horasExtraDominicalFestivo: 0,
+    isIntegralSalary: false
   });
 
   const [payrollResult, setPayrollResult] = useState(null);
@@ -983,7 +986,10 @@ function App({ me, onSignOut }) {
       daysWorked: 30,
       extraDiurna: 0,
       extraNocturna: 0,
-      recargoNocturno: 0
+      recargoNocturno: 0,
+      horasDominicalFestivo: 0,
+      horasExtraDominicalFestivo: 0,
+      isIntegralSalary: false
     });
 
     setPayrollResult(null);
@@ -1011,7 +1017,10 @@ function App({ me, onSignOut }) {
       daysWorked: 30,
       extraDiurna: 0,
       extraNocturna: 0,
-      recargoNocturno: 0
+      recargoNocturno: 0,
+      horasDominicalFestivo: 0,
+      horasExtraDominicalFestivo: 0,
+      isIntegralSalary: false
     });
 
     const existing = findSettlementForEmployee(employee.id);
@@ -1469,7 +1478,10 @@ function App({ me, onSignOut }) {
             extraDiurna: Number(payrollForm.extraDiurna) || 0,
             extraNocturna: Number(payrollForm.extraNocturna) || 0,
             recargoNocturno: Number(payrollForm.recargoNocturno) || 0
-          }
+          },
+          horasDominicalFestivo: Number(payrollForm.horasDominicalFestivo) || 0,
+          horasExtraDominicalFestivo: Number(payrollForm.horasExtraDominicalFestivo) || 0,
+          isIntegralSalary: !!payrollForm.isIntegralSalary
         })
       });
 
@@ -2033,6 +2045,11 @@ function App({ me, onSignOut }) {
             </div>
 
             <div className="result-row">
+              <span>Dominical/festivo</span>
+              <strong>{formatCOP(payrollResult.dominicalFestivoValue)}</strong>
+            </div>
+
+            <div className="result-row">
               <span>Total devengado</span>
               <strong>{formatCOP(payrollResult.grossEarnings)}</strong>
             </div>
@@ -2057,10 +2074,23 @@ function App({ me, onSignOut }) {
             </div>
 
             <div className="result-row">
+              <span>Retención en la fuente</span>
+              <strong>{formatCOP(deductions.retencionFuente)}</strong>
+            </div>
+
+            <div className="result-row">
               <span>Total deducciones</span>
               <strong>{formatCOP(deductions.totalDeductions)}</strong>
             </div>
           </div>
+
+          {payrollResult.complianceNotes && payrollResult.complianceNotes.length > 0 && (
+            <div className="info-box" style={{margin: '0 18px 18px'}}>
+              {payrollResult.complianceNotes.map(function(note, index) {
+                return <div key={index} style={{marginBottom: '5px'}}>⚠️ {note}</div>;
+              })}
+            </div>
+          )}
 
           <div className="result-section">
             <h3>🏢 Aportes empleador</h3>
@@ -3206,6 +3236,60 @@ function App({ me, onSignOut }) {
                           });
                         }}
                       />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Dominical/festivo</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={payrollForm.horasDominicalFestivo}
+                        disabled={currentSettlementStatus === 'GENERATED'}
+                        onChange={function(e) {
+                          setPayrollForm({
+                            ...payrollForm,
+                            horasDominicalFestivo: e.target.value
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Extra dominical/festivo</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={payrollForm.horasExtraDominicalFestivo}
+                        disabled={currentSettlementStatus === 'GENERATED'}
+                        onChange={function(e) {
+                          setPayrollForm({
+                            ...payrollForm,
+                            horasExtraDominicalFestivo: e.target.value
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid" style={{marginTop: '13px'}}>
+                    <div className="form-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={payrollForm.isIntegralSalary}
+                          disabled={currentSettlementStatus === 'GENERATED'}
+                          onChange={function(e) {
+                            setPayrollForm({
+                              ...payrollForm,
+                              isIntegralSalary: e.target.checked
+                            });
+                          }}
+                          style={{marginRight: '7px'}}
+                        />
+                        Salario integral (mínimo 13 SMMLV)
+                      </label>
                     </div>
                   </div>
                 </div>

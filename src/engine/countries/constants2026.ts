@@ -97,6 +97,54 @@ export const CONSTANTS_2026 = {
    * depende del monto de cada pago, no es una tarifa fija. Quien
    * liquida la captura manualmente (ver IndependentContractorEngine).
    */
+
+  /**
+   * Recargo dominical/festivo (Ley 2466 de 2025, reforma laboral).
+   * Cronograma: 75% (hasta jun-2025) → 80% (jul-2025) → 90% (desde
+   * el 1 de julio de 2026, vigente) → 100% (desde jul-2027).
+   *
+   * Actualizar esta constante el 1 de julio de 2027.
+   */
+  DOMINICAL_FESTIVO_SURCHARGE: 0.90,
+
+  /**
+   * Tope máximo del IBC de seguridad social: 25 SMMLV. El empleado
+   * sigue recibiendo su devengado completo; sólo se topan las bases
+   * de aportes (salud, pensión, ARL, parafiscales, FSP, vacaciones).
+   */
+  IBC_MAX_SMMLV_MULTIPLE: 25,
+
+  /**
+   * Salario integral (art. 132 CST): mínimo legal 13 SMMLV. El IBC
+   * de seguridad social es el 70% de ese valor (30% es el factor
+   * prestacional, ya incluido en el pago, no se provisiona aparte).
+   */
+  INTEGRAL_SALARY_MIN_SMMLV_MULTIPLE: 13,
+  INTEGRAL_SALARY_IBC_FACTOR: 0.70,
+
+  /**
+   * Retención en la fuente de empleados (procedimiento 1, art. 383
+   * ET). Renta exenta general simplificada al 25% del ingreso
+   * gravable, SIN el tope de 240 UVT/mes que aplica en la realidad
+   * — validar con el contador antes de usar en producción.
+   */
+  RETENCION_EMPLEADOS_RENTA_EXENTA_PCT: 0.25,
+
+  /**
+   * Tabla del art. 383 ET (estructura estable desde la Ley 1819 de
+   * 2016; sólo cambia el valor de la UVT cada año). `desdeUVT` y
+   * `hastaUVT` son los límites del tramo en UVT; `uvtBase` es el
+   * acumulado (en UVT) de todos los tramos anteriores.
+   */
+  RETENCION_EMPLEADOS_TABLE: [
+    { desdeUVT: 0, hastaUVT: 95, tarifa: 0, uvtBase: 0 },
+    { desdeUVT: 95, hastaUVT: 150, tarifa: 0.19, uvtBase: 0 },
+    { desdeUVT: 150, hastaUVT: 360, tarifa: 0.28, uvtBase: 10 },
+    { desdeUVT: 360, hastaUVT: 640, tarifa: 0.33, uvtBase: 69 },
+    { desdeUVT: 640, hastaUVT: 945, tarifa: 0.35, uvtBase: 162 },
+    { desdeUVT: 945, hastaUVT: 2300, tarifa: 0.37, uvtBase: 268 },
+    { desdeUVT: 2300, hastaUVT: Infinity, tarifa: 0.39, uvtBase: 770 },
+  ],
 } as const;
 
 export default CONSTANTS_2026;

@@ -1,4 +1,6 @@
-import ColombiaPayrollEngine from './engine/countries/colombiaEngine';
+import ColombiaPayrollEngine, {
+  ColombiaPayrollEngineError,
+} from './engine/countries/colombiaEngine';
 import type {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
@@ -1494,14 +1496,22 @@ export default {
         const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
         const extraNocturna = Number(overtimeHours.extraNocturna ?? 0);
         const recargoNocturno = Number(overtimeHours.recargoNocturno ?? 0);
+        const horasDominicalFestivo = Number(body.horasDominicalFestivo ?? 0);
+        const horasExtraDominicalFestivo = Number(
+          body.horasExtraDominicalFestivo ?? 0
+        );
 
         if (
           !Number.isFinite(extraDiurna) ||
           !Number.isFinite(extraNocturna) ||
           !Number.isFinite(recargoNocturno) ||
+          !Number.isFinite(horasDominicalFestivo) ||
+          !Number.isFinite(horasExtraDominicalFestivo) ||
           extraDiurna < 0 ||
           extraNocturna < 0 ||
-          recargoNocturno < 0
+          recargoNocturno < 0 ||
+          horasDominicalFestivo < 0 ||
+          horasExtraDominicalFestivo < 0
         ) {
           return sendJson(
             {
@@ -1531,6 +1541,9 @@ export default {
           extraDiurna,
           extraNocturna,
           recargoNocturno,
+          horasDominicalFestivo,
+          horasExtraDominicalFestivo,
+          isIntegralSalary: !!body.isIntegralSalary,
 
           overtimeHours: {
             extraDiurna,
@@ -1539,8 +1552,20 @@ export default {
           },
         };
 
-        const payrollResult: ColombiaPayrollResult =
-          ColombiaPayrollEngine.calculate(payrollInput);
+        let payrollResult: ColombiaPayrollResult;
+
+        try {
+          payrollResult = ColombiaPayrollEngine.calculate(payrollInput);
+        } catch (engineError) {
+          if (engineError instanceof ColombiaPayrollEngineError) {
+            return sendJson(
+              { success: false, error: engineError.message },
+              400
+            );
+          }
+
+          throw engineError;
+        }
 
         const now = new Date().toISOString();
         const settlementId = existing

@@ -219,6 +219,11 @@ export class PartTimeEmployeeEngine {
       extraDiurnaValue: 0,
       extraNocturnaValue: 0,
       recargoNocturnoValue: 0,
+      // Recargo dominical/festivo, tope de IBC, salario integral y
+      // retención en la fuente aún no se implementan para jornada
+      // parcial (sólo para nómina mensual, ColombiaPayrollEngine) —
+      // pendiente como seguimiento de la Fase 3.
+      dominicalFestivoValue: 0,
       overtimeTotal: 0,
       grossEarnings: round(grossEarnings),
 
@@ -230,10 +235,13 @@ export class PartTimeEmployeeEngine {
         fspPct,
         fspValue: round(fspValue),
         fsp: round(fspValue),
+        retencionFuente: 0,
         totalDeductions: round(totalDeductions),
       },
 
       netPay: round(netPay),
+
+      complianceNotes: [],
 
       employerContributions: {
         health8_5pct: round(health8_5pct),
