@@ -29,11 +29,37 @@ import {
   authenticate,
   requireRole,
   requireCompanyAccess,
+  canAccessCompany,
   audit,
   HttpError,
   type AuthUser,
   type UserRole,
 } from './auth/authz';
+
+import {
+  PartTimeEmployeeEngine,
+  PartTimeEmployeeEngineError,
+  MIN_HOURLY_WAGE,
+} from './engine/hourly/partTimeEmployeeEngine';
+
+import {
+  IndependentContractorEngine,
+  IndependentContractorEngineError,
+} from './engine/hourly/independentContractorEngine';
+
+import { DocumentoSoporteService } from './services/documentoSoporteService';
+import { CONSTANTS_2026 } from './engine/countries/constants2026';
+
+import type {
+  Professional,
+  Engagement,
+  VinculationType,
+  RetentionConcept,
+  PartTimeEmployeeInput,
+  IndependentContractorInput,
+  DocumentoSoportePayerInfo,
+  DocumentoSoporteBeneficiaryInfo,
+} from './types/hourly';
 
 interface Env {
   DB: D1Database;
@@ -136,6 +162,61 @@ function normalizeEmployee(row: any): Employee {
     whatsapp: row.whatsapp ?? null,
     hireDate: row.hireDate ?? null,
     active: !!row.active,
+    createdAt: row.createdAt ?? null,
+  };
+}
+
+function normalizeProfessional(row: any): Professional {
+  return {
+    id: String(row.id),
+    firstName: String(row.firstName ?? ''),
+    firstName2: row.firstName2 ?? null,
+    lastName: String(row.lastName ?? ''),
+    lastName2: row.lastName2 ?? null,
+    taxId: String(row.taxId ?? ''),
+    profession: String(row.profession ?? ''),
+    email: row.email ?? null,
+    phone: row.phone ?? null,
+    city: row.city ?? null,
+    bankName: row.bankName ?? null,
+    bankAccountType: row.bankAccountType ?? null,
+    bankAccountNumber: row.bankAccountNumber ?? null,
+    active: !!row.active,
+    createdAt: row.createdAt ?? null,
+  };
+}
+
+function normalizePublicProfessional(row: any) {
+  return {
+    id: String(row.id),
+    firstName: String(row.firstName ?? ''),
+    lastName: String(row.lastName ?? ''),
+    profession: String(row.profession ?? ''),
+    city: row.city ?? null,
+  };
+}
+
+function normalizeEngagement(row: any): Engagement {
+  return {
+    id: String(row.id),
+    professionalId: String(row.professionalId),
+    companyId: String(row.companyId),
+    vinculationType: row.vinculationType as VinculationType,
+    hourlyRate: Number(row.hourlyRate ?? 0),
+    startDate: String(row.startDate ?? ''),
+    endDate: row.endDate ?? null,
+    active: !!row.active,
+    retentionConcept: (row.retentionConcept as RetentionConcept) ?? null,
+    isIncomeTaxFiler:
+      row.isIncomeTaxFiler === null || row.isIncomeTaxFiler === undefined
+        ? null
+        : !!row.isIncomeTaxFiler,
+    deliverableDescription: row.deliverableDescription ?? null,
+    weeklyHours:
+      row.weeklyHours === null || row.weeklyHours === undefined
+        ? null
+        : Number(row.weeklyHours),
+    contractType: row.contractType ?? null,
     createdAt: row.createdAt ?? null,
   };
 }
@@ -1336,6 +1417,1079 @@ export default {
             success: true,
             data: result,
           });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — PROFESIONALES (bolsa compartida)
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/professionals' &&
+        request.method === 'GET'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const q = (url.searchParams.get('q') || '').trim();
+        const likeParam = `%${q}%`;
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM professionals
+            WHERE active = 1
+              AND (?1 = '' OR firstName LIKE ?2 OR lastName LIKE ?2 OR profession LIKE ?2)
+            ORDER BY firstName ASC, lastName ASC
+            LIMIT 50
+          `)
+          .bind(q, likeParam)
+          .all();
+
+        const rows = result.results || [];
+
+        if (user.role === 'SUPER_ADMIN') {
+          return sendJson({
+            success: true,
+            data: rows.map(normalizeProfessional),
+          });
+        }
+
+        // TENANT_ADMIN: sólo se revelan datos de contacto de los
+        // profesionales con los que ya existe un engagement propio.
+        const ids = rows.map((row: any) => String(row.id));
+        const ownIds = new Set<string>();
+
+        if (ids.length > 0) {
+          const placeholders = ids
+            .map((_, index) => `?${index + 2}`)
+            .join(', ');
+
+          const owned = await env.DB
+            .prepare(`
+              SELECT DISTINCT professionalId
+              FROM engagements
+              WHERE companyId = ?1
+                AND professionalId IN (${placeholders})
+            `)
+            .bind(user.companyId, ...ids)
+            .all();
+
+          for (const row of owned.results || []) {
+            ownIds.add(String((row as any).professionalId));
+          }
+        }
+
+        const data = rows.map((row: any) =>
+          ownIds.has(String(row.id))
+            ? normalizeProfessional(row)
+            : normalizePublicProfessional(row)
+        );
+
+        return sendJson({ success: true, data });
+      }
+
+      if (
+        url.pathname === '/api/professionals' &&
+        request.method === 'POST'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const body = await request.json() as any;
+
+        const firstName = String(body.firstName || '').trim();
+        const lastName = String(body.lastName || '').trim();
+        const taxId = String(body.taxId || '').trim();
+        const profession = String(body.profession || '').trim();
+
+        if (!firstName || !lastName || !taxId || !profession) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Primer nombre, primer apellido, documento y profesión son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const id = `PRO-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        try {
+          await env.DB
+            .prepare(`
+              INSERT INTO professionals (
+                id, firstName, firstName2, lastName, lastName2, taxId,
+                profession, email, phone, city, bankName,
+                bankAccountType, bankAccountNumber, active, createdAt
+              )
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14)
+            `)
+            .bind(
+              id,
+              firstName,
+              body.firstName2 || null,
+              lastName,
+              body.lastName2 || null,
+              taxId,
+              profession,
+              body.email || null,
+              body.phone || null,
+              body.city || null,
+              body.bankName || null,
+              body.bankAccountType || null,
+              body.bankAccountNumber || null,
+              createdAt
+            )
+            .run();
+        } catch {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe un profesional con ese documento.',
+            },
+            409
+          );
+        }
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(id)
+          .first();
+
+        await audit(env, user, 'CREATE', 'professional', id, null);
+
+        return sendJson(
+          { success: true, data: normalizeProfessional(row) },
+          201
+        );
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — VINCULACIONES (engagements)
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/engagements' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const companyId = String(body.companyId || '').trim();
+        const professionalId = String(body.professionalId || '').trim();
+        const vinculationType = body.vinculationType as VinculationType;
+
+        if (!companyId || !professionalId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId y professionalId son obligatorios.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        if (vinculationType === 'EST_MISSION') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'La modalidad de Empresa de Servicios Temporales no está ' +
+                'disponible: requiere autorización del Ministerio del Trabajo.',
+            },
+            400
+          );
+        }
+
+        if (
+          vinculationType !== 'INDEPENDENT_SERVICES' &&
+          vinculationType !== 'PART_TIME_EMPLOYEE'
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error: 'vinculationType no es válido.',
+            },
+            400
+          );
+        }
+
+        const professional = await env.DB
+          .prepare(`SELECT id FROM professionals WHERE id = ?1 AND active = 1`)
+          .bind(professionalId)
+          .first();
+
+        if (!professional) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El profesional no existe o está inactivo.',
+            },
+            404
+          );
+        }
+
+        const company = await env.DB
+          .prepare(`SELECT id FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(companyId)
+          .first();
+
+        if (!company) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La empresa no existe o está inactiva.',
+            },
+            404
+          );
+        }
+
+        const hourlyRate = Number(body.hourlyRate);
+        const startDate = String(body.startDate || '').trim();
+
+        if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La tarifa por hora debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        if (!startDate) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La fecha de inicio es obligatoria.',
+            },
+            400
+          );
+        }
+
+        let retentionConcept: RetentionConcept | null = null;
+        let isIncomeTaxFiler: boolean | null = null;
+        let deliverableDescription: string | null = null;
+        let weeklyHours: number | null = null;
+        let contractType: string | null = null;
+
+        if (vinculationType === 'INDEPENDENT_SERVICES') {
+          retentionConcept = body.retentionConcept as RetentionConcept;
+
+          if (
+            retentionConcept !== 'SERVICIOS' &&
+            retentionConcept !== 'HONORARIOS'
+          ) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  "retentionConcept debe ser 'SERVICIOS' u 'HONORARIOS'.",
+              },
+              400
+            );
+          }
+
+          isIncomeTaxFiler = !!body.isIncomeTaxFiler;
+          deliverableDescription = String(
+            body.deliverableDescription || ''
+          ).trim();
+
+          if (!deliverableDescription) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Describe el objeto/entregable del contrato: es lo que ' +
+                  'sustenta la autonomía del contratista frente a un posible ' +
+                  'reclamo de "contrato realidad".',
+              },
+              400
+            );
+          }
+        } else {
+          weeklyHours = Number(body.weeklyHours);
+
+          if (
+            !Number.isFinite(weeklyHours) ||
+            weeklyHours <= 0 ||
+            weeklyHours > CONSTANTS_2026.LEGAL_WEEKLY_HOURS
+          ) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  `Las horas semanales deben estar entre 1 y ` +
+                  `${CONSTANTS_2026.LEGAL_WEEKLY_HOURS} (jornada máxima legal).`,
+              },
+              400
+            );
+          }
+
+          if (hourlyRate < MIN_HOURLY_WAGE) {
+            return sendJson(
+              {
+                success: false,
+                error: `La tarifa por hora no puede ser menor al salario mínimo legal por hora ($${MIN_HOURLY_WAGE.toFixed(2)}).`,
+              },
+              400
+            );
+          }
+
+          contractType = body.contractType || '1';
+        }
+
+        const id = `ENG-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO engagements (
+              id, professionalId, companyId, vinculationType, hourlyRate,
+              startDate, endDate, active, retentionConcept,
+              isIncomeTaxFiler, deliverableDescription, weeklyHours,
+              contractType, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13)
+          `)
+          .bind(
+            id,
+            professionalId,
+            companyId,
+            vinculationType,
+            hourlyRate,
+            startDate,
+            body.endDate || null,
+            retentionConcept,
+            isIncomeTaxFiler === null ? null : (isIncomeTaxFiler ? 1 : 0),
+            deliverableDescription,
+            weeklyHours,
+            contractType,
+            createdAt
+          )
+          .run();
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(id)
+          .first();
+
+        await audit(env, user, 'CREATE', 'engagement', id, companyId);
+
+        return sendJson(
+          { success: true, data: normalizeEngagement(row) },
+          201
+        );
+      }
+
+      if (
+        url.pathname === '/api/engagements' &&
+        request.method === 'GET'
+      ) {
+        const companyId = url.searchParams.get('companyId');
+
+        if (!companyId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId es obligatorio.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              e.*,
+              p.firstName AS p_firstName,
+              p.firstName2 AS p_firstName2,
+              p.lastName AS p_lastName,
+              p.lastName2 AS p_lastName2,
+              p.profession AS p_profession,
+              p.taxId AS p_taxId
+            FROM engagements e
+            JOIN professionals p ON p.id = e.professionalId
+            WHERE e.companyId = ?1
+              AND e.active = 1
+            ORDER BY p.firstName ASC, p.lastName ASC
+          `)
+          .bind(companyId)
+          .all();
+
+        const data = (result.results || []).map((row: any) => ({
+          ...normalizeEngagement(row),
+          professional: {
+            firstName: row.p_firstName,
+            firstName2: row.p_firstName2,
+            lastName: row.p_lastName,
+            lastName2: row.p_lastName2,
+            profession: row.p_profession,
+            taxId: row.p_taxId,
+          },
+        }));
+
+        return sendJson({ success: true, data });
+      }
+
+      const engagementMatch =
+        url.pathname.match(/^\/api\/engagements\/([^/]+)$/);
+
+      if (
+        engagementMatch &&
+        request.method === 'PUT'
+      ) {
+        const engagementId = decodeURIComponent(engagementMatch[1]);
+        const body = await request.json() as any;
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(engagementId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        const hourlyRate = Number(body.hourlyRate ?? existing.hourlyRate);
+
+        if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La tarifa por hora debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        // vinculationType, professionalId y companyId son inmutables:
+        // un cambio de modalidad o de empresa debe ser una vinculación
+        // nueva, no una edición, para no perder el rastro legal.
+        await env.DB
+          .prepare(`
+            UPDATE engagements
+            SET
+              hourlyRate = ?1,
+              endDate = ?2,
+              active = ?3,
+              weeklyHours = ?4,
+              deliverableDescription = ?5
+            WHERE id = ?6
+          `)
+          .bind(
+            hourlyRate,
+            body.endDate ?? existing.endDate ?? null,
+            body.active === undefined ? existing.active : (body.active ? 1 : 0),
+            body.weeklyHours ?? existing.weeklyHours ?? null,
+            body.deliverableDescription ?? existing.deliverableDescription ?? null,
+            engagementId
+          )
+          .run();
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(engagementId)
+          .first();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'engagement',
+          engagementId,
+          String(existing.companyId)
+        );
+
+        return sendJson({ success: true, data: normalizeEngagement(row) });
+      }
+
+      if (
+        engagementMatch &&
+        request.method === 'DELETE'
+      ) {
+        const engagementId = decodeURIComponent(engagementMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        await env.DB
+          .prepare(`UPDATE engagements SET active = 0 WHERE id = ?1`)
+          .bind(engagementId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'engagement',
+          engagementId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Vinculación finalizada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — REGISTRO DE HORAS
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/time-entries' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
+        const hours = Number(body.hours);
+
+        if (!engagementId || !periodStart || !periodEnd) {
+          return sendJson(
+            {
+              success: false,
+              error: 'engagementId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (!Number.isFinite(hours) || hours <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Las horas deben ser mayores que cero.',
+            },
+            400
+          );
+        }
+
+        const engagement = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+
+        if (!engagement) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const id = `TE-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO time_entries (
+              id, engagementId, periodStart, periodEnd, hours, notes, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          `)
+          .bind(
+            id,
+            engagementId,
+            periodStart,
+            periodEnd,
+            hours,
+            body.notes || null,
+            createdAt
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'time_entry',
+          id,
+          String(engagement.companyId)
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id,
+              engagementId,
+              periodStart,
+              periodEnd,
+              hours,
+              notes: body.notes || null,
+              createdAt,
+            },
+          },
+          201
+        );
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — VERIFICACIÓN PILA (contratistas)
+       *
+       * Materializa el deber legal del contratante de verificar el
+       * pago de aportes a seguridad social del independiente antes
+       * de pagarle (Ley 1955/2019 art. 244).
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/pila-verifications' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const period = String(body.period || '').trim();
+        const declaredIbc = Number(body.declaredIbc);
+
+        if (!engagementId || !/^\d{4}-\d{2}$/.test(period)) {
+          return sendJson(
+            {
+              success: false,
+              error: "engagementId y period ('YYYY-MM') son obligatorios.",
+            },
+            400
+          );
+        }
+
+        if (!Number.isFinite(declaredIbc) || declaredIbc <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El IBC declarado debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        const engagement = await env.DB
+          .prepare(`
+            SELECT id, companyId, vinculationType
+            FROM engagements
+            WHERE id = ?1
+              AND active = 1
+          `)
+          .bind(engagementId)
+          .first();
+
+        if (!engagement) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        if (engagement.vinculationType !== 'INDEPENDENT_SERVICES') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'La verificación de PILA sólo aplica a contratistas independientes.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const id = `PILA-${crypto.randomUUID()}`;
+        const now = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO pila_verifications (
+              id, engagementId, period, declaredIbc, verified,
+              verifiedBy, verifiedAt, planillaReference, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)
+            ON CONFLICT(engagementId, period) DO UPDATE SET
+              declaredIbc = excluded.declaredIbc,
+              verified = 1,
+              verifiedBy = excluded.verifiedBy,
+              verifiedAt = excluded.verifiedAt,
+              planillaReference = excluded.planillaReference
+          `)
+          .bind(
+            id,
+            engagementId,
+            period,
+            declaredIbc,
+            user.id,
+            now,
+            body.planillaReference || null,
+            now
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'pila_verification',
+          engagementId,
+          String(engagement.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Verificación de PILA registrada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — LIQUIDACIÓN
+       *
+       * Enruta automáticamente al motor y al documento DIAN correcto
+       * según la modalidad de la vinculación.
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/hourly/settlements/calculate' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
+
+        if (!engagementId || !periodStart || !periodEnd) {
+          return sendJson(
+            {
+              success: false,
+              error: 'engagementId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const engagementRow = await env.DB
+          .prepare(`
+            SELECT
+              e.*,
+              p.firstName AS p_firstName,
+              p.firstName2 AS p_firstName2,
+              p.lastName AS p_lastName,
+              p.lastName2 AS p_lastName2,
+              p.taxId AS p_taxId
+            FROM engagements e
+            JOIN professionals p ON p.id = e.professionalId
+            WHERE e.id = ?1
+              AND e.active = 1
+          `)
+          .bind(engagementId)
+          .first();
+
+        if (!engagementRow) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        const engagement = normalizeEngagement(engagementRow);
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, engagement.companyId);
+
+        const hoursResult = await env.DB
+          .prepare(`
+            SELECT COALESCE(SUM(hours), 0) AS totalHours
+            FROM time_entries
+            WHERE engagementId = ?1
+              AND periodStart >= ?2
+              AND periodEnd <= ?3
+          `)
+          .bind(engagementId, periodStart, periodEnd)
+          .first();
+
+        const totalHours = Number((hoursResult as any)?.totalHours ?? 0);
+
+        if (totalHours <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'No hay horas registradas para ese periodo.',
+            },
+            400
+          );
+        }
+
+        const companyRow = await env.DB
+          .prepare(`SELECT nit, dv, name FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(engagement.companyId)
+          .first();
+
+        if (!companyRow) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Empresa no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        if (engagement.vinculationType === 'EST_MISSION') {
+          return sendJson(
+            {
+              success: false,
+              error: 'Módulo EST no disponible.',
+            },
+            400
+          );
+        }
+
+        let grossAmount: number;
+        let retentionAmount: number;
+        let netAmount: number;
+        let calculation: unknown;
+        let dianDocument: unknown;
+
+        try {
+          if (engagement.vinculationType === 'PART_TIME_EMPLOYEE') {
+            const input: PartTimeEmployeeInput = {
+              companyId: engagement.companyId,
+              engagementId: engagement.id,
+              professionalId: engagement.professionalId,
+              firstName: String(engagementRow.p_firstName || ''),
+              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+              lastName: String(engagementRow.p_lastName || ''),
+              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+              taxId: String(engagementRow.p_taxId || ''),
+              hourlyRate: engagement.hourlyRate,
+              weeklyHours: Number(engagement.weeklyHours || 0),
+              hoursWorked: totalHours,
+            };
+
+            const payrollResult = PartTimeEmployeeEngine.calculate(input);
+
+            const employerInfo = {
+              nit: String(companyRow.nit || ''),
+              dv: String(companyRow.dv || '0'),
+              companyName: String(companyRow.name || ''),
+              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+            };
+
+            const xmlResult = await DianNominaXmlService.generateDSPNE(
+              payrollResult,
+              employerInfo,
+              {
+                typeDocument: '13',
+                typeContract: '1',
+                paymentMethod: '42',
+              },
+              1
+            );
+
+            grossAmount = payrollResult.grossEarnings;
+            retentionAmount = payrollResult.employeeDeductions.totalDeductions;
+            netAmount = payrollResult.netPay;
+            calculation = payrollResult;
+            dianDocument = xmlResult;
+
+          } else {
+            // INDEPENDENT_SERVICES
+            const period = periodStart.substring(0, 7);
+
+            const verification = await env.DB
+              .prepare(`
+                SELECT verified
+                FROM pila_verifications
+                WHERE engagementId = ?1
+                  AND period = ?2
+              `)
+              .bind(engagementId, period)
+              .first();
+
+            if (!verification || !(verification as any).verified) {
+              return sendJson(
+                {
+                  success: false,
+                  error:
+                    'Debes verificar el pago de seguridad social del ' +
+                    `contratista para el periodo ${period} antes de liquidar ` +
+                    '(deber legal del contratante, Ley 1955/2019 art. 244).',
+                },
+                400
+              );
+            }
+
+            const input: IndependentContractorInput = {
+              companyId: engagement.companyId,
+              engagementId: engagement.id,
+              professionalId: engagement.professionalId,
+              firstName: String(engagementRow.p_firstName || ''),
+              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+              lastName: String(engagementRow.p_lastName || ''),
+              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+              taxId: String(engagementRow.p_taxId || ''),
+              hourlyRate: engagement.hourlyRate,
+              hoursWorked: totalHours,
+              retentionConcept:
+                (engagement.retentionConcept as RetentionConcept) || 'SERVICIOS',
+              isIncomeTaxFiler: !!engagement.isIncomeTaxFiler,
+              // Sólo aplica (y es obligatoria) para concepto HONORARIOS:
+              // la tabla es progresiva por tramos de UVT, así que la
+              // captura quien liquida en vez de calcularla el sistema.
+              manualRetentionRate:
+                body.retentionRate === undefined || body.retentionRate === null
+                  ? undefined
+                  : Number(body.retentionRate),
+            };
+
+            const settlementResult = IndependentContractorEngine.calculate(input);
+
+            const payerInfo: DocumentoSoportePayerInfo = {
+              nit: String(companyRow.nit || ''),
+              dv: String(companyRow.dv || '0'),
+              companyName: String(companyRow.name || ''),
+              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+            };
+
+            const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
+              typeDocument: '13',
+              concept: settlementResult.retentionConcept,
+            };
+
+            const documentoSoporte = await DocumentoSoporteService.generate(
+              settlementResult,
+              payerInfo,
+              beneficiaryInfo,
+              1
+            );
+
+            grossAmount = settlementResult.grossAmount;
+            retentionAmount = settlementResult.retentionAmount;
+            netAmount = settlementResult.netAmount;
+            calculation = settlementResult;
+            dianDocument = documentoSoporte;
+          }
+        } catch (engineError) {
+          if (
+            engineError instanceof PartTimeEmployeeEngineError ||
+            engineError instanceof IndependentContractorEngineError
+          ) {
+            return sendJson(
+              { success: false, error: engineError.message },
+              400
+            );
+          }
+
+          throw engineError;
+        }
+
+        const settlementId = `SET-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        const resultJson = JSON.stringify({ calculation, dianDocument });
+
+        await env.DB
+          .prepare(`
+            INSERT INTO settlements (
+              id, engagementId, periodStart, periodEnd, totalHours,
+              grossAmount, retentionAmount, netAmount, resultJson, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          `)
+          .bind(
+            settlementId,
+            engagementId,
+            periodStart,
+            periodEnd,
+            totalHours,
+            grossAmount,
+            retentionAmount,
+            netAmount,
+            resultJson,
+            createdAt
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'settlement',
+          settlementId,
+          engagement.companyId
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id: settlementId,
+              engagementId,
+              periodStart,
+              periodEnd,
+              totalHours,
+              grossAmount,
+              retentionAmount,
+              netAmount,
+              calculation,
+              dianDocument,
+            },
+          },
+          201
+        );
       }
 
       /*

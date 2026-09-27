@@ -546,6 +546,12 @@ const ROLE_LABELS = {
   EMPLOYEE: 'Empleado'
 };
 
+const VINCULATION_LABELS = {
+  INDEPENDENT_SERVICES: 'Contratista independiente',
+  PART_TIME_EMPLOYEE: 'Empleado jornada parcial',
+  EST_MISSION: 'Trabajador en misión (EST)'
+};
+
 function formatCOP(value) {
   return new Intl.NumberFormat('es-CO', {
     style: 'currency',
@@ -801,6 +807,77 @@ function App({ me, onSignOut }) {
   const [showPayrollPreview, setShowPayrollPreview] = useState(false);
   const [disbursementResult, setDisbursementResult] = useState(null);
 
+  // ------------------------------------------------------------
+  // PERSONAL POR HORAS (bolsa de talento)
+  // ------------------------------------------------------------
+
+  const [activeSection, setActiveSection] = useState('payroll');
+
+  const [professionalQuery, setProfessionalQuery] = useState('');
+  const [professionalResults, setProfessionalResults] = useState([]);
+  const [searchingProfessionals, setSearchingProfessionals] = useState(false);
+
+  const [engagements, setEngagements] = useState([]);
+  const [selectedEngagementId, setSelectedEngagementId] = useState('');
+
+  const [professionalModal, setProfessionalModal] = useState(false);
+  const [professionalForm, setProfessionalForm] = useState({
+    firstName: '',
+    firstName2: '',
+    lastName: '',
+    lastName2: '',
+    taxId: '',
+    profession: '',
+    email: '',
+    phone: '',
+    city: '',
+    bankName: '',
+    bankAccountType: 'AHORROS',
+    bankAccountNumber: ''
+  });
+
+  const [engagementModal, setEngagementModal] = useState(false);
+  const [engagementProfessional, setEngagementProfessional] = useState(null);
+  const [engagementForm, setEngagementForm] = useState({
+    vinculationType: 'INDEPENDENT_SERVICES',
+    hourlyRate: '',
+    startDate: '',
+    endDate: '',
+    retentionConcept: 'SERVICIOS',
+    isIncomeTaxFiler: false,
+    deliverableDescription: '',
+    weeklyHours: '',
+    contractType: '1'
+  });
+
+  const [timeEntryModal, setTimeEntryModal] = useState(false);
+  const [timeEntryForm, setTimeEntryForm] = useState({
+    periodStart: '',
+    periodEnd: '',
+    hours: '',
+    notes: ''
+  });
+
+  const [pilaModal, setPilaModal] = useState(false);
+  const [pilaForm, setPilaForm] = useState({
+    period: '',
+    declaredIbc: '',
+    planillaReference: ''
+  });
+
+  const [settlementModal, setSettlementModal] = useState(false);
+  const [settlementForm, setSettlementForm] = useState({
+    periodStart: '',
+    periodEnd: '',
+    retentionRatePercent: ''
+  });
+  const [settlementResult, setSettlementResult] = useState(null);
+  const [showSettlementPreview, setShowSettlementPreview] = useState(false);
+
+  const selectedEngagement = engagements.find(function(e) {
+    return e.id === selectedEngagementId;
+  });
+
   const selectedCompany = companies.find(function(c) {
     return c.id === selectedCompanyId;
   });
@@ -820,6 +897,15 @@ function App({ me, onSignOut }) {
       clearPayrollForm();
     }
   }, [selectedCompanyId]);
+
+  useEffect(function() {
+    if (selectedCompanyId && activeSection === 'hourly') {
+      loadEngagements(selectedCompanyId);
+    } else {
+      setEngagements([]);
+      setSelectedEngagementId('');
+    }
+  }, [selectedCompanyId, activeSection]);
 
   async function loadCompanies() {
     try {
@@ -1319,6 +1405,404 @@ function App({ me, onSignOut }) {
 
       setDisbursementResult(result.data);
       setSuccess('Archivo bancario generado.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ------------------------------------------------------------
+  // PERSONAL POR HORAS — funciones
+  // ------------------------------------------------------------
+
+  async function searchProfessionals() {
+    try {
+      clearMessages();
+      setSearchingProfessionals(true);
+
+      const result = await api(
+        '/api/professionals?q=' + encodeURIComponent(professionalQuery)
+      );
+
+      setProfessionalResults(Array.isArray(result.data) ? result.data : []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSearchingProfessionals(false);
+    }
+  }
+
+  function openNewProfessional() {
+    clearMessages();
+
+    setProfessionalForm({
+      firstName: '',
+      firstName2: '',
+      lastName: '',
+      lastName2: '',
+      taxId: '',
+      profession: '',
+      email: '',
+      phone: '',
+      city: '',
+      bankName: '',
+      bankAccountType: 'AHORROS',
+      bankAccountNumber: ''
+    });
+
+    setProfessionalModal(true);
+  }
+
+  async function saveProfessional() {
+    try {
+      clearMessages();
+
+      if (
+        !professionalForm.firstName.trim() ||
+        !professionalForm.lastName.trim()
+      ) {
+        throw new Error(
+          'El primer nombre y el primer apellido son obligatorios.'
+        );
+      }
+
+      if (!professionalForm.taxId.trim()) {
+        throw new Error('El documento del profesional es obligatorio.');
+      }
+
+      if (!professionalForm.profession.trim()) {
+        throw new Error('La profesión es obligatoria.');
+      }
+
+      setLoading(true);
+
+      const result = await api('/api/professionals', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(professionalForm)
+      });
+
+      setSuccess('Profesional creado correctamente.');
+      setProfessionalModal(false);
+
+      openNewEngagement(result.data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openNewEngagement(professional) {
+    if (!selectedCompany) {
+      setError('Primero debes crear o seleccionar una empresa.');
+      return;
+    }
+
+    clearMessages();
+    setEngagementProfessional(professional);
+
+    setEngagementForm({
+      vinculationType: 'INDEPENDENT_SERVICES',
+      hourlyRate: '',
+      startDate: '',
+      endDate: '',
+      retentionConcept: 'SERVICIOS',
+      isIncomeTaxFiler: false,
+      deliverableDescription: '',
+      weeklyHours: '',
+      contractType: '1'
+    });
+
+    setEngagementModal(true);
+  }
+
+  async function saveEngagement() {
+    try {
+      clearMessages();
+
+      if (!selectedCompany) {
+        throw new Error('No hay una empresa seleccionada.');
+      }
+
+      if (!engagementProfessional) {
+        throw new Error('Selecciona o crea un profesional primero.');
+      }
+
+      const hourlyRate = Number(engagementForm.hourlyRate);
+
+      if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+        throw new Error('La tarifa por hora debe ser mayor que cero.');
+      }
+
+      if (!engagementForm.startDate) {
+        throw new Error('La fecha de inicio es obligatoria.');
+      }
+
+      if (
+        engagementForm.vinculationType === 'INDEPENDENT_SERVICES' &&
+        !engagementForm.deliverableDescription.trim()
+      ) {
+        throw new Error('Describe el objeto/entregable del contrato.');
+      }
+
+      if (
+        engagementForm.vinculationType === 'PART_TIME_EMPLOYEE' &&
+        (!engagementForm.weeklyHours || Number(engagementForm.weeklyHours) <= 0)
+      ) {
+        throw new Error('Las horas semanales son obligatorias.');
+      }
+
+      setLoading(true);
+
+      const payload = {
+        professionalId: engagementProfessional.id,
+        companyId: selectedCompany.id,
+        vinculationType: engagementForm.vinculationType,
+        hourlyRate,
+        startDate: engagementForm.startDate,
+        endDate: engagementForm.endDate || null,
+        retentionConcept: engagementForm.retentionConcept,
+        isIncomeTaxFiler: engagementForm.isIncomeTaxFiler,
+        deliverableDescription: engagementForm.deliverableDescription,
+        weeklyHours: Number(engagementForm.weeklyHours) || undefined,
+        contractType: engagementForm.contractType
+      };
+
+      await api('/api/engagements', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      setSuccess('Vinculación creada correctamente.');
+      setEngagementModal(false);
+      setProfessionalResults([]);
+      setProfessionalQuery('');
+
+      await loadEngagements(selectedCompany.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadEngagements(companyId) {
+    try {
+      const result = await api(
+        '/api/engagements?companyId=' + encodeURIComponent(companyId)
+      );
+
+      setEngagements(Array.isArray(result.data) ? result.data : []);
+    } catch (err) {
+      setError(err.message);
+      setEngagements([]);
+    }
+  }
+
+  async function endEngagement(engagement) {
+    const confirmed = window.confirm(
+      '¿Deseas finalizar la vinculación con "' +
+      engagement.professional.firstName +
+      ' ' +
+      engagement.professional.lastName +
+      '"?'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      clearMessages();
+      setLoading(true);
+
+      await api('/api/engagements/' + encodeURIComponent(engagement.id), {
+        method: 'DELETE'
+      });
+
+      setSuccess('Vinculación finalizada correctamente.');
+
+      if (selectedEngagementId === engagement.id) {
+        setSelectedEngagementId('');
+      }
+
+      await loadEngagements(selectedCompanyId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openTimeEntryModal() {
+    clearMessages();
+
+    setTimeEntryForm({
+      periodStart: '',
+      periodEnd: '',
+      hours: '',
+      notes: ''
+    });
+
+    setTimeEntryModal(true);
+  }
+
+  async function saveTimeEntry() {
+    try {
+      clearMessages();
+
+      if (!selectedEngagement) {
+        throw new Error('Selecciona una vinculación.');
+      }
+
+      const hours = Number(timeEntryForm.hours);
+
+      if (!timeEntryForm.periodStart || !timeEntryForm.periodEnd) {
+        throw new Error('El periodo (inicio y fin) es obligatorio.');
+      }
+
+      if (!Number.isFinite(hours) || hours <= 0) {
+        throw new Error('Las horas deben ser mayores que cero.');
+      }
+
+      setLoading(true);
+
+      await api('/api/time-entries', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          engagementId: selectedEngagement.id,
+          periodStart: timeEntryForm.periodStart,
+          periodEnd: timeEntryForm.periodEnd,
+          hours,
+          notes: timeEntryForm.notes
+        })
+      });
+
+      setSuccess('Horas registradas correctamente.');
+      setTimeEntryModal(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openPilaModal() {
+    clearMessages();
+
+    setPilaForm({
+      period: '',
+      declaredIbc: '',
+      planillaReference: ''
+    });
+
+    setPilaModal(true);
+  }
+
+  async function savePilaVerification() {
+    try {
+      clearMessages();
+
+      if (!selectedEngagement) {
+        throw new Error('Selecciona una vinculación.');
+      }
+
+      if (!/^\d{4}-\d{2}$/.test(pilaForm.period)) {
+        throw new Error('El periodo debe tener formato AAAA-MM.');
+      }
+
+      const declaredIbc = Number(pilaForm.declaredIbc);
+
+      if (!Number.isFinite(declaredIbc) || declaredIbc <= 0) {
+        throw new Error('El IBC declarado debe ser mayor que cero.');
+      }
+
+      setLoading(true);
+
+      await api('/api/pila-verifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          engagementId: selectedEngagement.id,
+          period: pilaForm.period,
+          declaredIbc,
+          planillaReference: pilaForm.planillaReference
+        })
+      });
+
+      setSuccess('Verificación de PILA registrada.');
+      setPilaModal(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openSettlementModal() {
+    clearMessages();
+
+    setSettlementForm({ periodStart: '', periodEnd: '', retentionRatePercent: '' });
+    setSettlementResult(null);
+    setSettlementModal(true);
+  }
+
+  async function calculateSettlement() {
+    try {
+      clearMessages();
+
+      if (!selectedEngagement) {
+        throw new Error('Selecciona una vinculación.');
+      }
+
+      if (!settlementForm.periodStart || !settlementForm.periodEnd) {
+        throw new Error('El periodo (inicio y fin) es obligatorio.');
+      }
+
+      const isHonorarios =
+        selectedEngagement.retentionConcept === 'HONORARIOS';
+
+      let retentionRate;
+
+      if (isHonorarios) {
+        const percent = Number(settlementForm.retentionRatePercent);
+
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          throw new Error(
+            'Indica la tarifa de retención vigente para honorarios (0 a 100%).'
+          );
+        }
+
+        retentionRate = percent / 100;
+      }
+
+      setLoading(true);
+
+      const result = await api('/api/hourly/settlements/calculate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          engagementId: selectedEngagement.id,
+          periodStart: settlementForm.periodStart,
+          periodEnd: settlementForm.periodEnd,
+          retentionRate: retentionRate
+        })
+      });
+
+      setSettlementResult(result.data);
+      setSuccess('Liquidación calculada correctamente.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1939,6 +2423,262 @@ function App({ me, onSignOut }) {
     );
   }
 
+  function renderEngagementDetail() {
+    if (!selectedEngagement) {
+      return (
+        <div className="empty">
+          <div style={{fontSize: '30px', marginBottom: '10px'}}>🕐</div>
+          Selecciona una vinculación de la lista para registrar horas,
+          verificar PILA o liquidar un periodo.
+        </div>
+      );
+    }
+
+    const engagement = selectedEngagement;
+    const professional = engagement.professional || {};
+    const isIndependent = engagement.vinculationType === 'INDEPENDENT_SERVICES';
+
+    return (
+      <div className="panel-body">
+        <div className="selected-employee">
+          <strong>
+            {professional.firstName + ' ' + professional.lastName}
+          </strong>
+          <br />
+          <span>{professional.profession}</span>
+          <br />
+          <span>
+            {VINCULATION_LABELS[engagement.vinculationType] || engagement.vinculationType}
+            {' · '}
+            {formatCOP(engagement.hourlyRate)}/hora
+          </span>
+        </div>
+
+        {isIndependent && (
+          <div className="info-box" style={{marginBottom: '18px'}}>
+            Antes de liquidar un periodo, debes verificar que el
+            contratista pagó su seguridad social (PILA) para ese mes.
+            Es un deber legal del contratante (Ley 1955/2019 art. 244).
+          </div>
+        )}
+
+        <div className="button-row">
+          <button className="btn btn-primary" onClick={openTimeEntryModal}>
+            ⏱️ Registrar horas
+          </button>
+
+          {isIndependent && (
+            <button className="btn" onClick={openPilaModal}>
+              ✅ Verificar PILA
+            </button>
+          )}
+
+          <button className="btn btn-success" onClick={openSettlementModal}>
+            💵 Liquidar periodo
+          </button>
+
+          <button
+            className="btn btn-danger"
+            onClick={function() { endEngagement(engagement); }}
+          >
+            Finalizar vinculación
+          </button>
+        </div>
+
+        {settlementResult && (
+          <div className="result-section" style={{marginTop: '20px'}}>
+            <h3>📊 Última liquidación calculada</h3>
+
+            <div className="summary-grid">
+              <div className="summary-card">
+                <span>BRUTO</span>
+                <strong>{formatCOP(settlementResult.grossAmount)}</strong>
+              </div>
+
+              <div className="summary-card">
+                <span>{isIndependent ? 'RETENCIÓN' : 'DEDUCCIONES'}</span>
+                <strong>{formatCOP(settlementResult.retentionAmount)}</strong>
+              </div>
+            </div>
+
+            <div className="result-row" style={{marginTop: '10px'}}>
+              <span>Total horas liquidadas</span>
+              <strong>{settlementResult.totalHours}</strong>
+            </div>
+
+            <div className="result-row">
+              <span>Neto a pagar</span>
+              <strong>{formatCOP(settlementResult.netAmount)}</strong>
+            </div>
+
+            {isIndependent && settlementResult.calculation && (
+              <div className="result-row">
+                <span>IBC mínimo sugerido para el contratista</span>
+                <strong>
+                  {formatCOP(settlementResult.calculation.suggestedMinimumIbc)}
+                </strong>
+              </div>
+            )}
+
+            <div className="button-row">
+              <button
+                className="btn"
+                onClick={function() { setShowSettlementPreview(true); }}
+              >
+                📄 Ver documento DIAN generado
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderHourlySection() {
+    return (
+      <main style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(320px, 380px) 1fr',
+        minHeight: 'calc(100vh - 76px)'
+      }}>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>🔍 Bolsa de profesionales</h2>
+              <span>Busca o crea uno nuevo</span>
+            </div>
+          </div>
+
+          <div className="panel-body">
+            <div className="form-grid">
+              <div className="form-group full">
+                <label>Buscar por nombre o profesión</label>
+                <input
+                  value={professionalQuery}
+                  onChange={function(e) {
+                    setProfessionalQuery(e.target.value);
+                  }}
+                  onKeyDown={function(e) {
+                    if (e.key === 'Enter') searchProfessionals();
+                  }}
+                  placeholder="Ej: contador, María..."
+                />
+              </div>
+            </div>
+
+            <div className="button-row">
+              <button
+                className="btn btn-primary"
+                onClick={searchProfessionals}
+                disabled={searchingProfessionals}
+              >
+                {searchingProfessionals ? 'Buscando...' : 'Buscar'}
+              </button>
+
+              <button className="btn" onClick={openNewProfessional}>
+                + Nuevo profesional
+              </button>
+            </div>
+
+            {professionalResults.length > 0 && (
+              <div className="employee-list" style={{padding: '10px 0'}}>
+                {professionalResults.map(function(professional) {
+                  return (
+                    <div key={professional.id} className="employee-card">
+                      <div className="employee-name">
+                        {professional.firstName + ' ' + professional.lastName}
+                      </div>
+
+                      <div className="employee-meta">
+                        {professional.profession}
+                        <br />
+                        {professional.city || 'Sin ciudad'}
+                        {professional.taxId ? (
+                          <span><br />CC/NIT: {professional.taxId}</span>
+                        ) : null}
+                      </div>
+
+                      <div className="button-row" style={{marginTop: '9px'}}>
+                        <button
+                          className="btn btn-primary"
+                          onClick={function() {
+                            openNewEngagement(professional);
+                          }}
+                        >
+                          + Vincular a esta empresa
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="panel-header">
+            <div>
+              <h2>🤝 Vinculaciones activas</h2>
+              <span>{engagements.length} en esta empresa</span>
+            </div>
+          </div>
+
+          <div className="employee-list">
+            {!selectedCompany ? (
+              <div className="empty">
+                Selecciona una empresa arriba.
+              </div>
+            ) : engagements.length === 0 ? (
+              <div className="empty">
+                Esta empresa no tiene vinculaciones por horas todavía.
+              </div>
+            ) : (
+              engagements.map(function(engagement) {
+                const isSelected = engagement.id === selectedEngagementId;
+                const professional = engagement.professional || {};
+
+                return (
+                  <div
+                    key={engagement.id}
+                    className={'employee-card' + (isSelected ? ' selected' : '')}
+                    onClick={function() {
+                      setSettlementResult(null);
+                      setSelectedEngagementId(engagement.id);
+                    }}
+                  >
+                    <div className="employee-name">
+                      {professional.firstName + ' ' + professional.lastName}
+                    </div>
+
+                    <div className="employee-meta">
+                      {VINCULATION_LABELS[engagement.vinculationType] || engagement.vinculationType}
+                      <br />
+                      {professional.profession}
+                    </div>
+
+                    <div className="employee-salary">
+                      {formatCOP(engagement.hourlyRate)}/hora
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>📋 Detalle de la vinculación</h2>
+              <span>Horas, verificación PILA y liquidación</span>
+            </div>
+          </div>
+
+          {renderEngagementDetail()}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -2017,6 +2757,27 @@ function App({ me, onSignOut }) {
         </div>
       </header>
 
+      <div style={{
+        display: 'flex',
+        gap: '8px',
+        padding: '12px 24px 0',
+        borderBottom: '1px solid #1d3047'
+      }}>
+        <button
+          className={'btn' + (activeSection === 'payroll' ? ' btn-primary' : '')}
+          onClick={function() { setActiveSection('payroll'); }}
+        >
+          🧾 Nómina mensual
+        </button>
+
+        <button
+          className={'btn' + (activeSection === 'hourly' ? ' btn-primary' : '')}
+          onClick={function() { setActiveSection('hourly'); }}
+        >
+          🕐 Personal por horas
+        </button>
+      </div>
+
       {error && (
         <div className="alert">
           {error}
@@ -2029,6 +2790,9 @@ function App({ me, onSignOut }) {
         </div>
       )}
 
+      {activeSection === 'hourly' && renderHourlySection()}
+
+      {activeSection === 'payroll' && (
       <main className="layout">
         <section className="panel">
           <div className="panel-header">
@@ -2274,6 +3038,7 @@ function App({ me, onSignOut }) {
           {renderPayrollResult()}
         </section>
       </main>
+      )}
 
       {companyModal && (
         <div className="modal-backdrop">
@@ -2840,6 +3605,717 @@ function App({ me, onSignOut }) {
               >
                 {loading ? 'Guardando...' : 'Guardar empleado'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {professionalModal && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Nuevo profesional</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setProfessionalModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Primer nombre</label>
+                  <input
+                    value={professionalForm.firstName}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        firstName: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Segundo nombre</label>
+                  <input
+                    value={professionalForm.firstName2}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        firstName2: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Primer apellido</label>
+                  <input
+                    value={professionalForm.lastName}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        lastName: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Segundo apellido</label>
+                  <input
+                    value={professionalForm.lastName2}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        lastName2: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Documento</label>
+                  <input
+                    value={professionalForm.taxId}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        taxId: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Profesión</label>
+                  <input
+                    value={professionalForm.profession}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        profession: e.target.value
+                      });
+                    }}
+                    placeholder="Ej: Contador, Electricista..."
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Correo</label>
+                  <input
+                    type="email"
+                    value={professionalForm.email}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        email: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Teléfono</label>
+                  <input
+                    value={professionalForm.phone}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        phone: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Ciudad</label>
+                  <input
+                    value={professionalForm.city}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        city: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Banco</label>
+                  <input
+                    value={professionalForm.bankName}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        bankName: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Tipo de cuenta</label>
+                  <select
+                    value={professionalForm.bankAccountType}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        bankAccountType: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="AHORROS">Ahorros</option>
+                    <option value="CORRIENTE">Corriente</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Número de cuenta</label>
+                  <input
+                    value={professionalForm.bankAccountNumber}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        bankAccountNumber: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setProfessionalModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={saveProfessional}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Guardar y vincular'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {engagementModal && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Nueva vinculación</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setEngagementModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {engagementProfessional && (
+                <div className="info-box" style={{marginBottom: '18px'}}>
+                  Vinculando a{' '}
+                  <strong>
+                    {engagementProfessional.firstName + ' ' + engagementProfessional.lastName}
+                  </strong>{' '}
+                  con {selectedCompany ? selectedCompany.name : 'la empresa seleccionada'}.
+                </div>
+              )}
+
+              <div className="form-grid">
+                <div className="form-group full">
+                  <label>Modalidad</label>
+                  <select
+                    value={engagementForm.vinculationType}
+                    onChange={function(e) {
+                      setEngagementForm({
+                        ...engagementForm,
+                        vinculationType: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="INDEPENDENT_SERVICES">
+                      Contratista independiente (prestación de servicios)
+                    </option>
+                    <option value="PART_TIME_EMPLOYEE">
+                      Empleado de jornada parcial
+                    </option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Tarifa por hora</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={engagementForm.hourlyRate}
+                    onChange={function(e) {
+                      setEngagementForm({
+                        ...engagementForm,
+                        hourlyRate: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Fecha inicio</label>
+                  <input
+                    type="date"
+                    value={engagementForm.startDate}
+                    onChange={function(e) {
+                      setEngagementForm({
+                        ...engagementForm,
+                        startDate: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Fecha fin (opcional)</label>
+                  <input
+                    type="date"
+                    value={engagementForm.endDate}
+                    onChange={function(e) {
+                      setEngagementForm({
+                        ...engagementForm,
+                        endDate: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                {engagementForm.vinculationType === 'INDEPENDENT_SERVICES' ? (
+                  <>
+                    <div className="form-group">
+                      <label>Concepto de retención</label>
+                      <select
+                        value={engagementForm.retentionConcept}
+                        onChange={function(e) {
+                          setEngagementForm({
+                            ...engagementForm,
+                            retentionConcept: e.target.value
+                          });
+                        }}
+                      >
+                        <option value="SERVICIOS">Servicios</option>
+                        <option value="HONORARIOS">Honorarios</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label>¿Declarante de renta?</label>
+                      <select
+                        value={engagementForm.isIncomeTaxFiler ? '1' : '0'}
+                        onChange={function(e) {
+                          setEngagementForm({
+                            ...engagementForm,
+                            isIncomeTaxFiler: e.target.value === '1'
+                          });
+                        }}
+                      >
+                        <option value="0">No</option>
+                        <option value="1">Sí</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group full">
+                      <label>Objeto / entregable del contrato</label>
+                      <input
+                        value={engagementForm.deliverableDescription}
+                        onChange={function(e) {
+                          setEngagementForm({
+                            ...engagementForm,
+                            deliverableDescription: e.target.value
+                          });
+                        }}
+                        placeholder="Ej: Elaborar los estados financieros mensuales"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="form-group">
+                      <label>Horas semanales (máx. 42)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="42"
+                        value={engagementForm.weeklyHours}
+                        onChange={function(e) {
+                          setEngagementForm({
+                            ...engagementForm,
+                            weeklyHours: e.target.value
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Tipo contrato DIAN</label>
+                      <select
+                        value={engagementForm.contractType}
+                        onChange={function(e) {
+                          setEngagementForm({
+                            ...engagementForm,
+                            contractType: e.target.value
+                          });
+                        }}
+                      >
+                        <option value="1">Término indefinido</option>
+                        <option value="2">Término fijo</option>
+                        <option value="3">Obra o labor</option>
+                        <option value="5">Otro</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setEngagementModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={saveEngagement}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Crear vinculación'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {timeEntryModal && selectedEngagement && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Registrar horas</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setTimeEntryModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Periodo desde</label>
+                  <input
+                    type="date"
+                    value={timeEntryForm.periodStart}
+                    onChange={function(e) {
+                      setTimeEntryForm({
+                        ...timeEntryForm,
+                        periodStart: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Periodo hasta</label>
+                  <input
+                    type="date"
+                    value={timeEntryForm.periodEnd}
+                    onChange={function(e) {
+                      setTimeEntryForm({
+                        ...timeEntryForm,
+                        periodEnd: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Horas trabajadas</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={timeEntryForm.hours}
+                    onChange={function(e) {
+                      setTimeEntryForm({
+                        ...timeEntryForm,
+                        hours: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group full">
+                  <label>Notas (opcional)</label>
+                  <input
+                    value={timeEntryForm.notes}
+                    onChange={function(e) {
+                      setTimeEntryForm({
+                        ...timeEntryForm,
+                        notes: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setTimeEntryModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={saveTimeEntry}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Registrar horas'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pilaModal && selectedEngagement && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Verificar pago de PILA</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setPilaModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="info-box" style={{marginBottom: '18px'}}>
+                Confirma que el contratista pagó su propia seguridad
+                social para este periodo antes de registrar la
+                verificación. El IBC mínimo sugerido es el 40% del
+                valor mensualizado del contrato (piso de 1 SMMLV).
+              </div>
+
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Periodo (AAAA-MM)</label>
+                  <input
+                    value={pilaForm.period}
+                    onChange={function(e) {
+                      setPilaForm({
+                        ...pilaForm,
+                        period: e.target.value
+                      });
+                    }}
+                    placeholder="2026-09"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>IBC declarado por el contratista</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={pilaForm.declaredIbc}
+                    onChange={function(e) {
+                      setPilaForm({
+                        ...pilaForm,
+                        declaredIbc: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group full">
+                  <label>Referencia de planilla (opcional)</label>
+                  <input
+                    value={pilaForm.planillaReference}
+                    onChange={function(e) {
+                      setPilaForm({
+                        ...pilaForm,
+                        planillaReference: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setPilaModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={savePilaVerification}
+                disabled={loading}
+              >
+                {loading ? 'Guardando...' : 'Registrar verificación'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {settlementModal && selectedEngagement && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>Liquidar periodo</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setSettlementModal(false); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Periodo desde</label>
+                  <input
+                    type="date"
+                    value={settlementForm.periodStart}
+                    onChange={function(e) {
+                      setSettlementForm({
+                        ...settlementForm,
+                        periodStart: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Periodo hasta</label>
+                  <input
+                    type="date"
+                    value={settlementForm.periodEnd}
+                    onChange={function(e) {
+                      setSettlementForm({
+                        ...settlementForm,
+                        periodEnd: e.target.value
+                      });
+                    }}
+                  />
+                </div>
+
+                {selectedEngagement.retentionConcept === 'HONORARIOS' && (
+                  <div className="form-group full">
+                    <label>Tarifa de retención vigente (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={settlementForm.retentionRatePercent}
+                      onChange={function(e) {
+                        setSettlementForm({
+                          ...settlementForm,
+                          retentionRatePercent: e.target.value
+                        });
+                      }}
+                      placeholder="Consúltala en la tabla de honorarios de la DIAN"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="btn"
+                onClick={function() { setSettlementModal(false); }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={async function() {
+                  await calculateSettlement();
+                  setSettlementModal(false);
+                }}
+                disabled={loading}
+              >
+                {loading ? 'Calculando...' : 'Calcular liquidación'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettlementPreview && settlementResult && settlementResult.dianDocument && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.82)',
+            zIndex: 9999,
+            overflowY: 'auto',
+            padding: '30px 15px'
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '820px',
+              margin: '0 auto',
+              background: '#091625',
+              border: '1px solid #29415d',
+              borderRadius: '10px',
+              overflow: 'hidden'
+            }}
+          >
+            <div className="modal-header">
+              <h3>Documento DIAN generado</h3>
+
+              <button
+                className="btn"
+                onClick={function() { setShowSettlementPreview(false); }}
+              >
+                ✕ Cerrar
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="alert" style={{margin: '0 0 15px'}}>
+                {settlementResult.dianDocument.disclaimer ||
+                  'Documento generado sin firma digital ni habilitación real ante la DIAN. Debe validarse antes de producción.'}
+              </div>
+
+              <pre>{settlementResult.dianDocument.xmlContent}</pre>
             </div>
           </div>
         </div>
