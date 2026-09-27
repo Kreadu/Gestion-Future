@@ -3070,7 +3070,13 @@ function App({ me, onSignOut }) {
               <div className="employee-list" style={{padding: '10px 0'}}>
                 {professionalResults.map(function(professional) {
                   return (
-                    <div key={professional.id} className="employee-card">
+                    <div
+                      key={professional.id}
+                      className="employee-card"
+                      onClick={function() {
+                        openNewEngagement(professional);
+                      }}
+                    >
                       <div className="employee-name">
                         {professional.firstName + ' ' + professional.lastName}
                       </div>
@@ -3087,7 +3093,8 @@ function App({ me, onSignOut }) {
                       <div className="button-row" style={{marginTop: '9px'}}>
                         <button
                           className="btn btn-primary"
-                          onClick={function() {
+                          onClick={function(e) {
+                            e.stopPropagation();
                             openNewEngagement(professional);
                           }}
                         >
