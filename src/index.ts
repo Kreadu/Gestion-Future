@@ -2610,6 +2610,176 @@ export default {
         );
       }
 
+      const professionalMatch =
+        url.pathname.match(/^\/api\/professionals\/([^/]+)$/);
+
+      if (
+        professionalMatch &&
+        request.method === 'PUT'
+      ) {
+        const professionalId = decodeURIComponent(professionalMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Profesional no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+
+        // `professionals` es una bolsa compartida entre empresas, no
+        // pertenece a ninguna: sólo puede editarlo quien ya tiene
+        // derecho a ver sus datos completos (SUPER_ADMIN, o una
+        // empresa con una vinculación activa con él) — misma regla
+        // que decide qué normalizador usa GET /api/professionals.
+        if (user.role !== 'SUPER_ADMIN') {
+          const ownEngagement = await env.DB
+            .prepare(`
+              SELECT id
+              FROM engagements
+              WHERE professionalId = ?1
+                AND companyId = ?2
+                AND active = 1
+            `)
+            .bind(professionalId, user.companyId)
+            .first();
+
+          if (!ownEngagement) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Sólo puedes editar profesionales con los que tu ' +
+                  'empresa tenga una vinculación activa.',
+              },
+              403
+            );
+          }
+        }
+
+        const body = await request.json() as any;
+
+        const firstName = String(body.firstName || '').trim();
+        const lastName = String(body.lastName || '').trim();
+        const taxId = String(body.taxId || '').trim();
+        const profession = String(body.profession || '').trim();
+
+        if (!firstName || !lastName || !taxId || !profession) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Primer nombre, primer apellido, documento y profesión son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
+        try {
+          await env.DB
+            .prepare(`
+              UPDATE professionals
+              SET
+                firstName = ?1,
+                firstName2 = ?2,
+                lastName = ?3,
+                lastName2 = ?4,
+                taxId = ?5,
+                documentType = ?6,
+                dv = ?7,
+                profession = ?8,
+                email = ?9,
+                phone = ?10,
+                city = ?11,
+                bankName = ?12,
+                bankAccountType = ?13,
+                bankAccountNumber = ?14,
+                defaultHourlyRate = ?15
+              WHERE id = ?16
+            `)
+            .bind(
+              firstName,
+              body.firstName2 || null,
+              lastName,
+              body.lastName2 || null,
+              taxId,
+              documentType,
+              dv,
+              profession,
+              body.email || null,
+              body.phone || null,
+              body.city || null,
+              body.bankName || null,
+              body.bankAccountType || null,
+              body.bankAccountNumber || null,
+              defaultHourlyRate,
+              professionalId
+            )
+            .run();
+        } catch {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe otro profesional con ese documento.',
+            },
+            409
+          );
+        }
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        await audit(env, user, 'UPDATE', 'professional', professionalId, null);
+
+        return sendJson({ success: true, data: normalizeProfessional(row) });
+      }
+
       /*
        * ============================================================
        * PERSONAL POR HORAS — VINCULACIONES (engagements)
@@ -2855,12 +3025,22 @@ export default {
           .prepare(`
             SELECT
               e.*,
+              p.id AS p_id,
               p.firstName AS p_firstName,
               p.firstName2 AS p_firstName2,
               p.lastName AS p_lastName,
               p.lastName2 AS p_lastName2,
               p.profession AS p_profession,
-              p.taxId AS p_taxId
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType,
+              p.dv AS p_dv,
+              p.email AS p_email,
+              p.phone AS p_phone,
+              p.city AS p_city,
+              p.bankName AS p_bankName,
+              p.bankAccountType AS p_bankAccountType,
+              p.bankAccountNumber AS p_bankAccountNumber,
+              p.defaultHourlyRate AS p_defaultHourlyRate
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
             WHERE e.companyId = ?1
@@ -2870,15 +3050,32 @@ export default {
           .bind(companyId)
           .all();
 
+        // Una empresa con vinculación activa ya tiene derecho a ver
+        // los datos completos del profesional (misma regla que
+        // GET /api/professionals), así que aquí se incluyen todos —
+        // es lo que necesita el dashboard para poder editarlo.
         const data = (result.results || []).map((row: any) => ({
           ...normalizeEngagement(row),
           professional: {
+            id: row.p_id,
             firstName: row.p_firstName,
             firstName2: row.p_firstName2,
             lastName: row.p_lastName,
             lastName2: row.p_lastName2,
             profession: row.p_profession,
             taxId: row.p_taxId,
+            documentType: row.p_documentType || '13',
+            dv: row.p_dv ?? null,
+            email: row.p_email ?? null,
+            phone: row.p_phone ?? null,
+            city: row.p_city ?? null,
+            bankName: row.p_bankName ?? null,
+            bankAccountType: row.p_bankAccountType ?? null,
+            bankAccountNumber: row.p_bankAccountNumber ?? null,
+            defaultHourlyRate:
+              row.p_defaultHourlyRate === null || row.p_defaultHourlyRate === undefined
+                ? null
+                : Number(row.p_defaultHourlyRate),
           },
         }));
 

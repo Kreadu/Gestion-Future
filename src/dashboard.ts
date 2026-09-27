@@ -899,8 +899,11 @@ function App({ me, onSignOut }) {
 
   const [engagements, setEngagements] = useState([]);
   const [selectedEngagementId, setSelectedEngagementId] = useState('');
+  const [editingEngagementRate, setEditingEngagementRate] = useState(false);
+  const [engagementRateInput, setEngagementRateInput] = useState('');
 
   const [professionalModal, setProfessionalModal] = useState(false);
+  const [editingProfessional, setEditingProfessional] = useState(null);
   const [professionalForm, setProfessionalForm] = useState({
     firstName: '',
     firstName2: '',
@@ -1023,6 +1026,10 @@ function App({ me, onSignOut }) {
       setSelectedEngagementId('');
     }
   }, [selectedCompanyId, activeSection]);
+
+  useEffect(function() {
+    setEditingEngagementRate(false);
+  }, [selectedEngagementId]);
 
   // Si hay licencias detectadas para el periodo y "Días trabajados"
   // ya no cabe junto con ellas (ej. se acaba de registrar una nueva
@@ -1821,6 +1828,7 @@ function App({ me, onSignOut }) {
 
   function openNewProfessional() {
     clearMessages();
+    setEditingProfessional(null);
 
     setProfessionalForm({
       firstName: '',
@@ -1838,6 +1846,33 @@ function App({ me, onSignOut }) {
       bankAccountType: 'AHORROS',
       bankAccountNumber: '',
       defaultHourlyRate: ''
+    });
+
+    setProfessionalModal(true);
+  }
+
+  function openEditProfessional(professional) {
+    clearMessages();
+    setEditingProfessional(professional);
+
+    setProfessionalForm({
+      firstName: professional.firstName || '',
+      firstName2: professional.firstName2 || '',
+      lastName: professional.lastName || '',
+      lastName2: professional.lastName2 || '',
+      taxId: professional.taxId || '',
+      documentType: professional.documentType || '13',
+      dv: professional.dv || '',
+      profession: professional.profession || '',
+      email: professional.email || '',
+      phone: professional.phone || '',
+      city: professional.city || '',
+      bankName: professional.bankName || '',
+      bankAccountType: professional.bankAccountType || 'AHORROS',
+      bankAccountNumber: professional.bankAccountNumber || '',
+      defaultHourlyRate: professional.defaultHourlyRate
+        ? String(professional.defaultHourlyRate)
+        : ''
     });
 
     setProfessionalModal(true);
@@ -1866,18 +1901,40 @@ function App({ me, onSignOut }) {
 
       setLoading(true);
 
-      const result = await api('/api/professionals', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(professionalForm)
-      });
+      if (editingProfessional) {
+        const result = await api('/api/professionals/' + encodeURIComponent(editingProfessional.id), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(professionalForm)
+        });
 
-      setSuccess('Profesional creado correctamente.');
-      setProfessionalModal(false);
+        setSuccess('Profesional actualizado correctamente.');
+        setProfessionalModal(false);
+        setEditingProfessional(null);
 
-      openNewEngagement(result.data);
+        if (selectedCompany) {
+          await loadEngagements(selectedCompany.id);
+        }
+
+        if (engagementProfessional && engagementProfessional.id === result.data.id) {
+          setEngagementProfessional(result.data);
+        }
+      } else {
+        const result = await api('/api/professionals', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(professionalForm)
+        });
+
+        setSuccess('Profesional creado correctamente.');
+        setProfessionalModal(false);
+
+        openNewEngagement(result.data);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1997,6 +2054,45 @@ function App({ me, onSignOut }) {
     } catch (err) {
       setError(err.message);
       setEngagements([]);
+    }
+  }
+
+  function openEditEngagementRate(engagement) {
+    clearMessages();
+    setEngagementRateInput(String(engagement.hourlyRate));
+    setEditingEngagementRate(true);
+  }
+
+  async function saveEngagementRate(engagement) {
+    try {
+      clearMessages();
+
+      const hourlyRate = Number(engagementRateInput);
+
+      if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+        throw new Error('La tarifa por hora debe ser mayor que cero.');
+      }
+
+      setLoading(true);
+
+      await api('/api/engagements/' + encodeURIComponent(engagement.id), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ hourlyRate })
+      });
+
+      setSuccess('Tarifa por hora actualizada correctamente.');
+      setEditingEngagementRate(false);
+
+      if (selectedCompany) {
+        await loadEngagements(selectedCompany.id);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -2936,8 +3032,56 @@ function App({ me, onSignOut }) {
           <span>
             {VINCULATION_LABELS[engagement.vinculationType] || engagement.vinculationType}
             {' · '}
-            {formatCOP(engagement.hourlyRate)}/hora
+            {editingEngagementRate ? (
+              <span style={{display: 'inline-flex', alignItems: 'center', gap: '6px'}}>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={engagementRateInput}
+                  onChange={function(e) { setEngagementRateInput(e.target.value); }}
+                  style={{width: '110px', display: 'inline-block'}}
+                />
+                /hora
+                <button
+                  className="btn btn-primary"
+                  style={{padding: '3px 8px', fontSize: '12px'}}
+                  onClick={function() { saveEngagementRate(engagement); }}
+                  disabled={loading}
+                >
+                  Guardar
+                </button>
+                <button
+                  className="btn"
+                  style={{padding: '3px 8px', fontSize: '12px'}}
+                  onClick={function() { setEditingEngagementRate(false); }}
+                >
+                  Cancelar
+                </button>
+              </span>
+            ) : (
+              <>
+                {formatCOP(engagement.hourlyRate)}/hora
+                {' '}
+                <button
+                  className="btn"
+                  style={{padding: '2px 7px', fontSize: '11px'}}
+                  onClick={function() { openEditEngagementRate(engagement); }}
+                >
+                  ✏️ Editar tarifa
+                </button>
+              </>
+            )}
           </span>
+        </div>
+
+        <div className="button-row" style={{marginBottom: '18px'}}>
+          <button
+            className="btn"
+            onClick={function() { openEditProfessional(professional); }}
+          >
+            ✏️ Editar profesional
+          </button>
         </div>
 
         {isIndependent && (
@@ -4603,11 +4747,11 @@ function App({ me, onSignOut }) {
         <div className="modal-backdrop">
           <div className="modal">
             <div className="modal-header">
-              <h3>Nuevo profesional</h3>
+              <h3>{editingProfessional ? 'Editar profesional' : 'Nuevo profesional'}</h3>
 
               <button
                 className="btn"
-                onClick={function() { setProfessionalModal(false); }}
+                onClick={function() { setProfessionalModal(false); setEditingProfessional(null); }}
               >
                 ✕
               </button>
@@ -4833,7 +4977,7 @@ function App({ me, onSignOut }) {
             <div className="modal-footer">
               <button
                 className="btn"
-                onClick={function() { setProfessionalModal(false); }}
+                onClick={function() { setProfessionalModal(false); setEditingProfessional(null); }}
               >
                 Cancelar
               </button>
@@ -4843,7 +4987,11 @@ function App({ me, onSignOut }) {
                 onClick={saveProfessional}
                 disabled={loading}
               >
-                {loading ? 'Guardando...' : 'Guardar y vincular'}
+                {loading
+                  ? 'Guardando...'
+                  : editingProfessional
+                    ? 'Guardar cambios'
+                    : 'Guardar y vincular'}
               </button>
             </div>
           </div>
