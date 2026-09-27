@@ -868,6 +868,8 @@ function App({ me, onSignOut }) {
     lastName: '',
     lastName2: '',
     taxId: '',
+    documentType: '13',
+    dv: '',
     profession: '',
     email: '',
     phone: '',
@@ -1704,6 +1706,8 @@ function App({ me, onSignOut }) {
       lastName: '',
       lastName2: '',
       taxId: '',
+      documentType: '13',
+      dv: '',
       profession: '',
       email: '',
       phone: '',
@@ -4457,6 +4461,41 @@ function App({ me, onSignOut }) {
                     }}
                   />
                 </div>
+
+                <div className="form-group">
+                  <label>Tipo de documento</label>
+                  <select
+                    value={professionalForm.documentType}
+                    onChange={function(e) {
+                      setProfessionalForm({
+                        ...professionalForm,
+                        documentType: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="13">Cédula de ciudadanía</option>
+                    <option value="31">NIT</option>
+                    <option value="22">Cédula de extranjería</option>
+                    <option value="41">Pasaporte</option>
+                    <option value="42">Documento extranjero</option>
+                  </select>
+                </div>
+
+                {professionalForm.documentType === '31' && (
+                  <div className="form-group">
+                    <label>DV (dígito de verificación)</label>
+                    <input
+                      value={professionalForm.dv}
+                      onChange={function(e) {
+                        setProfessionalForm({
+                          ...professionalForm,
+                          dv: e.target.value
+                        });
+                      }}
+                      placeholder="Ej: 7"
+                    />
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label>Profesión</label>

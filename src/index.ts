@@ -219,6 +219,8 @@ function normalizeProfessional(row: any): Professional {
     lastName: String(row.lastName ?? ''),
     lastName2: row.lastName2 ?? null,
     taxId: String(row.taxId ?? ''),
+    documentType: (row.documentType || '13') as Professional['documentType'],
+    dv: row.dv ?? null,
     profession: String(row.profession ?? ''),
     email: row.email ?? null,
     phone: row.phone ?? null,
@@ -2344,6 +2346,28 @@ export default {
           );
         }
 
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        // El dígito de verificación sólo aplica (y sólo se persiste)
+        // cuando el documento es NIT — mismo patrón que `companies`.
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
         const id = `PRO-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
@@ -2352,10 +2376,11 @@ export default {
             .prepare(`
               INSERT INTO professionals (
                 id, firstName, firstName2, lastName, lastName2, taxId,
-                profession, email, phone, city, bankName,
-                bankAccountType, bankAccountNumber, active, createdAt
+                documentType, dv, profession, email, phone, city,
+                bankName, bankAccountType, bankAccountNumber, active,
+                createdAt
               )
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16)
             `)
             .bind(
               id,
@@ -2364,6 +2389,8 @@ export default {
               lastName,
               body.lastName2 || null,
               taxId,
+              documentType,
+              dv,
               profession,
               body.email || null,
               body.phone || null,
@@ -3054,7 +3081,8 @@ export default {
               p.firstName2 AS p_firstName2,
               p.lastName AS p_lastName,
               p.lastName2 AS p_lastName2,
-              p.taxId AS p_taxId
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
             WHERE e.id = ?1
@@ -3242,7 +3270,9 @@ export default {
             };
 
             const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
-              typeDocument: '13',
+              typeDocument:
+                (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
+                '13',
               concept: settlementResult.retentionConcept,
             };
 

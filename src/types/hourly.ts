@@ -25,6 +25,13 @@ export type VinculationType =
 
 export type RetentionConcept = 'SERVICIOS' | 'HONORARIOS';
 
+/**
+ * 13 = Cédula de ciudadanía, 31 = NIT, 22 = Cédula de extranjería,
+ * 41 = Pasaporte, 42 = Documento extranjero. Sólo NIT lleva dígito
+ * de verificación (dv).
+ */
+export type PersonDocumentType = '13' | '31' | '22' | '41' | '42';
+
 // ============================================================
 // ENTIDADES (formas normalizadas, tal como las devuelve la API)
 // ============================================================
@@ -36,6 +43,9 @@ export interface Professional {
   lastName: string;
   lastName2?: string | null;
   taxId: string;
+  documentType: PersonDocumentType;
+  /** Sólo aplica (y sólo se persiste) cuando documentType = '31' (NIT). */
+  dv?: string | null;
   profession: string;
   email?: string | null;
   phone?: string | null;
@@ -213,11 +223,7 @@ export interface DocumentoSoportePayerInfo {
 }
 
 export interface DocumentoSoporteBeneficiaryInfo {
-  /**
-   * 13 = Cédula de ciudadanía, 31 = NIT, 22 = Cédula de extranjería,
-   * 41 = Pasaporte, 42 = Documento extranjero.
-   */
-  typeDocument: '13' | '31' | '22' | '41' | '42';
+  typeDocument: PersonDocumentType;
   concept: RetentionConcept;
 }
 
