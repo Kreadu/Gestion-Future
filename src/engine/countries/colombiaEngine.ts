@@ -25,6 +25,8 @@ import { CONSTANTS_2026 } from './constants2026';
 // existentes de `CONSTANTS_2026` desde este módulo.
 export { CONSTANTS_2026 };
 
+export class ColombiaPayrollEngineError extends Error {}
+
 // ============================================================
 // MOTOR
 // ============================================================
@@ -71,6 +73,47 @@ export class ColombiaPayrollEngine {
   }
 
   // ==========================================================
+  // RETENCIÓN EN LA FUENTE (procedimiento 1, simplificado)
+  //
+  // IMPORTANTE: depuración simplificada — renta exenta general al
+  // 25% sin el tope real de 240 UVT/mes, y sin modelar deducciones
+  // por dependientes, intereses de vivienda ni aportes voluntarios.
+  // Validar con el contador antes de usar para retenciones reales.
+  // ==========================================================
+
+  private static calculateRetentionEmployee(
+    taxableIncome: number,
+    mandatoryDeductions: number
+  ): number {
+
+    const ingresoGravable =
+      Math.max(taxableIncome - mandatoryDeductions, 0);
+
+    const rentaExenta =
+      ingresoGravable *
+      CONSTANTS_2026.RETENCION_EMPLEADOS_RENTA_EXENTA_PCT;
+
+    const baseGravable =
+      Math.max(ingresoGravable - rentaExenta, 0);
+
+    const baseGravableUVT =
+      baseGravable / CONSTANTS_2026.UVT;
+
+    const table = CONSTANTS_2026.RETENCION_EMPLEADOS_TABLE;
+
+    const tramo =
+      table.find(t => baseGravableUVT <= t.hastaUVT) ??
+      table[table.length - 1];
+
+    const retentionUVT =
+      (baseGravableUVT - tramo.desdeUVT) *
+      tramo.tarifa +
+      tramo.uvtBase;
+
+    return Math.max(retentionUVT * CONSTANTS_2026.UVT, 0);
+  }
+
+  // ==========================================================
   // CÁLCULO PRINCIPAL
   // ==========================================================
 
@@ -94,6 +137,23 @@ export class ColombiaPayrollEngine {
       daysWorkedRaw <= 30
         ? Math.floor(daysWorkedRaw)
         : 30;
+
+    const isIntegralSalary =
+      input.isIntegralSalary ?? false;
+
+    if (isIntegralSalary) {
+      const minIntegralSalary =
+        CONSTANTS_2026.SMMLV *
+        CONSTANTS_2026.INTEGRAL_SALARY_MIN_SMMLV_MULTIPLE;
+
+      if (baseSalary < minIntegralSalary) {
+        throw new ColombiaPayrollEngineError(
+          `El salario integral debe ser de al menos ` +
+          `${CONSTANTS_2026.INTEGRAL_SALARY_MIN_SMMLV_MULTIPLE} SMMLV ` +
+          `($${minIntegralSalary.toLocaleString('es-CO')}).`
+        );
+      }
+    }
 
     // --------------------------------------------------------
     // SALARIO BÁSICO
@@ -155,6 +215,19 @@ export class ColombiaPayrollEngine {
       ) || 0;
 
     // --------------------------------------------------------
+    // HORAS DOMINICALES/FESTIVAS (Ley 2466 de 2025)
+    //
+    // No se modela la combinación nocturna + dominical/festiva
+    // simultáneas: quien liquide debe ajustar manualmente ese caso.
+    // --------------------------------------------------------
+
+    const horasDominicalFestivo =
+      Number(input.horasDominicalFestivo ?? 0) || 0;
+
+    const horasExtraDominicalFestivo =
+      Number(input.horasExtraDominicalFestivo ?? 0) || 0;
+
+    // --------------------------------------------------------
     // VALOR HORAS EXTRAS
     // --------------------------------------------------------
 
@@ -173,6 +246,27 @@ export class ColombiaPayrollEngine {
       hourlyRate *
       CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
 
+    // Horas ordinarias en domingo/festivo: sólo el recargo (90%).
+    const dominicalFestivoOrdinarioValue =
+      horasDominicalFestivo *
+      hourlyRate *
+      CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE;
+
+    // Horas extra en domingo/festivo: los recargos se suman
+    // (25% de extra diurna + 90% dominical/festivo), no se
+    // multiplican — así lo trata el Ministerio de Trabajo.
+    const dominicalFestivoExtraValue =
+      horasExtraDominicalFestivo *
+      hourlyRate *
+      (
+        (CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER - 1) +
+        CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE
+      );
+
+    const dominicalFestivoValue =
+      dominicalFestivoOrdinarioValue +
+      dominicalFestivoExtraValue;
+
     const overtimeTotal =
       extraDiurnaValue +
       extraNocturnaValue +
@@ -185,17 +279,41 @@ export class ColombiaPayrollEngine {
     const grossEarnings =
       baseSalaryEarned +
       earnedAuxTransporte +
-      overtimeTotal;
+      overtimeTotal +
+      dominicalFestivoValue;
 
     // --------------------------------------------------------
     // IBC
     //
-    // El auxilio de transporte no hace parte del IBC.
+    // El auxilio de transporte no hace parte del IBC. Para salario
+    // integral, el IBC es el 70% del devengado (art. 132 CST). Tope
+    // de 25 SMMLV en cualquier caso; piso de 1 SMMLV sólo si el
+    // período es completo (30 días) y no es salario integral — con
+    // novedades el IBC proporcional puede ser legítimamente menor.
     // --------------------------------------------------------
 
-    const ibcSecuritySocial =
+    let ibcUncapped =
       baseSalaryEarned +
-      overtimeTotal;
+      overtimeTotal +
+      dominicalFestivoValue;
+
+    if (isIntegralSalary) {
+      ibcUncapped =
+        ibcUncapped *
+        CONSTANTS_2026.INTEGRAL_SALARY_IBC_FACTOR;
+    }
+
+    const ibcMax =
+      CONSTANTS_2026.SMMLV *
+      CONSTANTS_2026.IBC_MAX_SMMLV_MULTIPLE;
+
+    let ibcSecuritySocial =
+      Math.min(ibcUncapped, ibcMax);
+
+    if (daysWorked === 30 && !isIntegralSalary) {
+      ibcSecuritySocial =
+        Math.max(ibcSecuritySocial, CONSTANTS_2026.SMMLV);
+    }
 
     // --------------------------------------------------------
     // DEDUCCIONES TRABAJADOR
@@ -218,10 +336,22 @@ export class ColombiaPayrollEngine {
       ibcSecuritySocial *
       fspPct;
 
-    const totalDeductions =
+    const mandatoryDeductions =
       health4pct +
       pension4pct +
       fspValue;
+
+    // El auxilio de transporte no es ingreso gravable para efectos
+    // de retención en la fuente.
+    const retencionFuente =
+      this.calculateRetentionEmployee(
+        grossEarnings - earnedAuxTransporte,
+        mandatoryDeductions
+      );
+
+    const totalDeductions =
+      mandatoryDeductions +
+      retencionFuente;
 
     const netPay =
       grossEarnings -
@@ -279,23 +409,30 @@ export class ColombiaPayrollEngine {
 
     // --------------------------------------------------------
     // PROVISIONES
+    //
+    // El salario integral ya incluye el factor prestacional (30%):
+    // no se provisionan cesantías/prima/vacaciones aparte.
     // --------------------------------------------------------
 
     const cesantias =
-      grossEarnings *
-      CONSTANTS_2026.CESANTIAS_RATE;
+      isIntegralSalary
+        ? 0
+        : grossEarnings * CONSTANTS_2026.CESANTIAS_RATE;
 
     const interesesCesantias =
-      cesantias *
-      CONSTANTS_2026.INTERESES_CESANTIAS_RATE;
+      isIntegralSalary
+        ? 0
+        : cesantias * CONSTANTS_2026.INTERESES_CESANTIAS_RATE;
 
     const primaServicios =
-      grossEarnings *
-      CONSTANTS_2026.PRIMA_RATE;
+      isIntegralSalary
+        ? 0
+        : grossEarnings * CONSTANTS_2026.PRIMA_RATE;
 
     const vacaciones =
-      ibcSecuritySocial *
-      CONSTANTS_2026.VACACIONES_RATE;
+      isIntegralSalary
+        ? 0
+        : ibcSecuritySocial * CONSTANTS_2026.VACACIONES_RATE;
 
     const totalProvisions =
       cesantias +
@@ -330,6 +467,22 @@ export class ColombiaPayrollEngine {
           Boolean(value)
       )
       .join(' ');
+
+    // --------------------------------------------------------
+    // ADVERTENCIAS DE CUMPLIMIENTO
+    // --------------------------------------------------------
+
+    const complianceNotes: string[] = [];
+
+    if (retencionFuente > 0) {
+      complianceNotes.push(
+        'Retención en la fuente calculada con una depuración ' +
+        'simplificada (25% de renta exenta general, sin el tope ' +
+        'real de 240 UVT/mes, sin deducciones por dependientes ni ' +
+        'intereses de vivienda). Valídala con tu contador antes de ' +
+        'aplicarla en una nómina real.'
+      );
+    }
 
     // --------------------------------------------------------
     // RESULTADO
@@ -384,6 +537,9 @@ export class ColombiaPayrollEngine {
       recargoNocturnoValue:
         round(recargoNocturnoValue),
 
+      dominicalFestivoValue:
+        round(dominicalFestivoValue),
+
       overtimeTotal:
         round(overtimeTotal),
 
@@ -412,6 +568,9 @@ export class ColombiaPayrollEngine {
         fsp:
           round(fspValue),
 
+        retencionFuente:
+          round(retencionFuente),
+
         totalDeductions:
           round(totalDeductions),
       },
@@ -420,6 +579,8 @@ export class ColombiaPayrollEngine {
 
       netPay:
         round(netPay),
+
+      complianceNotes,
 
       // EMPLEADOR
 
