@@ -270,3 +270,39 @@ describe('Exoneración art. 114-1 ET', () => {
     expect(result.employerContributions.icbf3pct).toBeGreaterThan(0);
   });
 });
+
+describe('Provisión de vacaciones (art. 192 CST)', () => {
+  test('excluye horas extra y trabajo dominical/festivo de la base', () => {
+    const baseSalary = 2_000_000;
+
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({
+        baseSalaryMonthly: baseSalary,
+        extraDiurna: 4,
+        horasDominicalFestivo: 8,
+        horasExtraDominicalFestivo: 2,
+      })
+    );
+
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      baseSalary * CONSTANTS_2026.VACACIONES_RATE,
+      2
+    );
+  });
+
+  test('incluye el recargo nocturno ordinario', () => {
+    const baseSalary = 2_000_000;
+    const hourlyRate = baseSalary / CONSTANTS_2026.MONTHLY_ORDINARY_HOURS;
+
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({ baseSalaryMonthly: baseSalary, recargoNocturno: 10 })
+    );
+
+    const recargo = 10 * hourlyRate * CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
+
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      (baseSalary + recargo) * CONSTANTS_2026.VACACIONES_RATE,
+      2
+    );
+  });
+});

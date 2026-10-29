@@ -571,10 +571,18 @@ export class ColombiaPayrollEngine {
         ? 0
         : grossEarnings * CONSTANTS_2026.PRIMA_RATE;
 
+    // Las vacaciones se liquidan sobre el salario ordinario: se
+    // excluyen las horas extra y el trabajo en domingo/festivo
+    // (art. 192 CST). Los días de incapacidad/licencia siguen
+    // causando vacaciones sobre el salario, no sobre lo que paga la EPS.
+    const vacationBase =
+      (baseSalary / 30) * (daysWorked + totalLeaveDays) +
+      recargoNocturnoValue;
+
     const vacaciones =
       isIntegralSalary
         ? 0
-        : ibcSecuritySocial * CONSTANTS_2026.VACACIONES_RATE;
+        : vacationBase * CONSTANTS_2026.VACACIONES_RATE;
 
     const totalProvisions =
       cesantias +
