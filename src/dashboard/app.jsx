@@ -681,7 +681,10 @@ function App({ me, onSignOut }) {
       legalRepresentative: '',
       taxRegime: 'ORDINARIO',
       economicActivity: '',
-      isExempt114_1: false
+      isExempt114_1: false,
+      arlCode: '',
+      divipolaCode: '',
+      arlActivityCode: ''
     });
 
     setTermsAccepted(false);
@@ -709,7 +712,10 @@ function App({ me, onSignOut }) {
       legalRepresentative: selectedCompany.legalRepresentative || '',
       taxRegime: selectedCompany.taxRegime || 'ORDINARIO',
       economicActivity: selectedCompany.economicActivity || '',
-      isExempt114_1: !!selectedCompany.isExempt114_1
+      isExempt114_1: !!selectedCompany.isExempt114_1,
+      arlCode: selectedCompany.arlCode || '',
+      divipolaCode: selectedCompany.divipolaCode || '',
+      arlActivityCode: selectedCompany.arlActivityCode || ''
     });
 
     setCompanyModal(true);
@@ -835,7 +841,12 @@ function App({ me, onSignOut }) {
       arlRiskClass: '1',
       contractEndDate: '',
       vacationDaysTakenBefore: 0,
-      isIntegralSalary: false
+      isIntegralSalary: false,
+      documentType: 'CC',
+      epsCode: '',
+      afpCode: '',
+      ccfCode: '',
+      divipolaCode: ''
     });
 
     setEmployeeModal(true);
@@ -867,7 +878,12 @@ function App({ me, onSignOut }) {
       arlRiskClass: String(employee.arlRiskClass || 1),
       contractEndDate: employee.contractEndDate || '',
       vacationDaysTakenBefore: employee.vacationDaysTakenBefore || 0,
-      isIntegralSalary: !!employee.isIntegralSalary
+      isIntegralSalary: !!employee.isIntegralSalary,
+      documentType: employee.documentType || 'CC',
+      epsCode: employee.epsCode || '',
+      afpCode: employee.afpCode || '',
+      ccfCode: employee.ccfCode || '',
+      divipolaCode: employee.divipolaCode || ''
     });
 
     setEmployeeModal(true);
@@ -3273,6 +3289,8 @@ function App({ me, onSignOut }) {
                     📊 Resumen del periodo
                   </button>
                 )}
+
+                {selectedPeriod && <PilaButton period={selectedPeriod} />}
               </div>
 
               {disbursementResult && (
@@ -4019,6 +4037,8 @@ function App({ me, onSignOut }) {
                     }}
                   />
                 </div>
+
+                <PilaCompanyFields form={companyForm} setForm={setCompanyForm} />
               </div>
             </div>
 
@@ -4442,6 +4462,8 @@ function App({ me, onSignOut }) {
                     <span>Salario integral (mínimo 13 SMMLV): sin prima ni cesantías aparte</span>
                   </label>
                 </div>
+
+                <PilaEmployeeFields form={employeeForm} setForm={setEmployeeForm} />
 
                 <div className="form-group">
                   <label>Banco</label>

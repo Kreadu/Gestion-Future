@@ -437,6 +437,10 @@ export default {
               economicActivity,
               logo,
               isExempt114_1,
+              arlCode,
+              pilaContributorType,
+              divipolaCode,
+              arlActivityCode,
               active,
               createdAt
             FROM companies
@@ -819,6 +823,16 @@ export default {
               bankAccountType,
               bankAccountNumber,
               arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
+              documentType,
+              pilaContributorType,
+              pilaContributorSubtype,
+              epsCode,
+              afpCode,
+              ccfCode,
+              divipolaCode,
               active,
               terminationDate,
               createdAt

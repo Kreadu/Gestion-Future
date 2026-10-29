@@ -86,6 +86,7 @@ try {
     await fill(m, 'Fecha ingreso', '2025-02-01');
     await fill(m, 'Banco', 'Bancolombia');
     await fill(m, 'Número de cuenta', '12345678901');
+    await fill(m, 'Código fondo de pensiones', '230301');
     await m.getByRole('button', { name: 'Guardar empleado' }).click();
     await expectText(page, /Ana.*Gómez/);
   });
@@ -139,6 +140,18 @@ try {
   await step('Resumen del periodo', async () => {
     await page.getByRole('button', { name: /Resumen del periodo/ }).click();
     await expectText(page, 'TOTAL (1)');
+    await page.keyboard.press('Escape');
+  });
+
+  await step('Archivo PILA: avisos de datos faltantes y descarga', async () => {
+    await page.getByRole('button', { name: /Archivo PILA/ }).click();
+    const m = modal(page);
+    await expectText(m, 'Total a pagar');
+    await expectText(m, 'falta el código de la EPS');
+    const download = page.waitForEvent('download');
+    await m.getByRole('button', { name: /Descargar archivo PILA/ }).click();
+    const name = (await download).suggestedFilename();
+    if (name !== 'PILA_900123456_2026-10.txt') throw new Error('Descarga inesperada: ' + name);
     await page.keyboard.press('Escape');
   });
 

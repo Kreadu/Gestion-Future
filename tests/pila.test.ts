@@ -115,7 +115,7 @@ describe('GET /api/payroll-periods/:id/pila', () => {
 
     const { fileName, content, warnings, totals } = res.json.data;
     expect(fileName).toBe('PILA_900123456_2026-10.txt');
-    expect(warnings).toEqual([]);
+    expect(warnings).toEqual(['El periodo sigue en borrador: ciérralo antes de pagar la planilla para que no cambie.']);
     expect(totals.total).toBeGreaterThan(0);
 
     const lines = content.split('\r\n');
@@ -183,5 +183,19 @@ describe('GET /api/payroll-periods/:id/pila', () => {
 
     const res = await call(SUPER, 'GET', `/api/payroll-periods/${period.json.data.id}/pila`);
     expect(res.status).toBe(400);
+  });
+});
+
+describe('Listado de empleados y empresas', () => {
+  test('devuelve todo lo editable, para que editar no borre datos', async () => {
+    const company = await createCompany({ arlCode: '14-23', divipolaCode: '19001', arlActivityCode: '1561101' });
+    await createEmployee(company.id, { ...AFFILIATION, divipolaCode: '19001', isIntegralSalary: true, salary: 20_000_000 });
+
+    const employees = (await call(SUPER, 'GET', `/api/employees?companyId=${company.id}`)).json.data;
+    expect(employees[0]).toMatchObject({ ...AFFILIATION, divipolaCode: '19001', isIntegralSalary: true });
+
+    const companies = (await call(SUPER, 'GET', '/api/companies')).json.data;
+    expect(companies.find((c: any) => c.id === company.id))
+      .toMatchObject({ arlCode: '14-23', divipolaCode: '19001', arlActivityCode: '1561101' });
   });
 });
