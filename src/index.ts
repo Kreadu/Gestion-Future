@@ -2474,6 +2474,7 @@ export default {
 
           employeesMap.set(String(row.employeeId), {
             bankCode: row.bankName || 'N/A',
+            bankAccountType: row.bankAccountType || 'N/A',
             bankAccount: row.bankAccountNumber || 'N/A',
             taxId: row.taxId || 'N/A',
           });

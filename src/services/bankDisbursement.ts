@@ -2,8 +2,24 @@ import type { ColombiaPayrollResult } from '../types/payroll';
 
 export interface EmployeeBankDetails {
   bankCode?: string;
+  bankAccountType?: string;
   bankAccount?: string;
   taxId?: string;
+}
+
+/**
+ * Celda CSV entre comillas. Duplica las comillas internas y antepone
+ * un apóstrofo a lo que empieza por = + - @ para que Excel no lo
+ * interprete como fórmula (inyección CSV).
+ */
+function cell(value: unknown): string {
+  let text = String(value ?? '');
+
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = "'" + text;
+  }
+
+  return '"' + text.replace(/"/g, '""') + '"';
 }
 
 export class BankDisbursementService {
@@ -14,16 +30,16 @@ export class BankDisbursementService {
     payrolls: ColombiaPayrollResult[],
     employeesMap: Map<string, EmployeeBankDetails>
   ): string {
-    const headers = ['ID_EMPLEADO', 'NOMBRE', 'BANCO', 'CUENTA', 'RFC_NIF', 'MONTO_NETO_A_PAGAR'];
-    
+    const headers = ['DOCUMENTO', 'NOMBRE', 'BANCO', 'TIPO_CUENTA', 'NUMERO_CUENTA', 'VALOR_NETO'];
+
     const rows = payrolls.map(p => {
       const emp = employeesMap.get(p.employeeId);
       return [
-        `"${p.employeeId}"`,
-        `"${p.employeeName}"`,
-        `"${emp?.bankCode || 'N/A'}"`,
-        `"${emp?.bankAccount || 'N/A'}"`,
-        `"${emp?.taxId || p.taxId || 'N/A'}"`,
+        cell(emp?.taxId || p.taxId || 'N/A'),
+        cell(p.employeeName),
+        cell(emp?.bankCode || 'N/A'),
+        cell(emp?.bankAccountType || 'N/A'),
+        cell(emp?.bankAccount || 'N/A'),
         p.netPay.toFixed(2)
       ].join(',');
     });
