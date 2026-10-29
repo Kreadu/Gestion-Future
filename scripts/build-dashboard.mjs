@@ -1,5 +1,5 @@
 /**
- * Compila src/dashboard/app.jsx a JavaScript plano y lo deja en
+ * Compila src/dashboard/app.jsx (+ components/*.jsx) a JavaScript plano y lo deja en
  * src/dashboard/app.generated.ts (archivo generado, no versionado).
  *
  * Antes el navegador descargaba Babel (~3 MB) y compilaba el JSX en
@@ -8,12 +8,23 @@
  */
 
 import { transform } from 'esbuild';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'dashboard');
-const source = readFileSync(join(dir, 'app.jsx'), 'utf8');
+
+// app.jsx + cada pantalla de src/dashboard/components/*.jsx, en un solo
+// script: comparten los mismos globales (React, api, formatCOP...).
+const componentsDir = join(dir, 'components');
+const components = existsSync(componentsDir)
+  ? readdirSync(componentsDir).filter(f => f.endsWith('.jsx')).sort()
+  : [];
+
+const source = [
+  readFileSync(join(dir, 'app.jsx'), 'utf8'),
+  ...components.map(f => `\n// ---- components/${f} ----\n` + readFileSync(join(componentsDir, f), 'utf8')),
+].join('\n');
 
 const { code } = await transform(source, {
   loader: 'jsx',
