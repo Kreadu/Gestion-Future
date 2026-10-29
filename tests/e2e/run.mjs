@@ -200,6 +200,16 @@ try {
     await expectText(page, '$ 1.504.000');
   });
 
+  await step('Usuarios: dar y quitar acceso a un administrador de empresa', async () => {
+    await page.getByRole('button', { name: /Usuarios/ }).click();
+    await page.locator('#user-email').fill('jefe@espiga.co');
+    await page.getByRole('button', { name: '+ Dar acceso' }).click();
+    await expectText(page, 'Acceso creado.');
+    await expectText(page, 'jefe@espiga.co');
+    await page.getByRole('button', { name: 'Quitar acceso' }).click();
+    await expectText(page, 'Acceso retirado.');
+  });
+
   await step('Sin errores de consola, JavaScript ni HTTP inesperados', async () => {
     const unexpected = problems.filter(p => !expectedHttp.some(re => re.test(p)));
     if (unexpected.length) throw new Error(unexpected.join(' || '));

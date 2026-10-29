@@ -3842,7 +3842,11 @@ export default {
               AND (?1 IS NULL OR companyId = ?1)
             ORDER BY email ASC
           `)
-          .bind(user.role === 'SUPER_ADMIN' ? null : user.companyId)
+          .bind(
+            user.role === 'SUPER_ADMIN'
+              ? url.searchParams.get('companyId') || null
+              : user.companyId
+          )
           .all();
 
         return sendJson({
@@ -3944,27 +3948,36 @@ export default {
           }
         }
 
-        const id = `USR-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
+        // Un EMPLOYEE entra al portal del empleado: debe quedar enlazado
+        // a un empleado de su misma empresa, o vería datos ajenos.
+        const employeeId =
+          role === 'EMPLOYEE' ? String(body.employeeId || '').trim() : null;
 
-        try {
-          await env.DB
-            .prepare(`
-              INSERT INTO users (
-                id, email, role, companyId, employeeId, active, createdAt
-              )
-              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-            `)
-            .bind(
-              id,
-              email,
-              role,
-              companyId,
-              body.employeeId || null,
-              createdAt
-            )
-            .run();
-        } catch {
+        if (role === 'EMPLOYEE') {
+          const employee = employeeId
+            ? await env.DB
+                .prepare(`SELECT id FROM employees WHERE id = ?1 AND companyId = ?2`)
+                .bind(employeeId, companyId)
+                .first()
+            : null;
+
+          if (!employee) {
+            return sendJson(
+              {
+                success: false,
+                error: 'Selecciona un empleado de esta empresa para el usuario.',
+              },
+              400
+            );
+          }
+        }
+
+        const existingUser = await env.DB
+          .prepare(`SELECT id, active FROM users WHERE email = ?1`)
+          .bind(email)
+          .first<{ id: string; active: number }>();
+
+        if (existingUser && existingUser.active) {
           return sendJson(
             {
               success: false,
@@ -3972,6 +3985,32 @@ export default {
             },
             409
           );
+        }
+
+        // Un correo desactivado antes se reactiva con el nuevo rol y
+        // empresa (el correo es único en la tabla).
+        const id = existingUser ? existingUser.id : `USR-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        if (existingUser) {
+          await env.DB
+            .prepare(`
+              UPDATE users
+              SET role = ?2, companyId = ?3, employeeId = ?4, active = 1
+              WHERE id = ?1
+            `)
+            .bind(id, role, companyId, employeeId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              INSERT INTO users (
+                id, email, role, companyId, employeeId, active, createdAt
+              )
+              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+            `)
+            .bind(id, email, role, companyId, employeeId, createdAt)
+            .run();
         }
 
         await audit(env, user, 'CREATE', 'user', id, companyId);
@@ -4001,6 +4040,16 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
 
         const targetUserId = decodeURIComponent(userMatch[1]);
+
+        if (targetUserId === user.id) {
+          return sendJson(
+            {
+              success: false,
+              error: 'No puedes quitarte el acceso a ti mismo.',
+            },
+            400
+          );
+        }
 
         const existing = await env.DB
           .prepare(`

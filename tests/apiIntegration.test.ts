@@ -9,21 +9,18 @@
  */
 
 import { describe, test, expect, jest, beforeEach } from '@jest/globals';
-// El proyecto compila con los tipos de Workers, no los de Node: se
-// declaran aquí sólo los módulos de Node que usa este archivo.
-declare const require: (id: string) => any;
-declare const __dirname: string;
-
-const { readdirSync, readFileSync } = require('node:fs');
-const { join } = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
-
-type DatabaseSync = any;
-
-import worker from '../src/index';
 import { verifyFirebaseIdToken } from '../src/auth/firebaseToken';
 import { LEGAL_VERSION } from '../src/legal';
 import { CONSTANTS_2026 } from '../src/engine/countries/constants2026';
+import {
+  SUPER,
+  TENANT_A,
+  db,
+  resetDb,
+  call,
+  createCompany,
+  createEmployee,
+} from './helpers/api';
 
 jest.mock('../src/auth/firebaseToken');
 
@@ -33,134 +30,7 @@ jest.mocked(verifyFirebaseIdToken).mockImplementation(async token => ({
   emailVerified: true,
 }));
 
-const SUPER = 'super@kreadu.com';
-const TENANT_A = 'admin@empresa-a.com';
-
-/**
- * Adaptador mínimo de la API de D1 sobre node:sqlite. D1 usa
- * parámetros numerados (?1, ?2...), que SQLite entiende de forma
- * nativa al enlazarlos por posición.
- */
-function createD1(db: DatabaseSync) {
-  const toSqlite = (value: unknown) => {
-    if (value === undefined) return null;
-    if (typeof value === 'boolean') return value ? 1 : 0;
-    return value as any;
-  };
-
-  const statement = (sql: string, args: unknown[] = []) => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    async first<T>(): Promise<T | null> {
-      const row = db.prepare(sql).get(...args.map(toSqlite));
-      return (row as T) ?? null;
-    },
-    async all<T>(): Promise<{ results: T[]; success: true }> {
-      const rows = db.prepare(sql).all(...args.map(toSqlite));
-      return { results: rows as T[], success: true };
-    },
-    async run() {
-      const info = db.prepare(sql).run(...args.map(toSqlite));
-      return { success: true, meta: { changes: Number(info.changes) } };
-    },
-  });
-
-  return { prepare: (sql: string) => statement(sql) };
-}
-
-function freshEnv() {
-  const db = new DatabaseSync(':memory:');
-  const dir = join(__dirname, '..', 'migrations');
-
-  for (const file of readdirSync(dir).filter((f: string) => f.endsWith('.sql')).sort()) {
-    db.exec(readFileSync(join(dir, file), 'utf8'));
-  }
-
-  db.prepare(
-    `INSERT INTO users (id, email, role, active, createdAt)
-     VALUES ('USR-super', ?, 'SUPER_ADMIN', 1, '2026-01-01')`
-  ).run(SUPER);
-
-  return {
-    db,
-    env: {
-      DB: createD1(db) as unknown as D1Database,
-      FIREBASE_PROJECT_ID: 'test-project',
-      FIREBASE_API_KEY: 'test-key',
-      FIREBASE_AUTH_DOMAIN: 'test.firebaseapp.com',
-    },
-  };
-}
-
-let db: DatabaseSync;
-let env: ReturnType<typeof freshEnv>['env'];
-
-beforeEach(() => {
-  ({ db, env } = freshEnv());
-});
-
-async function call(
-  as: string | null,
-  method: string,
-  path: string,
-  body?: unknown
-): Promise<{ status: number; json: any }> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'CF-Connecting-IP': '203.0.113.7',
-  };
-
-  if (as) headers.Authorization = `Bearer ${as}`;
-
-  const response = await worker.fetch(
-    new Request(`https://test.local${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }),
-    env as any
-  );
-
-  const text = await response.text();
-  let json: any = text;
-
-  try {
-    json = JSON.parse(text);
-  } catch {
-    // HTML (dashboard, /legal)
-  }
-
-  return { status: response.status, json };
-}
-
-async function createCompany(extra: Record<string, unknown> = {}) {
-  const res = await call(SUPER, 'POST', '/api/companies', {
-    name: 'Empresa A S.A.S.',
-    nit: '900123456',
-    dv: '7',
-    acceptedTermsVersion: LEGAL_VERSION,
-    ...extra,
-  });
-
-  expect(res.status).toBe(201);
-  return res.json.data;
-}
-
-async function createEmployee(companyId: string, extra: Record<string, unknown> = {}) {
-  const res = await call(SUPER, 'POST', '/api/employees', {
-    companyId,
-    firstName: 'Ana',
-    lastName: 'Gómez',
-    taxId: '1061000111',
-    salary: 2_000_000,
-    bankName: 'Bancolombia',
-    bankAccountType: 'AHORROS',
-    bankAccountNumber: '12345678901',
-    ...extra,
-  });
-
-  expect(res.status).toBe(201);
-  return res.json.data;
-}
+beforeEach(resetDb);
 
 describe('Páginas públicas', () => {
   test('/legal se sirve sin autenticación e incluye ambos documentos', async () => {
