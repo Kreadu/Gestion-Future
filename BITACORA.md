@@ -12,7 +12,8 @@ Este archivo resume el estado comprobable del repositorio para que una persona u
 
 - El portal del empleado, la importación Excel/CSV y la bitácora están en GitHub en `feat/employee-leaves`, hasta `8c5104b` (confirmación del `git push` del 2026-10-29).
 - La importación se implementó en `dd69b6c` (`feat: importar empleados desde Excel`).
-- Hay cambios locales de cobertura de importación aún sin commit: `tests/employeeImport.test.ts`, un caso XLSX en `tests/e2e/run.mjs` y su fixture `tests/e2e/fixtures/importar-empleados.xlsx`.
+- La cobertura de importación se añadió en `de4e613` (`test: cubrir importación de empleados`); este commit y el cambio de CI todavía son locales y no están en GitHub.
+- El árbol de trabajo tiene cambios locales en `.github/workflows/test.yml` y `BITACORA.md` para que el push de esta rama ejecute CI.
 
 ## Importación implementada localmente
 
@@ -31,15 +32,16 @@ Este archivo resume el estado comprobable del repositorio para que una persona u
 - `npx jest --runInBand --roots tests --watchman=false --forceExit`: 20 suites y 208 pruebas pasaron.
 - `tests/employeeImport.test.ts`: 8 pruebas de importación pasaron; cubren validación, serial de Excel, duplicados, autorización y límite de filas.
 - El fixture XLSX tiene ZIP/XML válidos y `node --check tests/e2e/run.mjs` pasó.
+- El workflow YAML pasó validación sintáctica.
 - Firefox está instalado para Playwright 1.56.1 y también hay `/usr/bin/firefox`.
 - `npm run e2e` no llegó a abrir Firefox: el sandbox rechazó el `listen()` del servidor E2E con `EPERM` tanto en `0.0.0.0` como en `127.0.0.1`. No se observó un fallo de la aplicación; este entorno no permite el puerto local que necesita la suite.
 - Se añadió a `tests/e2e/run.mjs` un caso que sube un XLSX, revisa la vista previa e importa una fila; todavía no se pudo ejecutar en Firefox en este sandbox.
-- `.github/workflows/test.yml` corre Jest y Firefox en `pull_request` y en `push` a `main`; un push a `feat/employee-leaves` por sí solo no dispara CI.
+- `.github/workflows/test.yml` corre Jest y Firefox en `pull_request` y en `push` a `main` y `feat/employee-leaves`.
 
 ## Próximos pasos
 
-1. **Ejecutar E2E en Firefox** con acceso a un puerto local; el sandbox actual impide iniciar el servidor. El caso de importación XLSX está añadido pero sin ejecución real.
-2. **Guardar y publicar la nueva cobertura local** (`tests/employeeImport.test.ts`, `tests/e2e/run.mjs`, fixture XLSX y esta bitácora). El push de feature no dispara CI; abrir un PR hacia `main` ejecutaría el workflow existente.
+1. **Publicar el commit local de pruebas y el cambio de CI**. El push a `feat/employee-leaves` ejecutará el workflow en GitHub, incluido Firefox, en un runner que permite abrir el servidor local.
+2. **Revisar el resultado de GitHub Actions** después del push; el caso XLSX está añadido pero todavía no se ha ejecutado en Firefox.
 3. **Revisar el texto vigente de los issues #18 y #11** antes de declarar todo el encargo terminado. No se pudo consultar su contenido en esta sesión; la rama `wip/importar-excel` dice que el alcance completo está en el issue #18. Enlaces: <https://github.com/Kreadu/Gestion-Future/issues/18> y <https://github.com/Kreadu/Gestion-Future/issues/11>.
 4. **Revisar, sin integrar a ciegas, los otros avances WIP locales** si los issues los confirman como trabajo pendiente:
    - `wip/dian-firma-envio` en `53f61bd`: avance parcial de canonicalización XML y dependencias para firma/envío DIAN; marcado como incompleto y sin probar.

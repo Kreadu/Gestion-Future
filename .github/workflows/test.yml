@@ -2,7 +2,7 @@ name: CI/CD Pipeline - Gestion-Future
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/employee-leaves" ]
   # Todos los PR, también los que apuntan a otra rama (PR apilados).
   pull_request:
 
