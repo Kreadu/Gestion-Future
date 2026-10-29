@@ -553,7 +553,7 @@ export class ColombiaPayrollEngine {
     // PROVISIONES
     //
     // El salario integral ya incluye el factor prestacional (30%):
-    // no se provisionan cesantías/prima/vacaciones aparte.
+    // no se provisionan cesantías/intereses/prima aparte.
     // --------------------------------------------------------
 
     const cesantias =
@@ -579,10 +579,10 @@ export class ColombiaPayrollEngine {
       (baseSalary / 30) * (daysWorked + totalLeaveDays) +
       recargoNocturnoValue;
 
+    // También con salario integral: incluye todas las prestaciones
+    // excepto las vacaciones (art. 132 CST).
     const vacaciones =
-      isIntegralSalary
-        ? 0
-        : vacationBase * CONSTANTS_2026.VACACIONES_RATE;
+      vacationBase * CONSTANTS_2026.VACACIONES_RATE;
 
     const totalProvisions =
       cesantias +

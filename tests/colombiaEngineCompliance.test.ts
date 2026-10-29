@@ -123,7 +123,7 @@ describe('Salario integral', () => {
     ).toThrow(ColombiaPayrollEngineError);
   });
 
-  test('con 13 SMMLV, el IBC es el 70% del devengado y las provisiones son 0', () => {
+  test('con 13 SMMLV, el IBC es el 70% del devengado y sólo se provisionan vacaciones', () => {
     const integralSalary = CONSTANTS_2026.SMMLV * 13;
 
     const result = ColombiaPayrollEngine.calculate(
@@ -141,8 +141,16 @@ describe('Salario integral', () => {
     expect(result.provisions.cesantias).toBe(0);
     expect(result.provisions.interesesCesantias).toBe(0);
     expect(result.provisions.primaServicios).toBe(0);
-    expect(result.provisions.vacaciones).toBe(0);
-    expect(result.provisions.totalProvisions).toBe(0);
+    // El salario integral incluye las prestaciones excepto las
+    // vacaciones (art. 132 CST).
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      integralSalary * CONSTANTS_2026.VACACIONES_RATE,
+      1
+    );
+    expect(result.provisions.totalProvisions).toBeCloseTo(
+      result.provisions.vacaciones,
+      2
+    );
   });
 });
 
