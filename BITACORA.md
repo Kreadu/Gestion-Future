@@ -10,11 +10,9 @@ Este archivo resume el estado comprobable del repositorio para que una persona u
 
 ## Estado actual
 
-- El portal del empleado y las funciones descritas en el commit `6041e1d` ya están en la rama remota `origin/feat/employee-leaves`.
-- Se implementó la importación de empleados desde Excel/CSV en el commit local `dd69b6c` (`feat: importar empleados desde Excel`).
-- El commit de importación todavía no está en GitHub. La rama local está dos commits por delante de `origin/feat/employee-leaves` después de añadir esta bitácora.
-- El último `git push` falló porque el entorno no pudo resolver `github.com`. Antes, `gh auth status` informó que el token guardado era inválido y `gh auth login` tampoco pudo conectarse.
-- El árbol de trabajo estaba limpio después del commit `dd69b6c`; esta bitácora es un cambio nuevo pendiente de guardar.
+- El portal del empleado, la importación Excel/CSV y la bitácora están en GitHub en `feat/employee-leaves`, hasta `8c5104b` (confirmación del `git push` del 2026-10-29).
+- La importación se implementó en `dd69b6c` (`feat: importar empleados desde Excel`).
+- Hay cambios locales de cobertura de importación aún sin commit: `tests/employeeImport.test.ts`, un caso XLSX en `tests/e2e/run.mjs` y su fixture `tests/e2e/fixtures/importar-empleados.xlsx`.
 
 ## Importación implementada localmente
 
@@ -29,24 +27,24 @@ Este archivo resume el estado comprobable del repositorio para que una persona u
 
 - `npm run build:dashboard`: pasó.
 - `npx tsc --noEmit`: pasó.
-- `git diff --check`: pasó para los cambios preparados antes del commit de la funcionalidad.
-- Jest no quedó verificado: `npm test -- --runInBand` avisó de un choque de nombres de paquete entre el repo y `.claude/worktrees/agent-a05c289b6f68f49a1/package.json` y no terminó. Un segundo intento con `npx jest --runInBand --roots tests --watchman=false` tampoco terminó; se interrumpió. No se debe reportar como suite aprobada.
-- No se añadieron pruebas automatizadas específicas de importación en el commit `dd69b6c`.
+- `git diff --check`: pasó en los cambios actuales.
+- `npx jest --runInBand --roots tests --watchman=false --forceExit`: 20 suites y 208 pruebas pasaron.
+- `tests/employeeImport.test.ts`: 8 pruebas de importación pasaron; cubren validación, serial de Excel, duplicados, autorización y límite de filas.
+- El fixture XLSX tiene ZIP/XML válidos y `node --check tests/e2e/run.mjs` pasó.
 - Firefox está instalado para Playwright 1.56.1 y también hay `/usr/bin/firefox`.
-- `npm run e2e` no llegó a abrir Firefox: el sandbox rechazó el `listen()` del servidor E2E con `EPERM` tanto en `0.0.0.0` como en `127.0.0.1`. No es un fallo observado de la aplicación; este entorno no permite abrir el puerto local que necesita esa suite.
-- La suite E2E existente recorre los flujos principales de RRHH, nómina, prestaciones, PILA, usuarios y portal del empleado, pero todavía no cubre la importación Excel/CSV nueva.
+- `npm run e2e` no llegó a abrir Firefox: el sandbox rechazó el `listen()` del servidor E2E con `EPERM` tanto en `0.0.0.0` como en `127.0.0.1`. No se observó un fallo de la aplicación; este entorno no permite el puerto local que necesita la suite.
+- Se añadió a `tests/e2e/run.mjs` un caso que sube un XLSX, revisa la vista previa e importa una fila; todavía no se pudo ejecutar en Firefox en este sandbox.
+- `.github/workflows/test.yml` corre Jest y Firefox en `pull_request` y en `push` a `main`; un push a `feat/employee-leaves` por sí solo no dispara CI.
 
 ## Próximos pasos
 
-1. **Publicar los commits locales** cuando haya conexión y autenticación válidas: `git push origin feat/employee-leaves`. Confirmar después que `origin/feat/employee-leaves` apunte al commit que incluye la funcionalidad y la bitácora.
-2. **Completar las pruebas de importación**: autorización por rol y empresa, duplicados (incluidos retirados), límite de 500, validación estricta, guardado de campos PILA y errores parciales; añadir el flujo a E2E con un archivo de muestra y verificar la vista previa en Firefox.
-3. **Ejecutar la suite de Firefox en un entorno que permita abrir un puerto TCP local**; el sandbox actual lo rechaza incluso en loopback.
-4. **Resolver el problema de Jest** excluyendo `.claude/worktrees` de su búsqueda (por ejemplo, con una configuración de `roots`/`testPathIgnorePatterns` revisada) y ejecutar la suite completa. No borrar esos worktrees como atajo: contienen ramas de trabajo locales.
-5. **Revisar el texto vigente de los issues #18 y #11** antes de declarar todo el encargo terminado. No se pudo consultar su contenido en esta sesión; la rama `wip/importar-excel` dice que el alcance completo está en el issue #18. Enlaces: <https://github.com/Kreadu/Gestion-Future/issues/18> y <https://github.com/Kreadu/Gestion-Future/issues/11>.
-6. **Revisar, sin integrar a ciegas, los otros avances WIP locales** si los issues los confirman como trabajo pendiente:
+1. **Ejecutar E2E en Firefox** con acceso a un puerto local; el sandbox actual impide iniciar el servidor. El caso de importación XLSX está añadido pero sin ejecución real.
+2. **Guardar y publicar la nueva cobertura local** (`tests/employeeImport.test.ts`, `tests/e2e/run.mjs`, fixture XLSX y esta bitácora). El push de feature no dispara CI; abrir un PR hacia `main` ejecutaría el workflow existente.
+3. **Revisar el texto vigente de los issues #18 y #11** antes de declarar todo el encargo terminado. No se pudo consultar su contenido en esta sesión; la rama `wip/importar-excel` dice que el alcance completo está en el issue #18. Enlaces: <https://github.com/Kreadu/Gestion-Future/issues/18> y <https://github.com/Kreadu/Gestion-Future/issues/11>.
+4. **Revisar, sin integrar a ciegas, los otros avances WIP locales** si los issues los confirman como trabajo pendiente:
    - `wip/dian-firma-envio` en `53f61bd`: avance parcial de canonicalización XML y dependencias para firma/envío DIAN; marcado como incompleto y sin probar.
    - `wip/logos-accesibilidad` en `4dcaec0`: avance parcial en logos/accesibilidad, con cambios de API, migración `0012_company_logos.sql` y pruebas; marcado como incompleto y sin probar.
-7. **Actualizar README**: `README.md` todavía dice que el rol `EMPLOYEE` y el portal están pendientes (alrededor de la línea 89), lo cual contradice el portal que ya está en `6041e1d`.
+5. **Actualizar README**: `README.md` todavía dice que el rol `EMPLOYEE` y el portal están pendientes (alrededor de la línea 89), lo cual contradice el portal que ya está en `6041e1d`.
 
 ## Notas para quien retome
 

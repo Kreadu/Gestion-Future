@@ -298,6 +298,22 @@ try {
     }
   });
 
+  await step('Importar un empleado desde Excel y validar la vista previa', async () => {
+    await page.getByRole('button', { name: /Nómina mensual/ }).click();
+    await page.getByRole('button', { name: /Importar desde Excel/ }).click();
+    const m = modal(page);
+    await m.getByLabel('Archivo de empleados').setInputFiles(
+      join(here, 'fixtures', 'importar-empleados.xlsx')
+    );
+    await expectText(m, '1 fila(s)');
+    await expectText(m, '1 válida(s)');
+    await m.getByRole('button', { name: /Importar 1 fila/ }).click();
+    await expectText(m, '1 empleado(s) creado(s).');
+    await expectText(page, '1 empleado(s) importado(s) correctamente.');
+    await m.getByRole('button', { name: 'Cerrar' }).click();
+    await page.getByText(/Beatriz.*Mora/).waitFor({ timeout: 10000 });
+  });
+
   await step('Sin errores de consola, JavaScript ni HTTP inesperados', async () => {
     const unexpected = problems.filter(p => !expectedHttp.some(re => re.test(p)));
     if (unexpected.length) throw new Error(unexpected.join(' || '));
