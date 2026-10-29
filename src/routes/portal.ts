@@ -6,6 +6,10 @@
  *   GET /api/portal/payslips/:id             detalle de un desprendible
  *   GET /api/portal/benefits                 prima/cesantías pagadas y liquidación definitiva
  *   GET /api/portal/employment-certificate   datos del certificado laboral
+ *   GET /api/portal/income-certificate?year=AAAA  formulario 220 del año
+ *
+ * Los desprendibles son sólo los de periodos CERRADOS: un borrador
+ * todavía puede recalcularse y no es lo que se le pagó.
  *
  * Todo se filtra por user.employeeId y user.companyId (los de la
  * tabla users), nunca por parámetros del cliente.
@@ -20,6 +24,7 @@
 import { sendJson } from '../http';
 import { HttpError, type AuthUser } from '../auth/authz';
 import { vacationBalance } from './benefits';
+import { buildEmploymentCertificate, buildIncomeCertificate } from './certificates';
 
 interface RouteEnv {
   DB: D1Database;
@@ -183,6 +188,7 @@ export async function handlePortalRoutes(
         FROM payroll_settlements s
         JOIN payroll_periods p ON p.id = s.periodId
         WHERE s.employeeId = ?1 AND s.companyId = ?2 AND p.companyId = ?2
+          AND p.status = 'CLOSED'
         ORDER BY p.periodStart DESC
       `)
       .bind(employee.id, employee.companyId)
@@ -215,6 +221,7 @@ export async function handlePortalRoutes(
         FROM payroll_settlements s
         JOIN payroll_periods p ON p.id = s.periodId
         WHERE s.id = ?1 AND s.employeeId = ?2 AND s.companyId = ?3 AND p.companyId = ?3
+          AND p.status = 'CLOSED'
       `)
       .bind(decodeURIComponent(payslipMatch[1]), employee.id, employee.companyId)
       .first<any>();
@@ -294,17 +301,19 @@ export async function handlePortalRoutes(
     });
   }
 
-  // Versión mínima. Al integrar, puede reemplazarse por
-  // buildEmploymentCertificate(env, employeeId) de routes/certificates.ts.
   if (url.pathname === '/api/portal/employment-certificate') {
-    return sendJson({
-      success: true,
-      data: {
-        issuedAt: today(),
-        company: publicCompany(company),
-        employee: publicEmployee(employee),
-      },
-    });
+    return sendJson({ success: true, data: await buildEmploymentCertificate(env, String(employee.id)) });
+  }
+
+  if (url.pathname === '/api/portal/income-certificate') {
+    const yearParam = url.searchParams.get('year');
+    const year = yearParam ? Number(yearParam) : new Date().getUTCFullYear() - 1;
+
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      return sendJson({ success: false, error: 'Año gravable inválido.' }, 400);
+    }
+
+    return sendJson({ success: true, data: await buildIncomeCertificate(env, String(employee.id), year) });
   }
 
   return sendJson({ success: false, error: 'Ruta no encontrada.' }, 404);

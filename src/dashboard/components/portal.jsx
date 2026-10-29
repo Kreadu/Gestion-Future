@@ -265,45 +265,6 @@ function TerminationSheet({ termination, employee, company, onClose }) {
   );
 }
 
-function PortalEmploymentCertificate({ cert, onClose }) {
-  const e = cert.employee;
-  const c = cert.company;
-  const contract = PORTAL_CONTRACT_LABELS[e.contractType];
-
-  return (
-    <PortalSheet title="Certificado laboral" company={c} onClose={onClose}>
-      <div className="portal-letter">
-        <p style={{ textAlign: 'center', fontWeight: '700', margin: '0 0 18px' }}>
-          {c.name}{c.nit ? ' · NIT ' + c.nit + (c.dv ? '-' + c.dv : '') : ''}
-          <br />CERTIFICA QUE:
-        </p>
-        <p>
-          <strong>{e.fullName}</strong>, identificado(a) con documento número <strong>{e.taxId}</strong>,
-          {e.active
-            ? <> labora en esta empresa desde el <strong>{portalLongDate(e.hireDate)}</strong></>
-            : <> laboró en esta empresa desde el <strong>{portalLongDate(e.hireDate)}</strong>
-                {e.terminationDate ? <> hasta el <strong>{portalLongDate(e.terminationDate)}</strong></> : null}</>}
-          {e.position ? <>, desempeñando el cargo de <strong>{e.position}</strong></> : null}
-          {contract ? <>, con contrato a <strong>{contract.toLowerCase()}</strong></> : null}
-          {e.active ? <> y un salario básico mensual de <strong>{formatCOP(e.salary)}</strong>{e.isIntegralSalary ? ' (salario integral)' : ''}</> : null}.
-        </p>
-        <p>
-          Se expide a solicitud del interesado(a) el {portalLongDate(cert.issuedAt)}.
-        </p>
-        <div style={{ marginTop: '48px', borderTop: '1px solid #111827', width: '260px', maxWidth: '100%', paddingTop: '6px', fontSize: '13px' }}>
-          {c.legalRepresentative || 'Representante legal'}<br />
-          {c.name}
-        </div>
-        {(c.address || c.phone || c.email) && (
-          <p style={{ fontSize: '11px', color: '#64748b', marginTop: '24px' }}>
-            {[c.address, c.city, c.phone, c.email].filter(Boolean).join(' · ')}
-          </p>
-        )}
-      </div>
-    </PortalSheet>
-  );
-}
-
 function PortalInfo({ label, value }) {
   return (
     <div className="summary-card">
@@ -317,6 +278,7 @@ function EmployeePortal({ me, onSignOut }) {
   const [tab, setTab] = useState('datos');
   const [profile, setProfile] = useState(null);
   const [payslips, setPayslips] = useState([]);
+  const [certYear, setCertYear] = useState(String(new Date().getFullYear() - 1));
   const [benefits, setBenefits] = useState({ payments: [], termination: null });
   const [sheet, setSheet] = useState(null);
   const [error, setError] = useState('');
@@ -352,11 +314,13 @@ function EmployeePortal({ me, onSignOut }) {
     }
   }
 
-  async function openCertificate() {
+  async function openCertificate(kind) {
     try {
       setError('');
-      const r = await api('/api/portal/employment-certificate');
-      setSheet({ kind: 'certificate', data: r.data });
+      const r = kind === 'income'
+        ? await api('/api/portal/income-certificate?year=' + encodeURIComponent(certYear))
+        : await api('/api/portal/employment-certificate');
+      setSheet({ kind: kind, data: r.data });
     } catch (err) {
       setError(err.message);
     }
@@ -503,7 +467,20 @@ function EmployeePortal({ me, onSignOut }) {
             <div>Certificado laboral</div>
             <div className="portal-muted">Con tu cargo, fecha de ingreso y salario. Listo para imprimir o guardar en PDF.</div>
           </div>
-          <button className="btn btn-primary" onClick={openCertificate}>Generar</button>
+          <button className="btn btn-primary" onClick={function() { openCertificate('employment'); }}>Generar</button>
+        </div>
+        <div className="portal-card-body portal-list-item">
+          <div>
+            <div>Certificado de ingresos y retenciones (formulario 220)</div>
+            <div className="portal-muted">Lo necesitas para tu declaración de renta.</div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <label htmlFor="portal-cert-year" className="portal-muted">Año</label>
+            <input id="portal-cert-year" type="number" min="2000" max="2100" value={certYear}
+              style={{ width: '90px' }}
+              onChange={function(e) { setCertYear(e.target.value); }} />
+            <button className="btn btn-primary" onClick={function() { openCertificate('income'); }}>Generar</button>
+          </div>
         </div>
       </section>
     );
@@ -566,8 +543,15 @@ function EmployeePortal({ me, onSignOut }) {
       {sheet && sheet.kind === 'termination' && (
         <TerminationSheet termination={sheet.data} employee={emp} company={company} onClose={function() { setSheet(null); }} />
       )}
-      {sheet && sheet.kind === 'certificate' && (
-        <PortalEmploymentCertificate cert={sheet.data} onClose={function() { setSheet(null); }} />
+      {sheet && sheet.kind === 'employment' && (
+        <PortalSheet title="Certificado laboral" onClose={function() { setSheet(null); }}>
+          <EmploymentCertificateSheet data={sheet.data} />
+        </PortalSheet>
+      )}
+      {sheet && sheet.kind === 'income' && (
+        <PortalSheet title={'Certificado de ingresos y retenciones ' + sheet.data.year} onClose={function() { setSheet(null); }}>
+          <IncomeCertificateSheet data={sheet.data} />
+        </PortalSheet>
       )}
 
       <PageFooter />

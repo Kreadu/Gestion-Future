@@ -272,6 +272,30 @@ try {
     await expectText(page, 'jefe@espiga.co');
     await page.getByRole('button', { name: 'Quitar acceso' }).click();
     await expectText(page, 'Acceso retirado.');
+
+    await page.locator('#user-email').fill('ana@espiga.co');
+    await page.locator('#user-role').selectOption('EMPLOYEE');
+    await page.locator('#user-employee').selectOption({ label: 'Ana Gómez · 1012345678' });
+    await page.getByRole('button', { name: '+ Dar acceso' }).click();
+    await expectText(page, 'ana@espiga.co');
+  });
+
+  await step('Portal del empleado: desprendible y certificado 220', async () => {
+    const portal = await openDashboard({ baseUrl, as: 'ana@espiga.co', headless: !process.env.HEADED });
+    try {
+      const p = portal.page;
+      await p.getByText('Entendido').click({ timeout: 15000 }).catch(() => {});
+      await expectText(p, 'Hola, Ana');
+      await p.getByRole('tab', { name: /Desprendibles/ }).click();
+      await expectText(p, '2026-10-01');
+      await p.getByRole('tab', { name: /Certificados/ }).click();
+      await p.locator('#portal-cert-year').fill('2026');
+      await p.getByRole('button', { name: 'Generar' }).last().click();
+      await expectText(p, 'Año gravable 2026');
+      if (portal.problems.length) throw new Error(portal.problems.join(' || '));
+    } finally {
+      await portal.browser.close();
+    }
   });
 
   await step('Sin errores de consola, JavaScript ni HTTP inesperados', async () => {

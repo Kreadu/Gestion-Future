@@ -91,6 +91,9 @@ async function scenario() {
   });
   expect(prima.json.data.saved).toBe(2);
 
+  // Los desprendibles sólo se ven con el periodo cerrado (pagado).
+  db.prepare(`UPDATE payroll_periods SET status = 'CLOSED' WHERE id = ?`).run(period.json.data.id);
+
   return { a, b, ana, beto, carla, periodId: period.json.data.id as string, settlements };
 }
 
@@ -144,7 +147,7 @@ describe('Portal del empleado — desprendibles de pago', () => {
       id: settlements[ana.id],
       periodStart: '2026-10-01',
       periodEnd: '2026-10-31',
-      periodStatus: 'DRAFT',
+      periodStatus: 'CLOSED',
     });
     expect(list.json.data[0].netPay).toBeGreaterThan(0);
 
@@ -247,7 +250,27 @@ describe('Portal del empleado — prestaciones, liquidación y certificado', () 
       },
     });
     expect(cert.json.data.employee.id).toBe(ana.id);
-    expect(cert.json.data.issuedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(cert.json.data.issueDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('certificado de ingresos y retenciones (220) sólo con lo suyo', async () => {
+    await scenario();
+
+    const res = await call(ANA, 'GET', '/api/portal/income-certificate?year=2026');
+
+    expect(res.status).toBe(200);
+    expect(res.json.data.employee.fullName).toBe('Ana Gómez');
+    expect(res.json.data.certificate.settlementsCount).toBe(1);
+    expect(res.json.data.certificate.detail.salarioBasico).toBe(3_000_000);
+    expect((await call(ANA, 'GET', '/api/portal/income-certificate?year=abc')).status).toBe(400);
+  });
+
+  test('no ve desprendibles de periodos en borrador', async () => {
+    const { periodId, settlements, ana } = await scenario();
+    db.prepare(`UPDATE payroll_periods SET status = 'DRAFT' WHERE id = ?`).run(periodId);
+
+    expect((await call(ANA, 'GET', '/api/portal/payslips')).json.data).toHaveLength(0);
+    expect((await call(ANA, 'GET', `/api/portal/payslips/${settlements[ana.id]}`)).status).toBe(404);
   });
 });
 
