@@ -31,6 +31,7 @@ interface DianEmployeeExtraInfo {
 import { BankDisbursementService } from './services/bankDisbursement';
 import { sendJson } from './http';
 import { handleBenefitRoutes } from './routes/benefits';
+import { handlePortalRoutes } from './routes/portal';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -398,6 +399,10 @@ export default {
           data: user,
         });
       }
+
+      // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
+      const portalResponse = await handlePortalRoutes(request, url, env, user);
+      if (portalResponse) return portalResponse;
 
       /*
        * ============================================================

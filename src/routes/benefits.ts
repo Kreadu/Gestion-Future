@@ -107,7 +107,7 @@ async function averageVariable(env: RouteEnv, employeeId: string, from: string, 
   return total / rows.length;
 }
 
-async function vacationBalance(env: RouteEnv, employee: any, asOf: string) {
+export async function vacationBalance(env: RouteEnv, employee: any, asOf: string) {
   if (!employee.hireDate) {
     throw new HttpError(400, 'El empleado no tiene fecha de ingreso.');
   }

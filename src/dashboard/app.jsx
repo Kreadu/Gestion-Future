@@ -274,6 +274,10 @@ function Root() {
     );
   }
 
+  if (me.role === 'EMPLOYEE') {
+    return <EmployeePortal me={me} onSignOut={signOut} />;
+  }
+
   return <App me={me} onSignOut={signOut} />;
 }
 
