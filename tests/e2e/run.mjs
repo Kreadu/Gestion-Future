@@ -200,6 +200,42 @@ try {
     await expectText(page, '$ 1.504.000');
   });
 
+  await step('Prestaciones: calcular y registrar la prima del semestre', async () => {
+    await page.getByRole('button', { name: /Prestaciones/ }).click();
+    await page.locator('#benefit-year').fill('2026');
+    await page.locator('#benefit-semester').selectOption('2');
+    await page.getByRole('button', { name: /Calcular/ }).first().click();
+    await expectText(page, '2026-07-01 a 2026-12-31');
+    await page.getByRole('button', { name: /Registrar pago/ }).click();
+    await expectText(page, 'Pago registrado para 1 empleado(s).');
+  });
+
+  await step('Vacaciones y liquidación definitiva', async () => {
+    await page.getByRole('button', { name: /Nómina mensual/ }).click();
+    await page.getByRole('button', { name: '+ Nuevo periodo' }).click();
+    let m = modal(page);
+    await fill(m, 'Periodo desde', '2026-12-01');
+    await fill(m, 'Periodo hasta', '2026-12-31');
+    await m.getByRole('button', { name: 'Crear periodo' }).click();
+    await page.getByText(/Ana.*Gómez/).first().click();
+    await expectText(page, /días hábiles pendientes/);
+    await page.getByRole('button', { name: /Registrar incapacidad, licencia o vacaciones/ }).click();
+    m = modal(page);
+    await fill(m, 'Tipo', 'VACATION');
+    await fill(m, 'Fecha inicio', '2026-12-14');
+    await fill(m, 'Fecha fin', '2026-12-31');
+    await m.getByRole('button', { name: 'Registrar' }).click();
+    await expectText(page, /Vacaciones disfrutadas — 18 días/);
+
+    await page.getByRole('button', { name: /Retiro y liquidación definitiva/ }).click();
+    await page.locator('#term-date').fill('2026-12-31');
+    await page.locator('#term-reason').selectOption('DESPIDO_SIN_JUSTA_CAUSA');
+    await page.getByRole('button', { name: /Calcular liquidación/ }).click();
+    await expectText(page, 'Indemnización por despido sin justa causa (art. 64 CST)');
+    await page.getByRole('button', { name: 'Retirar y guardar' }).click();
+    await expectText(page, 'Empleado retirado.');
+  });
+
   await step('Usuarios: dar y quitar acceso a un administrador de empresa', async () => {
     await page.getByRole('button', { name: /Usuarios/ }).click();
     await page.locator('#user-email').fill('jefe@espiga.co');

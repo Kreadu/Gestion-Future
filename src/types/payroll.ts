@@ -225,7 +225,8 @@ export type EmployeeLeaveType =
   | 'GENERAL_INCAPACITY'
   | 'WORK_INCAPACITY'
   | 'MATERNITY_LEAVE'
-  | 'PATERNITY_LEAVE';
+  | 'PATERNITY_LEAVE'
+  | 'VACATION';
 
 export interface EmployeeLeaveInput {
   type: EmployeeLeaveType;
@@ -243,6 +244,13 @@ export interface EmployeeLeaveInput {
    * de los primeros 90 días, la de 91-180, o si ya no hay pago).
    */
   accumulatedDaysBefore?: number;
+
+  /**
+   * Fechas de la novedad dentro del período liquidado (opcionales;
+   * sólo se usan para el XML de nómina electrónica).
+   */
+  startDate?: string;
+  endDate?: string;
 }
 
 // ============================================================
@@ -300,6 +308,15 @@ export interface ColombiaPayrollResult {
    * empresa). 0 si no hay incapacidad/licencia en el período.
    */
   reimbursableAmount: number;
+
+  /** Detalle de cada incapacidad/licencia/vacación del período. */
+  leaveDetails?: {
+    type: EmployeeLeaveType;
+    startDate?: string;
+    endDate?: string;
+    days: number;
+    value: number;
+  }[];
 
   overtimeTotal: number;
 

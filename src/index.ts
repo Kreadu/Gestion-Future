@@ -29,6 +29,8 @@ interface DianEmployeeExtraInfo {
 }
 
 import { BankDisbursementService } from './services/bankDisbursement';
+import { sendJson } from './http';
+import { handleBenefitRoutes } from './routes/benefits';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -56,6 +58,7 @@ import {
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
 import { intersectDateRanges } from './services/dateRanges';
+import { businessDaysBetween } from './services/colombiaHolidays';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -126,6 +129,10 @@ interface Employee {
   bankAccountType?: string | null;
   bankAccountNumber?: string | null;
   arlRiskClass: number;
+  contractEndDate?: string | null;
+  terminationDate?: string | null;
+  vacationDaysTakenBefore: number;
+  isIntegralSalary: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -139,18 +146,11 @@ interface EmployeeLeave {
   endDate: string;
   totalDays: number;
   accumulatedDaysBefore: number;
+  businessDays?: number | null;
   notes?: string | null;
   createdAt?: string | null;
 }
 
-function sendJson(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-  });
-}
 
 function normalizeCompany(row: any): Company {
   return {
@@ -197,6 +197,10 @@ function normalizeEmployee(row: any): Employee {
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
     arlRiskClass: normalizeArlRiskClass(row.arlRiskClass),
+    contractEndDate: row.contractEndDate ?? null,
+    terminationDate: row.terminationDate ?? null,
+    vacationDaysTakenBefore: Number(row.vacationDaysTakenBefore ?? 0),
+    isIntegralSalary: !!row.isIntegralSalary,
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -226,6 +230,7 @@ function normalizeEmployeeLeave(row: any): EmployeeLeave {
     endDate: String(row.endDate ?? ''),
     totalDays: Number(row.totalDays ?? 0),
     accumulatedDaysBefore: Number(row.accumulatedDaysBefore ?? 0),
+    businessDays: row.businessDays == null ? null : Number(row.businessDays),
     notes: row.notes ?? null,
     createdAt: row.createdAt ?? null,
   };
@@ -935,12 +940,15 @@ export default {
               bankAccountType,
               bankAccountNumber,
               arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, 1, ?20
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, ?22, ?23, ?24, 1, ?20
             )
           `)
           .bind(
@@ -952,7 +960,9 @@ export default {
             body.lastName2 || null,
             taxId,
             body.position || null,
-            body.contractType || '1',
+            // Sin plazo escrito, la ley presume término indefinido
+            // (art. 47 CST): código DIAN 2.
+            body.contractType || '2',
             salary,
             body.address || null,
             body.city || null,
@@ -964,7 +974,10 @@ export default {
             body.bankAccountType || null,
             body.bankAccountNumber || null,
             createdAt,
-            normalizeArlRiskClass(body.arlRiskClass)
+            normalizeArlRiskClass(body.arlRiskClass),
+            body.contractEndDate || null,
+            Math.max(0, Number(body.vacationDaysTakenBefore) || 0),
+            body.isIntegralSalary ? 1 : 0
           )
           .run();
 
@@ -1065,7 +1078,10 @@ export default {
               bankName = ?15,
               bankAccountType = ?16,
               bankAccountNumber = ?17,
-              arlRiskClass = ?19
+              arlRiskClass = ?19,
+              contractEndDate = ?20,
+              vacationDaysTakenBefore = ?21,
+              isIntegralSalary = ?22
             WHERE id = ?18
           `)
           .bind(
@@ -1092,7 +1108,7 @@ export default {
             ).trim(),
 
             body.position ?? null,
-            body.contractType ?? '1',
+            body.contractType ?? existing.contractType ?? '2',
             salary,
             body.address ?? null,
             body.city ?? null,
@@ -1106,7 +1122,15 @@ export default {
             employeeId,
             normalizeArlRiskClass(
               body.arlRiskClass ?? existing.arlRiskClass
-            )
+            ),
+            body.contractEndDate !== undefined
+              ? body.contractEndDate || null
+              : existing.contractEndDate ?? null,
+            Math.max(
+              0,
+              Number(body.vacationDaysTakenBefore ?? existing.vacationDaysTakenBefore) || 0
+            ),
+            (body.isIntegralSalary ?? existing.isIntegralSalary) ? 1 : 0
           )
           .run();
 
@@ -1209,7 +1233,23 @@ export default {
         'WORK_INCAPACITY',
         'MATERNITY_LEAVE',
         'PATERNITY_LEAVE',
+        'VACATION',
       ];
+
+      // Vacaciones: días hábiles a descontar del saldo. Si no vienen,
+      // se cuentan de lunes a sábado sin festivos.
+      const vacationBusinessDays = (
+        leaveType: string,
+        body: any,
+        startDate: string,
+        endDate: string
+      ): number | null => {
+        if (leaveType !== 'VACATION') return null;
+        const given = Number(body.businessDays);
+        return Number.isFinite(given) && given > 0
+          ? given
+          : businessDaysBetween(startDate, endDate);
+      };
 
       if (
         url.pathname === '/api/employee-leaves' &&
@@ -1284,7 +1324,7 @@ export default {
               success: false,
               error:
                 'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
-                'MATERNITY_LEAVE o PATERNITY_LEAVE.',
+                'MATERNITY_LEAVE, PATERNITY_LEAVE o VACATION.',
             },
             400
           );
@@ -1361,6 +1401,7 @@ export default {
             ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
             : 0;
 
+        const businessDays = vacationBusinessDays(leaveType, body, startDate, endDate);
         const id = `LV-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
@@ -1368,9 +1409,9 @@ export default {
           .prepare(`
             INSERT INTO employee_leaves (
               id, employeeId, companyId, leaveType, startDate, endDate,
-              totalDays, accumulatedDaysBefore, notes, createdAt
+              totalDays, accumulatedDaysBefore, businessDays, notes, createdAt
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
           `)
           .bind(
             id,
@@ -1381,6 +1422,7 @@ export default {
             endDate,
             totalDays,
             accumulatedDaysBefore,
+            businessDays,
             body.notes || null,
             createdAt
           )
@@ -1407,6 +1449,7 @@ export default {
               endDate,
               totalDays,
               accumulatedDaysBefore,
+              businessDays,
               notes: body.notes || null,
               createdAt,
             },
@@ -1464,7 +1507,7 @@ export default {
               success: false,
               error:
                 'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
-                'MATERNITY_LEAVE o PATERNITY_LEAVE.',
+                'MATERNITY_LEAVE, PATERNITY_LEAVE o VACATION.',
             },
             400
           );
@@ -1526,6 +1569,8 @@ export default {
             ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
             : 0;
 
+        const businessDays = vacationBusinessDays(leaveType, body, startDate, endDate);
+
         await env.DB
           .prepare(`
             UPDATE employee_leaves
@@ -1535,7 +1580,8 @@ export default {
               endDate = ?3,
               totalDays = ?4,
               accumulatedDaysBefore = ?5,
-              notes = ?6
+              notes = ?6,
+              businessDays = ?8
             WHERE id = ?7
           `)
           .bind(
@@ -1545,7 +1591,8 @@ export default {
             totalDays,
             accumulatedDaysBefore,
             body.notes || null,
-            leaveId
+            leaveId,
+            businessDays
           )
           .run();
 
@@ -1569,6 +1616,7 @@ export default {
             endDate,
             totalDays,
             accumulatedDaysBefore,
+            businessDays,
             notes: body.notes || null,
             createdAt: existing.createdAt ?? null,
           },
@@ -2062,6 +2110,8 @@ export default {
             return {
               type: leaveRow.leaveType,
               daysInPeriod: intersection.days,
+              startDate: intersection.start,
+              endDate: intersection.end,
               accumulatedDaysBefore:
                 leaveRow.leaveType === 'GENERAL_INCAPACITY'
                   ? leaveRow.accumulatedDaysBefore
@@ -2334,9 +2384,24 @@ export default {
         const body = await request.json().catch(() => ({})) as any;
         const employeeExtraInput = body?.employeeExtra || {};
 
+        // El tipo de contrato y la cuenta salen del empleado guardado,
+        // no del navegador (antes el dashboard mandaba siempre '1').
+        const employeeRow = await env.DB
+          .prepare(`
+            SELECT contractType, bankName, bankAccountType, bankAccountNumber
+            FROM employees
+            WHERE id = ?1
+          `)
+          .bind(settlementRow.employeeId)
+          .first<any>();
+
+        const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
+          ? String(employeeRow.contractType)
+          : '2';
+
         const employeeExtra: DianEmployeeExtraInfo = {
           typeDocument: employeeExtraInput.typeDocument || '13',
-          typeContract: employeeExtraInput.typeContract || '1',
+          typeContract: contractType as DianEmployeeExtraInfo['typeContract'],
 
           /*
            * 42 = transferencia bancaria.
@@ -2344,9 +2409,9 @@ export default {
            */
           paymentMethod: employeeExtraInput.paymentMethod || '42',
 
-          bankName: employeeExtraInput.bankName || undefined,
-          accountNumber: employeeExtraInput.accountNumber || undefined,
-          accountType: employeeExtraInput.accountType || undefined,
+          bankName: employeeRow?.bankName || undefined,
+          accountNumber: employeeRow?.bankAccountNumber || undefined,
+          accountType: employeeRow?.bankAccountType || undefined,
         };
 
         const payrollResult: ColombiaPayrollResult = JSON.parse(
@@ -3651,7 +3716,9 @@ export default {
               employerInfo,
               {
                 typeDocument: '13',
-                typeContract: '1',
+                typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
+                  ? String(engagement.contractType)
+                  : '2') as DianEmployeeExtraInfo['typeContract'],
                 paymentMethod: '42',
               },
               nominaConsecutive
@@ -4099,6 +4166,9 @@ export default {
           message: 'Usuario deshabilitado correctamente.',
         });
       }
+
+      const benefitsResponse = await handleBenefitRoutes(request, url, env, user);
+      if (benefitsResponse) return benefitsResponse;
 
       /*
        * ============================================================

@@ -174,6 +174,11 @@ export class ColombiaPayrollEngine {
     leave: EmployeeLeaveInput
   ): number {
 
+    if (leave.type === 'VACATION') {
+      // Las vacaciones las paga el empleador; no hay a quién recobrar.
+      return 0;
+    }
+
     if (leave.type !== 'GENERAL_INCAPACITY') {
       // Incapacidad laboral y licencias de maternidad/paternidad son
       // 100% recobrables desde el día 1.
@@ -712,6 +717,14 @@ export class ColombiaPayrollEngine {
 
       reimbursableAmount:
         round(reimbursableAmount),
+
+      leaveDetails: leaves.map(leave => ({
+        type: leave.type,
+        startDate: leave.startDate,
+        endDate: leave.endDate,
+        days: leave.daysInPeriod,
+        value: round(this.calculateLeaveValue(baseSalary, leave)),
+      })),
 
       overtimeTotal:
         round(overtimeTotal),
