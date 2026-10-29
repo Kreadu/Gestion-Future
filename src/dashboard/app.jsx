@@ -121,6 +121,128 @@ async function api(url, options) {
   return data;
 }
 
+// ---- Logos de empresa ----
+// El listado de empresas sólo trae `hasLogo`/`logoVersion`; la imagen
+// se pide aparte a GET /api/companies/:id/logo con el token (no sirve
+// un <img src> directo) y se muestra como blob URL. Se cachea una vez
+// por empresa y versión.
+const companyLogoCache = {};
+
+function fetchCompanyLogoUrl(companyId, version) {
+  const cached = companyLogoCache[companyId];
+
+  if (cached && cached.version === version) {
+    return cached.promise;
+  }
+
+  if (cached) {
+    cached.promise.then(function(url) { URL.revokeObjectURL(url); }, function() {});
+  }
+
+  const promise = (async function() {
+    const currentUser = firebase.auth().currentUser;
+    const headers = {};
+
+    if (currentUser) {
+      headers.Authorization = 'Bearer ' + await currentUser.getIdToken();
+    }
+
+    const response = await fetch(
+      '/api/companies/' + encodeURIComponent(companyId) + '/logo?v=' + encodeURIComponent(version || ''),
+      { headers: headers }
+    );
+
+    if (!response.ok) {
+      throw new Error('No se pudo cargar el logo.');
+    }
+
+    return URL.createObjectURL(await response.blob());
+  })();
+
+  companyLogoCache[companyId] = { version: version, promise: promise };
+
+  promise.catch(function() {
+    if (companyLogoCache[companyId] && companyLogoCache[companyId].promise === promise) {
+      delete companyLogoCache[companyId];
+    }
+  });
+
+  return promise;
+}
+
+function CompanyLogo({ company, style }) {
+  const [src, setSrc] = useState('');
+  const id = company ? company.id : '';
+  const version = company && company.hasLogo ? String(company.logoVersion || '') : '';
+
+  useEffect(function() {
+    let alive = true;
+    setSrc('');
+
+    if (id && version) {
+      fetchCompanyLogoUrl(id, version).then(
+        function(url) { if (alive) setSrc(url); },
+        function() {}
+      );
+    }
+
+    return function() { alive = false; };
+  }, [id, version]);
+
+  if (!src) return null;
+
+  return <img src={src} alt={'Logo de ' + company.name} style={style} />;
+}
+
+// Reduce el logo en el navegador (máx. 400 px por lado) antes de
+// enviarlo. Un SVG pequeño (< 200 KB) se deja tal cual.
+const LOGO_MAX_PX = 400;
+
+function resizeLogoFile(file) {
+  return new Promise(function(resolve, reject) {
+    const reader = new FileReader();
+
+    reader.onerror = function() {
+      reject(new Error('No se pudo leer el archivo del logo.'));
+    };
+
+    reader.onload = function() {
+      const dataUrl = String(reader.result || '');
+
+      if (file.type === 'image/svg+xml' && file.size < 200 * 1024) {
+        resolve(dataUrl);
+        return;
+      }
+
+      const img = new Image();
+
+      img.onerror = function() {
+        reject(new Error('El archivo del logo no es una imagen válida.'));
+      };
+
+      img.onload = function() {
+        const w0 = img.naturalWidth || LOGO_MAX_PX;
+        const h0 = img.naturalHeight || LOGO_MAX_PX;
+        const scale = Math.min(1, LOGO_MAX_PX / Math.max(w0, h0));
+        const canvas = document.createElement('canvas');
+
+        canvas.width = Math.max(1, Math.round(w0 * scale));
+        canvas.height = Math.max(1, Math.round(h0 * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        // JPEG se queda en JPEG; el resto en PNG para conservar la transparencia.
+        resolve(file.type === 'image/jpeg'
+          ? canvas.toDataURL('image/jpeg', 0.9)
+          : canvas.toDataURL('image/png'));
+      };
+
+      img.src = dataUrl;
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 function LoginScreen({ error, loading, onSignIn }) {
   return (
     <div
@@ -430,6 +552,8 @@ function App({ me, onSignOut }) {
   });
 
   const [pilaModal, setPilaModal] = useState(false);
+  // Periodos (AAAA-MM) con PILA verificada de la vinculación elegida.
+  const [pilaVerifications, setPilaVerifications] = useState([]);
   const [pilaForm, setPilaForm] = useState({
     period: '',
     declaredIbc: '',
@@ -514,6 +638,7 @@ function App({ me, onSignOut }) {
 
   useEffect(function() {
     setEditingEngagementRate(false);
+    loadPilaVerifications(selectedEngagementId);
   }, [selectedEngagementId]);
 
   // Si hay licencias detectadas para el periodo y "Días trabajados"
@@ -1775,6 +1900,20 @@ function App({ me, onSignOut }) {
     }
   }
 
+  async function loadPilaVerifications(engagementId) {
+    setPilaVerifications([]);
+    if (!engagementId) return;
+
+    try {
+      const result = await api(
+        '/api/pila-verifications?engagementId=' + encodeURIComponent(engagementId)
+      );
+      setPilaVerifications(result.data || []);
+    } catch (_) {
+      // Sin la lista el aviso sigue visible: es el comportamiento seguro.
+    }
+  }
+
   function openPilaModal() {
     clearMessages();
 
@@ -1822,6 +1961,7 @@ function App({ me, onSignOut }) {
 
       setSuccess('Verificación de PILA registrada.');
       setPilaModal(false);
+      await loadPilaVerifications(selectedEngagement.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2219,10 +2359,9 @@ function App({ me, onSignOut }) {
                   </div>
 
                   <div style={{display: 'flex', alignItems: 'center', gap: '14px'}}>
-                    {selectedCompany && selectedCompany.logo && (
-                      <img
-                        src={selectedCompany.logo}
-                        alt={'Logo de ' + selectedCompany.name}
+                    {selectedCompany && selectedCompany.hasLogo && (
+                      <CompanyLogo
+                        company={selectedCompany}
                         style={{maxHeight: '42px', maxWidth: '120px', objectFit: 'contain'}}
                       />
                     )}
@@ -2674,11 +2813,21 @@ function App({ me, onSignOut }) {
           </button>
         </div>
 
-        {isIndependent && (
+        {isIndependent && pilaVerifications.length === 0 && (
           <div className="info-box" style={{marginBottom: '18px'}}>
             Antes de liquidar un periodo, debes verificar que el
             contratista pagó su seguridad social (PILA) para ese mes.
             Es un deber legal del contratante (Ley 1955/2019 art. 244).
+          </div>
+        )}
+
+        {isIndependent && pilaVerifications.length > 0 && (
+          <div style={{marginBottom: '18px', fontSize: '12px', color: '#86efac'}}>
+            ✅ PILA verificada para: {pilaVerifications.map(function(v) { return v.period; }).join(', ')}.
+            {' '}
+            <span style={{color: '#94a3b8'}}>
+              Para liquidar otro mes, verifica primero su PILA.
+            </span>
           </div>
         )}
 
@@ -2772,8 +2921,8 @@ function App({ me, onSignOut }) {
           <div className="panel-body">
             <div className="form-grid">
               <div className="form-group full">
-                <label>Buscar por nombre o profesión</label>
-                <input
+                <label htmlFor="f-professionalQuery">Buscar por nombre o profesión</label>
+                <input id="f-professionalQuery"
                   value={professionalQuery}
                   onChange={function(e) {
                     setProfessionalQuery(e.target.value);
@@ -2944,7 +3093,15 @@ function App({ me, onSignOut }) {
           <span className="badge">Motor Colombia 2026</span>
 
           <div className="company-selector">
+            {selectedCompany && selectedCompany.hasLogo && (
+              <CompanyLogo
+                company={selectedCompany}
+                style={{height: '30px', maxWidth: '80px', objectFit: 'contain', background: '#ffffff', borderRadius: '6px', padding: '2px'}}
+              />
+            )}
+
             <select
+              aria-label="Empresa"
               value={selectedCompanyId}
               onChange={function(e) {
                 setSelectedCompanyId(e.target.value);
@@ -2967,6 +3124,8 @@ function App({ me, onSignOut }) {
               className="btn"
               onClick={openEditCompany}
               disabled={!selectedCompany}
+              aria-label="Editar empresa"
+              title="Editar empresa"
             >
               ✏️
             </button>
@@ -3042,13 +3201,13 @@ function App({ me, onSignOut }) {
       </div>
 
       {error && (
-        <div className="alert">
+        <div className="alert" role="alert">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="alert success">
+        <div className="alert success" role="status">
           {success}
         </div>
       )}
@@ -3181,8 +3340,8 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Periodo</label>
-                  <select
+                  <label htmlFor="f-selectedPeriodId">Periodo</label>
+                  <select id="f-selectedPeriodId"
                     value={selectedPeriodId}
                     onChange={function(e) {
                       setSelectedPeriodId(e.target.value);
@@ -3313,24 +3472,24 @@ function App({ me, onSignOut }) {
 
                   <div className="form-grid">
                     <div className="form-group">
-                      <label>Empleado</label>
-                      <input
+                      <label htmlFor="f-payrollForm-employee">Empleado</label>
+                      <input id="f-payrollForm-employee"
                         value={getEmployeeName(selectedEmp)}
                         disabled
                       />
                     </div>
 
                     <div className="form-group">
-                      <label>Salario mensual</label>
-                      <input
+                      <label htmlFor="f-payrollForm-baseSalary">Salario mensual</label>
+                      <input id="f-payrollForm-baseSalary"
                         value={formatCOP(payrollForm.baseSalary)}
                         disabled
                       />
                     </div>
 
                     <div className="form-group">
-                      <label>Días trabajados</label>
-                      <input
+                      <label htmlFor="f-payrollForm-daysWorked" className="required">Días trabajados</label>
+                      <input id="f-payrollForm-daysWorked" aria-required="true"
                         type="number"
                         min="1"
                         max="30"
@@ -3486,8 +3645,8 @@ function App({ me, onSignOut }) {
 
                   <div className="form-grid">
                     <div className="form-group">
-                      <label>Extra diurna</label>
-                      <input
+                      <label htmlFor="f-payrollForm-extraDiurna">Extra diurna</label>
+                      <input id="f-payrollForm-extraDiurna"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3503,8 +3662,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Extra nocturna</label>
-                      <input
+                      <label htmlFor="f-payrollForm-extraNocturna">Extra nocturna</label>
+                      <input id="f-payrollForm-extraNocturna"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3520,8 +3679,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Recargo nocturno</label>
-                      <input
+                      <label htmlFor="f-payrollForm-recargoNocturno">Recargo nocturno</label>
+                      <input id="f-payrollForm-recargoNocturno"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3537,8 +3696,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Dominical/festivo</label>
-                      <input
+                      <label htmlFor="f-payrollForm-horasDominicalFestivo">Dominical/festivo</label>
+                      <input id="f-payrollForm-horasDominicalFestivo"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3554,8 +3713,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Extra dominical/festivo</label>
-                      <input
+                      <label htmlFor="f-payrollForm-horasExtraDominicalFestivo">Extra dominical/festivo</label>
+                      <input id="f-payrollForm-horasExtraDominicalFestivo"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3573,7 +3732,7 @@ function App({ me, onSignOut }) {
 
                   <div className="form-grid" style={{marginTop: '13px'}}>
                     <div className="form-group">
-                      <label>
+                      <label htmlFor="f-termsAccepted">
                         <input
                           type="checkbox"
                           checked={payrollForm.isIntegralSalary}
@@ -3669,7 +3828,7 @@ function App({ me, onSignOut }) {
                     className="legal-frame"
                   />
                   <label className="legal-accept">
-                    <input
+                    <input id="f-termsAccepted"
                       type="checkbox"
                       checked={termsAccepted}
                       onChange={function(e) {
@@ -3699,7 +3858,7 @@ function App({ me, onSignOut }) {
                     borderRadius: '10px',
                     background: '#020617'
                   }}>
-                    <label style={{
+                    <label htmlFor="f-companyForm-logo" style={{
                       display: 'block',
                       marginBottom: '8px',
                       fontWeight: '700'
@@ -3717,6 +3876,19 @@ function App({ me, onSignOut }) {
                         <img
                           src={companyForm.logo}
                           alt="Logo de la empresa"
+                          style={{
+                            width: '90px',
+                            height: '90px',
+                            objectFit: 'contain',
+                            background: '#ffffff',
+                            borderRadius: '8px',
+                            padding: '6px'
+                          }}
+                        />
+                      ) : companyForm.logo === undefined && editingCompany && editingCompany.hasLogo ? (
+                        // Logo ya guardado (no se reenvía si no cambia).
+                        <CompanyLogo
+                          company={editingCompany}
                           style={{
                             width: '90px',
                             height: '90px',
@@ -3744,7 +3916,7 @@ function App({ me, onSignOut }) {
                       )}
 
                       <div>
-                        <input
+                        <input id="f-companyForm-logo"
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/svg+xml"
                           style={{fontSize: '12px'}}
@@ -3752,38 +3924,49 @@ function App({ me, onSignOut }) {
                             const file = e.target.files?.[0];
                             if (!file) return;
 
-                            if (file.size > 2 * 1024 * 1024) {
-                              alert('El logo no puede superar 2 MB.');
+                            if (file.size > 10 * 1024 * 1024) {
+                              alert('El logo no puede superar 10 MB.');
                               return;
                             }
 
-                            const reader = new FileReader();
-
-                            reader.onload = () => {
-                              setCompanyForm({
-                                ...companyForm,
-                                logo: String(reader.result || '')
-                              });
-                            };
-
-                            reader.readAsDataURL(file);
+                            resizeLogoFile(file).then(
+                              function(logo) {
+                                setCompanyForm(function(prev) {
+                                  return { ...prev, logo: logo };
+                                });
+                              },
+                              function(err) { alert(err.message); }
+                            );
                           }}
                         />
+
+                        {(companyForm.logo || (companyForm.logo === undefined && editingCompany && editingCompany.hasLogo)) && (
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{marginLeft: '8px', padding: '3px 8px', fontSize: '11px'}}
+                            onClick={function() {
+                              setCompanyForm({ ...companyForm, logo: '' });
+                            }}
+                          >
+                            Quitar logo
+                          </button>
+                        )}
 
                         <div style={{
                           marginTop: '7px',
                           fontSize: '11px',
                           color: '#94a3b8'
                         }}>
-                          PNG, JPG, WEBP o SVG · máximo 2 MB
+                          PNG, JPG, WEBP o SVG · se reduce a 400 px
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <label>Razón social</label>
+                  <label htmlFor="f-companyForm-name" className="required">Razón social</label>
 
-                  <input
+                  <input id="f-companyForm-name" aria-required="true"
                     value={companyForm.name}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3795,8 +3978,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>NIT</label>
-                  <input
+                  <label htmlFor="f-companyForm-nit" className="required">NIT</label>
+                  <input id="f-companyForm-nit" aria-required="true"
                     value={companyForm.nit}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3808,8 +3991,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Dígito verificación</label>
-                  <input
+                  <label htmlFor="f-companyForm-dv">Dígito verificación</label>
+                  <input id="f-companyForm-dv"
                     value={companyForm.dv}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3821,8 +4004,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
+                  <label htmlFor="f-companyForm-address">Dirección</label>
+                  <input id="f-companyForm-address"
                     value={companyForm.address}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3834,8 +4017,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="f-companyForm-city">Ciudad</label>
+                  <input id="f-companyForm-city"
                     value={companyForm.city}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3847,8 +4030,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Departamento</label>
-                  <input
+                  <label htmlFor="f-companyForm-department">Departamento</label>
+                  <input id="f-companyForm-department"
                     value={companyForm.department}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3860,8 +4043,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Código postal</label>
-                  <input
+                  <label htmlFor="f-companyForm-postalCode">Código postal</label>
+                  <input id="f-companyForm-postalCode"
                     value={companyForm.postalCode}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3873,8 +4056,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="f-companyForm-phone">Teléfono</label>
+                  <input id="f-companyForm-phone"
                     value={companyForm.phone}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3886,8 +4069,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
+                  <label htmlFor="f-companyForm-whatsapp">WhatsApp</label>
+                  <input id="f-companyForm-whatsapp"
                     value={companyForm.whatsapp}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3899,8 +4082,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Correo</label>
-                  <input
+                  <label htmlFor="f-companyForm-email">Correo</label>
+                  <input id="f-companyForm-email"
                     type="email"
                     value={companyForm.email}
                     onChange={function(e) {
@@ -3913,8 +4096,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Contacto</label>
-                  <input
+                  <label htmlFor="f-companyForm-contactName">Contacto</label>
+                  <input id="f-companyForm-contactName"
                     value={companyForm.contactName}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3926,8 +4109,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Representante legal</label>
-                  <input
+                  <label htmlFor="f-companyForm-legalRepresentative">Representante legal</label>
+                  <input id="f-companyForm-legalRepresentative"
                     value={companyForm.legalRepresentative}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3939,8 +4122,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Régimen tributario</label>
-                  <select
+                  <label htmlFor="f-companyForm-taxRegime">Régimen tributario</label>
+                  <select id="f-companyForm-taxRegime"
                     value={companyForm.taxRegime}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3955,9 +4138,9 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Exoneración de aportes (art. 114-1 ET)</label>
+                  <label htmlFor="f-companyForm-isExempt114_1">Exoneración de aportes (art. 114-1 ET)</label>
                   <label className="legal-accept" style={{ marginTop: '4px' }}>
-                    <input
+                    <input id="f-companyForm-isExempt114_1"
                       type="checkbox"
                       checked={!!companyForm.isExempt114_1}
                       onChange={function(e) {
@@ -3975,8 +4158,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Actividad económica</label>
-                  <input
+                  <label htmlFor="f-companyForm-economicActivity">Actividad económica</label>
+                  <input id="f-companyForm-economicActivity"
                     value={companyForm.economicActivity}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4086,8 +4269,8 @@ function App({ me, onSignOut }) {
 
                     <div className="form-grid" style={{ marginTop: '16px' }}>
                       <div className="form-group">
-                        <label>% de administración (outsourcing)</label>
-                        <input
+                        <label htmlFor="f-adminFeePct">% de administración (outsourcing)</label>
+                        <input id="f-adminFeePct"
                           type="number"
                           min="0"
                           step="0.5"
@@ -4096,12 +4279,12 @@ function App({ me, onSignOut }) {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Valor administración</label>
-                        <input value={formatCOP(summary.fee)} disabled />
+                        <label htmlFor="f-summary-fee">Valor administración</label>
+                        <input id="f-summary-fee" value={formatCOP(summary.fee)} disabled />
                       </div>
                       <div className="form-group full">
-                        <label>Total a facturar a la empresa (costo total + administración)</label>
-                        <input value={formatCOP(summary.invoice)} disabled />
+                        <label htmlFor="f-summary-invoice">Total a facturar a la empresa (costo total + administración)</label>
+                        <input id="f-summary-invoice" value={formatCOP(summary.invoice)} disabled />
                       </div>
                     </div>
 
@@ -4153,8 +4336,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Primer nombre</label>
-                  <input
+                  <label htmlFor="f-employeeForm-firstName" className="required">Primer nombre</label>
+                  <input id="f-employeeForm-firstName" aria-required="true"
                     value={employeeForm.firstName}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4166,8 +4349,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo nombre</label>
-                  <input
+                  <label htmlFor="f-employeeForm-firstName2">Segundo nombre</label>
+                  <input id="f-employeeForm-firstName2"
                     value={employeeForm.firstName2}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4179,8 +4362,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Primer apellido</label>
-                  <input
+                  <label htmlFor="f-employeeForm-lastName" className="required">Primer apellido</label>
+                  <input id="f-employeeForm-lastName" aria-required="true"
                     value={employeeForm.lastName}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4192,8 +4375,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo apellido</label>
-                  <input
+                  <label htmlFor="f-employeeForm-lastName2">Segundo apellido</label>
+                  <input id="f-employeeForm-lastName2"
                     value={employeeForm.lastName2}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4205,8 +4388,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Documento</label>
-                  <input
+                  <label htmlFor="f-employeeForm-taxId" className="required">Documento</label>
+                  <input id="f-employeeForm-taxId" aria-required="true"
                     value={employeeForm.taxId}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4218,8 +4401,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Cargo</label>
-                  <input
+                  <label htmlFor="f-employeeForm-position">Cargo</label>
+                  <input id="f-employeeForm-position"
                     value={employeeForm.position}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4231,8 +4414,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo contrato DIAN</label>
-                  <select
+                  <label htmlFor="f-employeeForm-contractType">Tipo contrato DIAN</label>
+                  <select id="f-employeeForm-contractType"
                     value={employeeForm.contractType}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4250,8 +4433,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Clase de riesgo ARL</label>
-                  <select
+                  <label htmlFor="f-employeeForm-arlRiskClass">Clase de riesgo ARL</label>
+                  <select id="f-employeeForm-arlRiskClass"
                     value={employeeForm.arlRiskClass}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4269,8 +4452,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Salario mensual</label>
-                  <input
+                  <label htmlFor="f-employeeForm-salary" className="required">Salario mensual</label>
+                  <input id="f-employeeForm-salary" aria-required="true"
                     type="number"
                     min="0"
                     value={employeeForm.salary}
@@ -4284,8 +4467,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
+                  <label htmlFor="f-employeeForm-address">Dirección</label>
+                  <input id="f-employeeForm-address"
                     value={employeeForm.address}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4297,8 +4480,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="f-employeeForm-city">Ciudad</label>
+                  <input id="f-employeeForm-city"
                     value={employeeForm.city}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4310,8 +4493,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>País</label>
-                  <input
+                  <label htmlFor="f-employeeForm-country">País</label>
+                  <input id="f-employeeForm-country"
                     value={employeeForm.country}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4323,8 +4506,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="f-employeeForm-phone">Teléfono</label>
+                  <input id="f-employeeForm-phone"
                     value={employeeForm.phone}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4336,8 +4519,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
+                  <label htmlFor="f-employeeForm-whatsapp">WhatsApp</label>
+                  <input id="f-employeeForm-whatsapp"
                     value={employeeForm.whatsapp}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4349,8 +4532,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha ingreso</label>
-                  <input
+                  <label htmlFor="f-employeeForm-hireDate">Fecha ingreso</label>
+                  <input id="f-employeeForm-hireDate"
                     type="date"
                     value={employeeForm.hireDate}
                     onChange={function(e) {
@@ -4364,8 +4547,8 @@ function App({ me, onSignOut }) {
 
                 {(employeeForm.contractType === '1' || employeeForm.contractType === '3') && (
                   <div className="form-group">
-                    <label>Fin pactado del contrato</label>
-                    <input
+                    <label htmlFor="f-employeeForm-contractEndDate">Fin pactado del contrato</label>
+                    <input id="f-employeeForm-contractEndDate"
                       type="date"
                       value={employeeForm.contractEndDate}
                       onChange={function(e) {
@@ -4379,8 +4562,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group">
-                  <label>Días de vacaciones ya disfrutados antes de usar la plataforma</label>
-                  <input
+                  <label htmlFor="f-employeeForm-vacationDaysTakenBefore">Días de vacaciones ya disfrutados antes de usar la plataforma</label>
+                  <input id="f-employeeForm-vacationDaysTakenBefore"
                     type="number"
                     min="0"
                     step="0.5"
@@ -4411,8 +4594,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Banco</label>
-                  <input
+                  <label htmlFor="f-employeeForm-bankName">Banco</label>
+                  <input id="f-employeeForm-bankName"
                     value={employeeForm.bankName}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4424,8 +4607,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de cuenta</label>
-                  <select
+                  <label htmlFor="f-employeeForm-bankAccountType">Tipo de cuenta</label>
+                  <select id="f-employeeForm-bankAccountType"
                     value={employeeForm.bankAccountType}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4440,8 +4623,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Número de cuenta</label>
-                  <input
+                  <label htmlFor="f-employeeForm-bankAccountNumber">Número de cuenta</label>
+                  <input id="f-employeeForm-bankAccountNumber"
                     value={employeeForm.bankAccountNumber}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4493,8 +4676,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="f-periodForm-periodStart" className="required">Periodo desde</label>
+                  <input id="f-periodForm-periodStart" aria-required="true"
                     type="date"
                     value={periodForm.periodStart}
                     onChange={function(e) {
@@ -4507,8 +4690,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="f-periodForm-periodEnd" className="required">Periodo hasta</label>
+                  <input id="f-periodForm-periodEnd" aria-required="true"
                     type="date"
                     value={periodForm.periodEnd}
                     onChange={function(e) {
@@ -4559,8 +4742,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Tipo</label>
-                  <select
+                  <label htmlFor="f-leaveForm-leaveType" className="required">Tipo</label>
+                  <select id="f-leaveForm-leaveType" aria-required="true"
                     value={leaveForm.leaveType}
                     onChange={function(e) {
                       setLeaveForm({
@@ -4578,8 +4761,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha inicio</label>
-                  <input
+                  <label htmlFor="f-leaveForm-startDate" className="required">Fecha inicio</label>
+                  <input id="f-leaveForm-startDate" aria-required="true"
                     type="date"
                     value={leaveForm.startDate}
                     onChange={function(e) {
@@ -4592,8 +4775,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha fin</label>
-                  <input
+                  <label htmlFor="f-leaveForm-endDate" className="required">Fecha fin</label>
+                  <input id="f-leaveForm-endDate" aria-required="true"
                     type="date"
                     value={leaveForm.endDate}
                     onChange={function(e) {
@@ -4607,8 +4790,8 @@ function App({ me, onSignOut }) {
 
                 {leaveForm.leaveType === 'VACATION' && (
                   <div className="form-group full">
-                    <label>Días hábiles (opcional)</label>
-                    <input
+                    <label htmlFor="f-leaveForm-businessDays">Días hábiles (opcional)</label>
+                    <input id="f-leaveForm-businessDays"
                       type="number"
                       min="0"
                       step="0.5"
@@ -4626,8 +4809,8 @@ function App({ me, onSignOut }) {
 
                 {leaveForm.leaveType === 'GENERAL_INCAPACITY' && (
                   <div className="form-group full">
-                    <label>Días acumulados de incapacidad continua ANTES de esta</label>
-                    <input
+                    <label htmlFor="f-leaveForm-accumulatedDaysBefore">Días acumulados de incapacidad continua ANTES de esta</label>
+                    <input id="f-leaveForm-accumulatedDaysBefore"
                       type="number"
                       min="0"
                       value={leaveForm.accumulatedDaysBefore}
@@ -4642,8 +4825,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group full">
-                  <label>Notas (opcional)</label>
-                  <input
+                  <label htmlFor="f-leaveForm-notes">Notas (opcional)</label>
+                  <input id="f-leaveForm-notes"
                     value={leaveForm.notes}
                     onChange={function(e) {
                       setLeaveForm({
@@ -4693,8 +4876,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Primer nombre</label>
-                  <input
+                  <label htmlFor="f-professionalForm-firstName" className="required">Primer nombre</label>
+                  <input id="f-professionalForm-firstName" aria-required="true"
                     value={professionalForm.firstName}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4706,8 +4889,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo nombre</label>
-                  <input
+                  <label htmlFor="f-professionalForm-firstName2">Segundo nombre</label>
+                  <input id="f-professionalForm-firstName2"
                     value={professionalForm.firstName2}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4719,8 +4902,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Primer apellido</label>
-                  <input
+                  <label htmlFor="f-professionalForm-lastName" className="required">Primer apellido</label>
+                  <input id="f-professionalForm-lastName" aria-required="true"
                     value={professionalForm.lastName}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4732,8 +4915,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo apellido</label>
-                  <input
+                  <label htmlFor="f-professionalForm-lastName2">Segundo apellido</label>
+                  <input id="f-professionalForm-lastName2"
                     value={professionalForm.lastName2}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4745,8 +4928,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Documento</label>
-                  <input
+                  <label htmlFor="f-professionalForm-taxId" className="required">Documento</label>
+                  <input id="f-professionalForm-taxId" aria-required="true"
                     value={professionalForm.taxId}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4758,8 +4941,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de documento</label>
-                  <select
+                  <label htmlFor="f-professionalForm-documentType">Tipo de documento</label>
+                  <select id="f-professionalForm-documentType"
                     value={professionalForm.documentType}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4778,8 +4961,8 @@ function App({ me, onSignOut }) {
 
                 {professionalForm.documentType === '31' && (
                   <div className="form-group">
-                    <label>DV (dígito de verificación)</label>
-                    <input
+                    <label htmlFor="f-professionalForm-dv">DV (dígito de verificación)</label>
+                    <input id="f-professionalForm-dv"
                       value={professionalForm.dv}
                       onChange={function(e) {
                         setProfessionalForm({
@@ -4793,8 +4976,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group">
-                  <label>Profesión</label>
-                  <input
+                  <label htmlFor="f-professionalForm-profession" className="required">Profesión</label>
+                  <input id="f-professionalForm-profession" aria-required="true"
                     value={professionalForm.profession}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4807,8 +4990,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Correo</label>
-                  <input
+                  <label htmlFor="f-professionalForm-email">Correo</label>
+                  <input id="f-professionalForm-email"
                     type="email"
                     value={professionalForm.email}
                     onChange={function(e) {
@@ -4821,8 +5004,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="f-professionalForm-phone">Teléfono</label>
+                  <input id="f-professionalForm-phone"
                     value={professionalForm.phone}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4834,8 +5017,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="f-professionalForm-city">Ciudad</label>
+                  <input id="f-professionalForm-city"
                     value={professionalForm.city}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4847,8 +5030,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Banco</label>
-                  <input
+                  <label htmlFor="f-professionalForm-bankName">Banco</label>
+                  <input id="f-professionalForm-bankName"
                     value={professionalForm.bankName}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4860,8 +5043,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de cuenta</label>
-                  <select
+                  <label htmlFor="f-professionalForm-bankAccountType">Tipo de cuenta</label>
+                  <select id="f-professionalForm-bankAccountType"
                     value={professionalForm.bankAccountType}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4876,8 +5059,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Número de cuenta</label>
-                  <input
+                  <label htmlFor="f-professionalForm-bankAccountNumber">Número de cuenta</label>
+                  <input id="f-professionalForm-bankAccountNumber"
                     value={professionalForm.bankAccountNumber}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4889,8 +5072,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tarifa por hora (por defecto, opcional)</label>
-                  <input
+                  <label htmlFor="f-professionalForm-defaultHourlyRate">Tarifa por hora (por defecto, opcional)</label>
+                  <input id="f-professionalForm-defaultHourlyRate"
                     type="number"
                     min="0"
                     step="0.01"
@@ -4958,8 +5141,8 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Modalidad</label>
-                  <select
+                  <label htmlFor="f-engagementForm-vinculationType" className="required">Modalidad</label>
+                  <select id="f-engagementForm-vinculationType" aria-required="true"
                     value={engagementForm.vinculationType}
                     onChange={function(e) {
                       setEngagementForm({
@@ -4978,8 +5161,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tarifa por hora</label>
-                  <input
+                  <label htmlFor="f-engagementForm-hourlyRate" className="required">Tarifa por hora</label>
+                  <input id="f-engagementForm-hourlyRate" aria-required="true"
                     type="number"
                     min="0"
                     value={engagementForm.hourlyRate}
@@ -4993,8 +5176,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha inicio</label>
-                  <input
+                  <label htmlFor="f-engagementForm-startDate" className="required">Fecha inicio</label>
+                  <input id="f-engagementForm-startDate" aria-required="true"
                     type="date"
                     value={engagementForm.startDate}
                     onChange={function(e) {
@@ -5007,8 +5190,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha fin (opcional)</label>
-                  <input
+                  <label htmlFor="f-engagementForm-endDate">Fecha fin (opcional)</label>
+                  <input id="f-engagementForm-endDate"
                     type="date"
                     value={engagementForm.endDate}
                     onChange={function(e) {
@@ -5023,8 +5206,8 @@ function App({ me, onSignOut }) {
                 {engagementForm.vinculationType === 'INDEPENDENT_SERVICES' ? (
                   <>
                     <div className="form-group">
-                      <label>Concepto de retención</label>
-                      <select
+                      <label htmlFor="f-engagementForm-retentionConcept">Concepto de retención</label>
+                      <select id="f-engagementForm-retentionConcept"
                         value={engagementForm.retentionConcept}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5039,8 +5222,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>¿Declarante de renta?</label>
-                      <select
+                      <label htmlFor="f-engagementForm-isIncomeTaxFiler">¿Declarante de renta?</label>
+                      <select id="f-engagementForm-isIncomeTaxFiler"
                         value={engagementForm.isIncomeTaxFiler ? '1' : '0'}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5055,8 +5238,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group full">
-                      <label>Objeto / entregable del contrato</label>
-                      <input
+                      <label htmlFor="f-engagementForm-deliverableDescription" className="required">Objeto / entregable del contrato</label>
+                      <input id="f-engagementForm-deliverableDescription" aria-required="true"
                         value={engagementForm.deliverableDescription}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5071,8 +5254,8 @@ function App({ me, onSignOut }) {
                 ) : (
                   <>
                     <div className="form-group">
-                      <label>Horas semanales (máx. 42)</label>
-                      <input
+                      <label htmlFor="f-engagementForm-weeklyHours" className="required">Horas semanales (máx. 42)</label>
+                      <input id="f-engagementForm-weeklyHours" aria-required="true"
                         type="number"
                         min="1"
                         max="42"
@@ -5087,8 +5270,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Tipo contrato DIAN</label>
-                      <select
+                      <label htmlFor="f-engagementForm-contractType">Tipo contrato DIAN</label>
+                      <select id="f-engagementForm-contractType"
                         value={engagementForm.contractType}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5145,8 +5328,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="f-timeEntryForm-periodStart" className="required">Periodo desde</label>
+                  <input id="f-timeEntryForm-periodStart" aria-required="true"
                     type="date"
                     value={timeEntryForm.periodStart}
                     onChange={function(e) {
@@ -5159,8 +5342,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="f-timeEntryForm-periodEnd" className="required">Periodo hasta</label>
+                  <input id="f-timeEntryForm-periodEnd" aria-required="true"
                     type="date"
                     value={timeEntryForm.periodEnd}
                     onChange={function(e) {
@@ -5173,8 +5356,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Horas trabajadas</label>
-                  <input
+                  <label htmlFor="f-timeEntryForm-hours" className="required">Horas trabajadas</label>
+                  <input id="f-timeEntryForm-hours" aria-required="true"
                     type="number"
                     min="0"
                     step="0.5"
@@ -5189,8 +5372,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Notas (opcional)</label>
-                  <input
+                  <label htmlFor="f-timeEntryForm-notes">Notas (opcional)</label>
+                  <input id="f-timeEntryForm-notes"
                     value={timeEntryForm.notes}
                     onChange={function(e) {
                       setTimeEntryForm({
@@ -5247,8 +5430,8 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo (AAAA-MM)</label>
-                  <input
+                  <label htmlFor="f-pilaForm-period" className="required">Periodo (AAAA-MM)</label>
+                  <input id="f-pilaForm-period" aria-required="true"
                     value={pilaForm.period}
                     onChange={function(e) {
                       setPilaForm({
@@ -5261,8 +5444,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>IBC declarado por el contratista</label>
-                  <input
+                  <label htmlFor="f-pilaForm-declaredIbc" className="required">IBC declarado por el contratista</label>
+                  <input id="f-pilaForm-declaredIbc" aria-required="true"
                     type="number"
                     min="0"
                     value={pilaForm.declaredIbc}
@@ -5276,8 +5459,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Referencia de planilla (opcional)</label>
-                  <input
+                  <label htmlFor="f-pilaForm-planillaReference">Referencia de planilla (opcional)</label>
+                  <input id="f-pilaForm-planillaReference"
                     value={pilaForm.planillaReference}
                     onChange={function(e) {
                       setPilaForm({
@@ -5327,8 +5510,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="f-settlementForm-periodStart" className="required">Periodo desde</label>
+                  <input id="f-settlementForm-periodStart" aria-required="true"
                     type="date"
                     value={settlementForm.periodStart}
                     onChange={function(e) {
@@ -5341,8 +5524,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="f-settlementForm-periodEnd" className="required">Periodo hasta</label>
+                  <input id="f-settlementForm-periodEnd" aria-required="true"
                     type="date"
                     value={settlementForm.periodEnd}
                     onChange={function(e) {
@@ -5356,8 +5539,8 @@ function App({ me, onSignOut }) {
 
                 {selectedEngagement.retentionConcept === 'HONORARIOS' && (
                   <div className="form-group full">
-                    <label>Tarifa de retención vigente (%)</label>
-                    <input
+                    <label htmlFor="f-settlementForm-retentionRatePercent" className="required">Tarifa de retención vigente (%)</label>
+                    <input id="f-settlementForm-retentionRatePercent" aria-required="true"
                       type="number"
                       min="0"
                       max="100"
@@ -5499,20 +5682,10 @@ function StorageNotice() {
 }
 
 function PageFooter() {
+  // Posición y espaciado en .page-footer (src/dashboard.ts): fijo en
+  // pantallas anchas, en flujo normal en celular para no tapar contenido.
   return (
-    <div style={{
-      position: 'fixed',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      zIndex: 500,
-      padding: '7px 16px',
-      textAlign: 'center',
-      fontSize: '11px',
-      color: '#8193aa',
-      background: 'rgba(7, 17, 31, 0.92)',
-      borderTop: '1px solid #1d3047'
-    }}>
+    <footer className="page-footer">
       <strong>KREADU S.A.S.</strong> - Empresa AI Business Systems Lab -
       Academy - KREADU School
       {' · '}
