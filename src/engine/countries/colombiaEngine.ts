@@ -81,8 +81,9 @@ export class ColombiaPayrollEngine {
   // RETENCIÓN EN LA FUENTE (procedimiento 1, simplificado)
   //
   // IMPORTANTE: depuración simplificada — renta exenta general al
-  // 25% sin el tope real de 240 UVT/mes, y sin modelar deducciones
-  // por dependientes, intereses de vivienda ni aportes voluntarios.
+  // 25% con su tope de 790 UVT anuales (Ley 2277 de 2022), pero sin
+  // modelar deducciones por dependientes, intereses de vivienda ni
+  // aportes voluntarios.
   // Validar con el contador antes de usar para retenciones reales.
   // ==========================================================
 
@@ -94,9 +95,12 @@ export class ColombiaPayrollEngine {
     const ingresoGravable =
       Math.max(taxableIncome - mandatoryDeductions, 0);
 
-    const rentaExenta =
+    const rentaExenta = Math.min(
       ingresoGravable *
-      CONSTANTS_2026.RETENCION_EMPLEADOS_RENTA_EXENTA_PCT;
+        CONSTANTS_2026.RETENCION_EMPLEADOS_RENTA_EXENTA_PCT,
+      (CONSTANTS_2026.RETENCION_EMPLEADOS_RENTA_EXENTA_MAX_UVT_ANUAL / 12) *
+        CONSTANTS_2026.UVT
+    );
 
     const baseGravable =
       Math.max(ingresoGravable - rentaExenta, 0);
@@ -360,14 +364,15 @@ export class ColombiaPayrollEngine {
       hourlyRate *
       CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE;
 
-    // Horas extra en domingo/festivo: los recargos se suman
-    // (25% de extra diurna + 90% dominical/festivo), no se
-    // multiplican — así lo trata el Ministerio de Trabajo.
+    // Horas extra en domingo/festivo: no están cubiertas por el
+    // salario, así que se paga la hora completa más los recargos,
+    // que se suman sin multiplicarse (100% + 25% de extra diurna +
+    // 90% dominical/festivo = factor 2.15).
     const dominicalFestivoExtraValue =
       horasExtraDominicalFestivo *
       hourlyRate *
       (
-        (CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER - 1) +
+        CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER +
         CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE
       );
 
@@ -494,9 +499,13 @@ export class ColombiaPayrollEngine {
     // APORTES EMPLEADOR
     // --------------------------------------------------------
 
+    // La exoneración del art. 114-1 ET sólo cubre a trabajadores que
+    // devengan, individualmente, menos de 10 SMMLV.
     const isExempt =
-      input.isExempt114_1 ??
-      false;
+      (input.isExempt114_1 ?? false) &&
+      baseSalary <
+        CONSTANTS_2026.SMMLV *
+        CONSTANTS_2026.EXEMPT_114_1_MAX_SMMLV_MULTIPLE;
 
     const arlRate =
       input.riskClass ??
@@ -610,8 +619,8 @@ export class ColombiaPayrollEngine {
     if (retencionFuente > 0) {
       complianceNotes.push(
         'Retención en la fuente calculada con una depuración ' +
-        'simplificada (25% de renta exenta general, sin el tope ' +
-        'real de 240 UVT/mes, sin deducciones por dependientes ni ' +
+        'simplificada (25% de renta exenta general con tope de 790 ' +
+        'UVT anuales, sin deducciones por dependientes ni ' +
         'intereses de vivienda). Valídala con tu contador antes de ' +
         'aplicarla en una nómina real.'
       );

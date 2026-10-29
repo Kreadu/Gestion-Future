@@ -5,7 +5,8 @@ export interface DashboardFirebaseConfig {
 }
 
 export function getDashboardHtml(
-  firebaseConfig: DashboardFirebaseConfig
+  firebaseConfig: DashboardFirebaseConfig,
+  legalVersion: string
 ): string {
   return `<!DOCTYPE html>
 <html lang="es">
@@ -14,13 +15,14 @@ export function getDashboardHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Kreadu Gestion-Future | Dashboard Nómina</title>
 
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script>
     window.__FIREBASE_CONFIG__ = ${JSON.stringify(firebaseConfig)};
+    window.__LEGAL_VERSION__ = ${JSON.stringify(legalVersion)};
   </script>
 
   <style>
@@ -177,6 +179,11 @@ export function getDashboardHtml(
       background: #0b1829;
       transition: .15s ease;
       cursor: pointer;
+    }
+
+    :focus-visible {
+      outline: 2px solid #60a5fa;
+      outline-offset: 2px;
     }
 
     .employee-card:hover,
@@ -464,6 +471,64 @@ export function getDashboardHtml(
       padding: 19px;
     }
 
+    .storage-notice {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 44px;
+      max-width: 640px;
+      margin: 0 auto;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border: 1px solid #29415d;
+      border-radius: 10px;
+      background: #0b1829;
+      color: #dbe5f1;
+      font-size: 12px;
+      text-align: left;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .4);
+    }
+
+    .storage-notice a { color: #93c5fd; }
+
+    .legal-box {
+      margin-bottom: 18px;
+      padding: 14px;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      background: #020617;
+    }
+
+    .legal-frame {
+      width: 100%;
+      height: 260px;
+      border: 1px solid #1d3047;
+      border-radius: 8px;
+      background: #07111f;
+    }
+
+    .legal-accept {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      cursor: pointer;
+      text-transform: none;
+      letter-spacing: normal;
+      font-weight: 400;
+      color: #cbd5e1;
+    }
+
+    .legal-accept input {
+      width: auto;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+
     .modal-footer {
       padding: 14px 19px;
       border-top: 1px solid #1d3047;
@@ -605,6 +670,30 @@ function leaveDaysInPeriod(leave, period) {
   return Math.round((new Date(end + 'T00:00:00Z') - new Date(start + 'T00:00:00Z')) / msPerDay) + 1;
 }
 
+// Tarjetas clicables (div con onClick): Enter o Espacio las activan
+// igual que un clic, sin disparar el clic de la tarjeta cuando el foco
+// está en un botón dentro de ella (Editar/Eliminar).
+function activateWithKeyboard(e) {
+  if (e.target !== e.currentTarget) return;
+
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    e.currentTarget.click();
+  }
+}
+
+// Escape cierra la ventana modal abierta más reciente, usando su
+// propio botón ✕ para respetar la lógica de cierre de cada una.
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+
+  const closeButtons = document.querySelectorAll('.modal-backdrop .modal-header button');
+
+  if (closeButtons.length > 0) {
+    closeButtons[closeButtons.length - 1].click();
+  }
+});
+
 function formatCOP(value) {
   return new Intl.NumberFormat('es-CO', {
     style: 'currency',
@@ -695,6 +784,13 @@ function LoginScreen({ error, loading, onSignIn }) {
 
         <p style={{ color: '#8193aa', fontSize: '13px', margin: '0 0 24px' }}>
           Inicia sesión para gestionar la nómina de tu empresa.
+        </p>
+
+        <p style={{ color: '#8193aa', fontSize: '11px', margin: '-12px 0 18px' }}>
+          Al iniciar sesión aceptas los{' '}
+          <a href="/legal" target="_blank" rel="noopener" style={{ color: '#93c5fd' }}>
+            Términos de uso y la Política de tratamiento de datos
+          </a>.
         </p>
 
         {error && (
@@ -804,6 +900,9 @@ function App({ me, onSignOut }) {
   const [selectedEmp, setSelectedEmp] = useState(null);
 
   const [companyModal, setCompanyModal] = useState(false);
+  const [summaryModal, setSummaryModal] = useState(false);
+  const [adminFeePct, setAdminFeePct] = useState('0');
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [employeeModal, setEmployeeModal] = useState(false);
 
   const [editingCompany, setEditingCompany] = useState(null);
@@ -848,7 +947,8 @@ function App({ me, onSignOut }) {
     hireDate: '',
     bankName: '',
     bankAccountType: 'AHORROS',
-    bankAccountNumber: ''
+    bankAccountNumber: '',
+    arlRiskClass: '1'
   });
 
   const [payrollForm, setPayrollForm] = useState({
@@ -1189,9 +1289,11 @@ function App({ me, onSignOut }) {
       contactName: '',
       legalRepresentative: '',
       taxRegime: 'ORDINARIO',
-      economicActivity: ''
+      economicActivity: '',
+      isExempt114_1: false
     });
 
+    setTermsAccepted(false);
     setCompanyModal(true);
   }
 
@@ -1215,7 +1317,8 @@ function App({ me, onSignOut }) {
       contactName: selectedCompany.contactName || '',
       legalRepresentative: selectedCompany.legalRepresentative || '',
       taxRegime: selectedCompany.taxRegime || 'ORDINARIO',
-      economicActivity: selectedCompany.economicActivity || ''
+      economicActivity: selectedCompany.economicActivity || '',
+      isExempt114_1: !!selectedCompany.isExempt114_1
     });
 
     setCompanyModal(true);
@@ -1233,10 +1336,18 @@ function App({ me, onSignOut }) {
         throw new Error('El NIT de la empresa es obligatorio.');
       }
 
+      if (!editingCompany && !termsAccepted) {
+        throw new Error(
+          'Debes aceptar los Términos de uso y la Política de ' +
+          'tratamiento de datos para crear la empresa.'
+        );
+      }
+
       setLoading(true);
 
       const payload = {
-        ...companyForm
+        ...companyForm,
+        acceptedTermsVersion: editingCompany ? undefined : window.__LEGAL_VERSION__
       };
 
       if (editingCompany) {
@@ -1329,7 +1440,8 @@ function App({ me, onSignOut }) {
       hireDate: '',
       bankName: '',
       bankAccountType: 'AHORROS',
-      bankAccountNumber: ''
+      bankAccountNumber: '',
+      arlRiskClass: '1'
     });
 
     setEmployeeModal(true);
@@ -1357,7 +1469,8 @@ function App({ me, onSignOut }) {
       hireDate: employee.hireDate || '',
       bankName: employee.bankName || '',
       bankAccountType: employee.bankAccountType || 'AHORROS',
-      bankAccountNumber: employee.bankAccountNumber || ''
+      bankAccountNumber: employee.bankAccountNumber || '',
+      arlRiskClass: String(employee.arlRiskClass || 1)
     });
 
     setEmployeeModal(true);
@@ -1803,6 +1916,88 @@ function App({ me, onSignOut }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  // ------------------------------------------------------------
+  // RESUMEN DEL PERIODO — costo total para la empresa cliente
+  // ------------------------------------------------------------
+
+  function buildPeriodSummary() {
+    const rows = settlements
+      .filter(function(s) { return s.calculation; })
+      .map(function(s) {
+        const c = s.calculation;
+        const contributions = c.employerContributions.totalContributions;
+        const provisions = c.provisions.totalProvisions;
+
+        return {
+          name: getEmployeeName(s.employee),
+          taxId: s.employee.taxId,
+          gross: c.grossEarnings,
+          deductions: c.employeeDeductions.totalDeductions,
+          net: c.netPay,
+          contributions: contributions,
+          provisions: provisions,
+          // Costo para la empresa: todo lo devengado (lo que recibe el
+          // trabajador más lo que se le descuenta para seguridad
+          // social y retención) + aportes del empleador + provisiones.
+          cost: c.grossEarnings + contributions + provisions
+        };
+      });
+
+    const totals = rows.reduce(function(acc, r) {
+      return {
+        gross: acc.gross + r.gross,
+        deductions: acc.deductions + r.deductions,
+        net: acc.net + r.net,
+        contributions: acc.contributions + r.contributions,
+        provisions: acc.provisions + r.provisions,
+        cost: acc.cost + r.cost
+      };
+    }, { gross: 0, deductions: 0, net: 0, contributions: 0, provisions: 0, cost: 0 });
+
+    const feePct = Math.max(Number(adminFeePct) || 0, 0);
+    const fee = totals.cost * feePct / 100;
+
+    return { rows: rows, totals: totals, feePct: feePct, fee: fee, invoice: totals.cost + fee };
+  }
+
+  function exportPeriodSummaryCsv() {
+    const summary = buildPeriodSummary();
+    const money = function(v) { return String(Math.round(v)); };
+    // Excel en español usa ';' como separador.
+    const line = function(cells) {
+      return cells.map(function(c) {
+        return '"' + String(c).replace(/"/g, '""') + '"';
+      }).join(';');
+    };
+
+    const lines = [
+      line(['Empresa', selectedCompany ? selectedCompany.name : '']),
+      line(['Periodo', selectedPeriod.periodStart + ' a ' + selectedPeriod.periodEnd]),
+      '',
+      line(['Empleado', 'Documento', 'Devengado', 'Deducciones', 'Neto a pagar',
+        'Aportes empleador', 'Provisiones', 'Costo total empresa'])
+    ];
+
+    summary.rows.forEach(function(r) {
+      lines.push(line([r.name, r.taxId, money(r.gross), money(r.deductions), money(r.net),
+        money(r.contributions), money(r.provisions), money(r.cost)]));
+    });
+
+    const t = summary.totals;
+    lines.push(line(['TOTAL', '', money(t.gross), money(t.deductions), money(t.net),
+      money(t.contributions), money(t.provisions), money(t.cost)]));
+    lines.push('');
+    lines.push(line(['Administración (' + summary.feePct + '%)', money(summary.fee)]));
+    lines.push(line(['Total a facturar', money(summary.invoice)]));
+
+    const blob = new Blob(['\\ufeff' + lines.join('\\r\\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'resumen-nomina-' + selectedPeriod.periodStart + '.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
   }
 
   // ------------------------------------------------------------
@@ -3217,7 +3412,10 @@ function App({ me, onSignOut }) {
                     <div
                       key={professional.id}
                       className="employee-card"
-                      onClick={function() {
+                      role="button"
+                    tabIndex={0}
+                    onKeyDown={activateWithKeyboard}
+                    onClick={function() {
                         openNewEngagement(professional);
                       }}
                     >
@@ -3277,6 +3475,9 @@ function App({ me, onSignOut }) {
                   <div
                     key={engagement.id}
                     className={'employee-card' + (isSelected ? ' selected' : '')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={activateWithKeyboard}
                     onClick={function() {
                       setSettlementResult(null);
                       setSelectedEngagementId(engagement.id);
@@ -3469,6 +3670,9 @@ function App({ me, onSignOut }) {
                       'employee-card' +
                       (isSelected ? ' selected' : '')
                     }
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={activateWithKeyboard}
                     onClick={function() {
                       selectEmployeeForPayroll(employee);
                     }}
@@ -3585,6 +3789,15 @@ function App({ me, onSignOut }) {
                     disabled={loading}
                   >
                     🏦 Archivo bancario del periodo
+                  </button>
+                )}
+
+                {selectedPeriod && (
+                  <button
+                    className="btn"
+                    onClick={function() { setSummaryModal(true); }}
+                  >
+                    📊 Resumen del periodo
                   </button>
                 )}
               </div>
@@ -3963,6 +4176,7 @@ function App({ me, onSignOut }) {
 
               <button
                 className="btn"
+                aria-label="Cerrar"
                 onClick={function() {
                   setCompanyModal(false);
                 }}
@@ -3972,6 +4186,43 @@ function App({ me, onSignOut }) {
             </div>
 
             <div className="modal-body">
+              {!editingCompany && (
+                <div className="legal-box">
+                  <div style={{ fontWeight: '700', marginBottom: '6px' }}>
+                    📜 Términos de uso y Política de tratamiento de datos
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#94a3b8', margin: '0 0 8px' }}>
+                    Léelos antes de crear la empresa. En la nómina de esta
+                    empresa, ella es la Responsable de los datos de sus
+                    trabajadores y Kreadu actúa como Encargado del tratamiento.
+                  </p>
+                  <iframe
+                    src="/legal"
+                    title="Términos de uso y Política de tratamiento de datos"
+                    className="legal-frame"
+                  />
+                  <label className="legal-accept">
+                    <input
+                      type="checkbox"
+                      checked={termsAccepted}
+                      onChange={function(e) {
+                        setTermsAccepted(e.target.checked);
+                      }}
+                    />
+                    <span>
+                      Declaro que tengo facultades para representar a la
+                      empresa, que acepto los Términos de uso y la Política de
+                      tratamiento de datos (versión {window.__LEGAL_VERSION__}),
+                      y que la empresa cuenta con la autorización de sus
+                      trabajadores y contratistas para tratar sus datos,
+                      incluidos los de salud (incapacidades y licencias).
+                      {' '}
+                      <a href="/legal" target="_blank" rel="noopener">Abrir en otra pestaña</a>
+                    </span>
+                  </label>
+                </div>
+              )}
+
               <div className="form-grid">
                 <div className="form-group full">
                   <label>Razón social</label>
@@ -4237,6 +4488,26 @@ function App({ me, onSignOut }) {
                   </select>
                 </div>
 
+                <div className="form-group">
+                  <label>Exoneración de aportes (art. 114-1 ET)</label>
+                  <label className="legal-accept" style={{ marginTop: '4px' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!companyForm.isExempt114_1}
+                      onChange={function(e) {
+                        setCompanyForm({
+                          ...companyForm,
+                          isExempt114_1: e.target.checked
+                        });
+                      }}
+                    />
+                    <span>
+                      Exonerada de salud del empleador, SENA e ICBF por
+                      trabajadores que devenguen menos de 10 SMMLV
+                    </span>
+                  </label>
+                </div>
+
                 <div className="form-group full">
                   <label>Actividad económica</label>
                   <input
@@ -4275,7 +4546,7 @@ function App({ me, onSignOut }) {
               <button
                 className="btn btn-primary"
                 onClick={saveCompany}
-                disabled={loading}
+                disabled={loading || (!editingCompany && !termsAccepted)}
               >
                 {loading ? 'Guardando...' : 'Guardar empresa'}
               </button>
@@ -4283,6 +4554,115 @@ function App({ me, onSignOut }) {
           </div>
         </div>
       )}
+
+      {summaryModal && selectedPeriod && (function() {
+        const summary = buildPeriodSummary();
+        const t = summary.totals;
+        const cell = { padding: '6px 8px', borderBottom: '1px solid #1d3047', textAlign: 'right', whiteSpace: 'nowrap' };
+        const left = { ...cell, textAlign: 'left' };
+
+        return (
+          <div className="modal-backdrop">
+            <div className="modal" style={{ width: 'min(1040px, 100%)' }}>
+              <div className="modal-header">
+                <h3>
+                  📊 Resumen del periodo {selectedPeriod.periodStart} a {selectedPeriod.periodEnd}
+                </h3>
+                <button className="btn" onClick={function() { setSummaryModal(false); }}>✕</button>
+              </div>
+
+              <div className="modal-body">
+                {summary.rows.length === 0 ? (
+                  <div className="info-box">
+                    Aún no hay empleados liquidados en este periodo.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                        <thead>
+                          <tr>
+                            <th style={left}>Empleado</th>
+                            <th style={cell}>Devengado</th>
+                            <th style={cell}>Deducciones</th>
+                            <th style={cell}>Neto a pagar</th>
+                            <th style={cell}>Aportes empleador</th>
+                            <th style={cell}>Provisiones</th>
+                            <th style={cell}>Costo total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {summary.rows.map(function(r) {
+                            return (
+                              <tr key={r.taxId}>
+                                <td style={left}>{r.name}<br /><span style={{ color: '#8193aa' }}>{r.taxId}</span></td>
+                                <td style={cell}>{formatCOP(r.gross)}</td>
+                                <td style={cell}>{formatCOP(r.deductions)}</td>
+                                <td style={cell}>{formatCOP(r.net)}</td>
+                                <td style={cell}>{formatCOP(r.contributions)}</td>
+                                <td style={cell}>{formatCOP(r.provisions)}</td>
+                                <td style={cell}>{formatCOP(r.cost)}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ fontWeight: '700' }}>
+                            <td style={left}>TOTAL ({summary.rows.length})</td>
+                            <td style={cell}>{formatCOP(t.gross)}</td>
+                            <td style={cell}>{formatCOP(t.deductions)}</td>
+                            <td style={cell}>{formatCOP(t.net)}</td>
+                            <td style={cell}>{formatCOP(t.contributions)}</td>
+                            <td style={cell}>{formatCOP(t.provisions)}</td>
+                            <td style={cell}>{formatCOP(t.cost)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="form-grid" style={{ marginTop: '16px' }}>
+                      <div className="form-group">
+                        <label>% de administración (outsourcing)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          value={adminFeePct}
+                          onChange={function(e) { setAdminFeePct(e.target.value); }}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Valor administración</label>
+                        <input value={formatCOP(summary.fee)} disabled />
+                      </div>
+                      <div className="form-group full">
+                        <label>Total a facturar a la empresa (costo total + administración)</label>
+                        <input value={formatCOP(summary.invoice)} disabled />
+                      </div>
+                    </div>
+
+                    <p style={{ fontSize: '11px', color: '#8193aa', marginTop: '10px' }}>
+                      Sólo incluye a los empleados ya liquidados en este periodo.
+                      Las provisiones (cesantías, intereses, prima, vacaciones) se
+                      causan cada mes aunque se paguen después. Antes de facturar,
+                      agrega el IVA que corresponda a la administración.
+                    </p>
+                  </>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                <button className="btn" onClick={function() { setSummaryModal(false); }}>Cerrar</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={exportPeriodSummaryCsv}
+                  disabled={summary.rows.length === 0}
+                >
+                  ⬇️ Exportar CSV (Excel)
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {employeeModal && (
         <div className="modal-backdrop">
@@ -4400,6 +4780,25 @@ function App({ me, onSignOut }) {
                     <option value="3">Obra o labor</option>
                     <option value="4">Aprendizaje</option>
                     <option value="5">Otro</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Clase de riesgo ARL</label>
+                  <select
+                    value={employeeForm.arlRiskClass}
+                    onChange={function(e) {
+                      setEmployeeForm({
+                        ...employeeForm,
+                        arlRiskClass: e.target.value
+                      });
+                    }}
+                  >
+                    <option value="1">Clase I · 0,522% (oficina, administrativo)</option>
+                    <option value="2">Clase II · 1,044% (algunos procesos manufactureros)</option>
+                    <option value="3">Clase III · 2,436% (procesos industriales, conductores)</option>
+                    <option value="4">Clase IV · 4,350% (transporte, procesos de alto riesgo)</option>
+                    <option value="5">Clase V · 6,960% (construcción, alturas, minería)</option>
                   </select>
                 </div>
 
@@ -5530,6 +5929,41 @@ function getEmployeeName(employee) {
 // (login y dashboard) — distinto de renderKreaduFooter(), que es el
 // mismo texto pero en flujo normal al final de un documento
 // imprimible (no fijo, porque ahí ya está dentro de un contenedor).
+// Aviso informativo: la Plataforma sólo usa almacenamiento esencial
+// (la sesión de Firebase en IndexedDB/localStorage), sin cookies de
+// analítica ni publicidad, así que no hay nada que "aceptar" o
+// rechazar: basta informar y enlazar la política.
+function StorageNotice() {
+  const [hidden, setHidden] = useState(function() {
+    try {
+      return localStorage.getItem('gf-storage-notice') === '1';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  if (hidden) return null;
+
+  return (
+    <div role="region" aria-label="Aviso de cookies y almacenamiento" className="storage-notice">
+      <span>
+        Sólo usamos almacenamiento técnico esencial para mantener tu sesión
+        iniciada. No usamos cookies de analítica ni de publicidad.{' '}
+        <a href="/legal#cookies" target="_blank" rel="noopener">Más información</a>
+      </span>
+      <button
+        className="btn"
+        onClick={function() {
+          try { localStorage.setItem('gf-storage-notice', '1'); } catch (e) {}
+          setHidden(true);
+        }}
+      >
+        Entendido
+      </button>
+    </div>
+  );
+}
+
 function PageFooter() {
   return (
     <div style={{
@@ -5549,6 +5983,15 @@ function PageFooter() {
       Academy - KREADU School
       {' · '}
       Contacto: is@kreadu.com; (+57) 3235297951; (+57) 3225832662
+      {' · '}
+      <a href="/legal" target="_blank" rel="noopener" style={{ color: '#93c5fd' }}>
+        Términos y Política de datos
+      </a>
+      {' · '}
+      <a href="mailto:is@kreadu.com?subject=Solicitud%20de%20datos%20personales" style={{ color: '#93c5fd' }}>
+        Solicitar acceso o eliminación de mis datos
+      </a>
+      <StorageNotice />
     </div>
   );
 }

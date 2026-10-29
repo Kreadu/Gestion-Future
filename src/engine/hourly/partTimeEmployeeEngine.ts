@@ -137,7 +137,13 @@ export class PartTimeEmployeeEngine {
     // APORTES EMPLEADOR
     // --------------------------------------------------------
 
-    const isExempt = input.isExempt114_1 ?? false;
+    // Igual que en nómina mensual: la exoneración del art. 114-1 ET
+    // sólo cubre a quien devenga menos de 10 SMMLV.
+    const isExempt =
+      (input.isExempt114_1 ?? false) &&
+      ibcSecuritySocial <
+        CONSTANTS_2026.SMMLV *
+        CONSTANTS_2026.EXEMPT_114_1_MAX_SMMLV_MULTIPLE;
     const arlRate = input.riskClass ?? RiskClass.CLASS_I;
 
     const health8_5pct =

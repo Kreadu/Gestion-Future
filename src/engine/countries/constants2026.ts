@@ -124,11 +124,20 @@ export const CONSTANTS_2026 = {
 
   /**
    * Retención en la fuente de empleados (procedimiento 1, art. 383
-   * ET). Renta exenta general simplificada al 25% del ingreso
-   * gravable, SIN el tope de 240 UVT/mes que aplica en la realidad
-   * — validar con el contador antes de usar en producción.
+   * ET). Renta exenta general del 25% (art. 206 num. 10 ET) con tope
+   * de 790 UVT anuales desde la Ley 2277 de 2022; en la retención
+   * mensual se aplica 790/12 UVT. Sin deducciones por dependientes
+   * ni intereses de vivienda — validar con el contador.
    */
   RETENCION_EMPLEADOS_RENTA_EXENTA_PCT: 0.25,
+  RETENCION_EMPLEADOS_RENTA_EXENTA_MAX_UVT_ANUAL: 790,
+
+  /**
+   * Exoneración de aportes (art. 114-1 ET): salud del empleador,
+   * SENA e ICBF no se pagan por trabajadores que devenguen menos de
+   * 10 SMMLV.
+   */
+  EXEMPT_114_1_MAX_SMMLV_MULTIPLE: 10,
 
   /**
    * Tabla del art. 383 ET (estructura estable desde la Ley 1819 de

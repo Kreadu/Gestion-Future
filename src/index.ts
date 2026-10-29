@@ -1,6 +1,7 @@
 import ColombiaPayrollEngine, {
   ColombiaPayrollEngineError,
 } from './engine/countries/colombiaEngine';
+import { RiskClass } from './types/payroll';
 import type {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
@@ -29,6 +30,7 @@ interface DianEmployeeExtraInfo {
 
 import { BankDisbursementService } from './services/bankDisbursement';
 import { getDashboardHtml } from './dashboard';
+import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
   authenticate,
   requireRole,
@@ -98,6 +100,7 @@ interface Company {
   legalRepresentative?: string | null;
   taxRegime?: string | null;
   economicActivity?: string | null;
+  isExempt114_1: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -122,6 +125,7 @@ interface Employee {
   bankName?: string | null;
   bankAccountType?: string | null;
   bankAccountNumber?: string | null;
+  arlRiskClass: number;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -165,6 +169,7 @@ function normalizeCompany(row: any): Company {
     legalRepresentative: row.legalRepresentative ?? null,
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
+    isExempt114_1: !!row.isExempt114_1,
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -191,10 +196,25 @@ function normalizeEmployee(row: any): Employee {
     bankName: row.bankName ?? null,
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
+    arlRiskClass: normalizeArlRiskClass(row.arlRiskClass),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
 }
+
+/** Clase de riesgo ARL 1-5; cualquier otro valor cae a 1 (riesgo mínimo). */
+function normalizeArlRiskClass(value: unknown): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? n : 1;
+}
+
+const ARL_RISK_CLASS_RATES: Record<number, RiskClass> = {
+  1: RiskClass.CLASS_I,
+  2: RiskClass.CLASS_II,
+  3: RiskClass.CLASS_III,
+  4: RiskClass.CLASS_IV,
+  5: RiskClass.CLASS_V,
+};
 
 function normalizeEmployeeLeave(row: any): EmployeeLeave {
   return {
@@ -336,13 +356,21 @@ export default {
             apiKey: env.FIREBASE_API_KEY,
             authDomain: env.FIREBASE_AUTH_DOMAIN,
             projectId: env.FIREBASE_PROJECT_ID,
-          }),
+          }, LEGAL_VERSION),
           {
             headers: {
               'Content-Type': 'text/html; charset=utf-8',
             },
           }
         );
+      }
+
+      // Términos y política de datos: pública, sin autenticación,
+      // para que cualquier titular pueda consultarla (Ley 1581/2012).
+      if (url.pathname === '/legal') {
+        return new Response(getLegalHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
       }
 
       /*
@@ -399,6 +427,7 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
               active,
               createdAt
             FROM companies
@@ -436,6 +465,18 @@ export default {
 
         const name = String(body.name || '').trim();
         const nit = String(body.nit || '').trim();
+
+        if (body.acceptedTermsVersion !== LEGAL_VERSION) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Debes aceptar los Términos de uso y la Política de ' +
+                'tratamiento de datos para crear la empresa.',
+            },
+            400
+          );
+        }
 
         if (!name) {
           return sendJson(
@@ -479,12 +520,18 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
+              termsVersion,
+              termsAcceptedAt,
+              termsAcceptedBy,
+              termsAcceptedIp,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?18,
+              ?19, ?17, ?20, ?21, 1, ?17
             )
           `)
           .bind(
@@ -504,7 +551,11 @@ export default {
             body.taxRegime || null,
             body.economicActivity || null,
             body.logo || null,
-            createdAt
+            createdAt,
+            body.isExempt114_1 ? 1 : 0,
+            LEGAL_VERSION,
+            user.email,
+            request.headers.get('CF-Connecting-IP')
           )
           .run();
 
@@ -604,7 +655,8 @@ export default {
               legalRepresentative = ?12,
               taxRegime = ?13,
               economicActivity = ?14,
-              logo = ?15
+              logo = ?15,
+              isExempt114_1 = ?17
             WHERE id = ?16
           `)
           .bind(
@@ -623,7 +675,8 @@ export default {
             body.taxRegime ?? null,
             body.economicActivity ?? null,
             body.logo ?? existing.logo ?? null,
-            companyId
+            companyId,
+            (body.isExempt114_1 ?? existing.isExempt114_1) ? 1 : 0
           )
           .run();
 
@@ -748,6 +801,10 @@ export default {
               phone,
               whatsapp,
               hireDate,
+              bankName,
+              bankAccountType,
+              bankAccountNumber,
+              arlRiskClass,
               active,
               createdAt
             FROM employees
@@ -877,12 +934,13 @@ export default {
               bankName,
               bankAccountType,
               bankAccountNumber,
+              arlRiskClass,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 1, ?20
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, 1, ?20
             )
           `)
           .bind(
@@ -905,7 +963,8 @@ export default {
             body.bankName || null,
             body.bankAccountType || null,
             body.bankAccountNumber || null,
-            createdAt
+            createdAt,
+            normalizeArlRiskClass(body.arlRiskClass)
           )
           .run();
 
@@ -1005,7 +1064,8 @@ export default {
               hireDate = ?14,
               bankName = ?15,
               bankAccountType = ?16,
-              bankAccountNumber = ?17
+              bankAccountNumber = ?17,
+              arlRiskClass = ?19
             WHERE id = ?18
           `)
           .bind(
@@ -1043,7 +1103,10 @@ export default {
             body.bankName ?? existing.bankName ?? null,
             body.bankAccountType ?? existing.bankAccountType ?? null,
             body.bankAccountNumber ?? existing.bankAccountNumber ?? null,
-            employeeId
+            employeeId,
+            normalizeArlRiskClass(
+              body.arlRiskClass ?? existing.arlRiskClass
+            )
           )
           .run();
 
@@ -1906,6 +1969,11 @@ export default {
 
         const employee = normalizeEmployee(employeeRow);
 
+        const companyExemption = await env.DB
+          .prepare(`SELECT isExempt114_1 FROM companies WHERE id = ?1`)
+          .bind(employee.companyId)
+          .first();
+
         if (employee.companyId !== String(periodRow.companyId)) {
           return sendJson(
             {
@@ -2072,6 +2140,8 @@ export default {
           horasDominicalFestivo,
           horasExtraDominicalFestivo,
           isIntegralSalary: !!body.isIntegralSalary,
+          riskClass: ARL_RISK_CLASS_RATES[employee.arlRiskClass],
+          isExempt114_1: !!companyExemption?.isExempt114_1,
 
           leaves,
 
