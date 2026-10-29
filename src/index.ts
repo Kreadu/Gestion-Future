@@ -32,6 +32,7 @@ import { BankDisbursementService } from './services/bankDisbursement';
 import { sendJson } from './http';
 import { handleBenefitRoutes } from './routes/benefits';
 import { handleCertificateRoutes } from './routes/certificates';
+import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -171,6 +172,7 @@ function normalizeCompany(row: any): Company {
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
     isExempt114_1: !!row.isExempt114_1,
+    ...pilaAffiliationOf(row, 'company'),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -202,6 +204,7 @@ function normalizeEmployee(row: any): Employee {
     terminationDate: row.terminationDate ?? null,
     vacationDaysTakenBefore: Number(row.vacationDaysTakenBefore ?? 0),
     isIntegralSalary: !!row.isIntegralSalary,
+    ...pilaAffiliationOf(row, 'employee'),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -505,6 +508,7 @@ export default {
         }
 
         const id = `COMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'company');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -564,6 +568,7 @@ export default {
             request.headers.get('CF-Connecting-IP')
           )
           .run();
+        await savePilaAffiliation(env, 'company', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -643,6 +648,8 @@ export default {
           );
         }
 
+        const companyPila = parsePilaAffiliation(body, 'company');
+
         await env.DB
           .prepare(`
             UPDATE companies
@@ -685,6 +692,7 @@ export default {
             (body.isExempt114_1 ?? existing.isExempt114_1) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'company', companyId, companyPila);
 
         const row = await env.DB
           .prepare(`
@@ -917,6 +925,7 @@ export default {
         }
 
         const id = `EMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'employee');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -982,6 +991,7 @@ export default {
             body.isIntegralSalary ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -1059,6 +1069,8 @@ export default {
           );
         }
 
+        const employeePila = parsePilaAffiliation(body, 'employee');
+
         await env.DB
           .prepare(`
             UPDATE employees
@@ -1135,6 +1147,7 @@ export default {
             (body.isIntegralSalary ?? existing.isIntegralSalary) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', employeeId, employeePila);
 
         const row = await env.DB
           .prepare(`
@@ -4173,6 +4186,9 @@ export default {
       if (benefitsResponse) return benefitsResponse;
       const certificatesResponse = await handleCertificateRoutes(request, url, env, user);
       if (certificatesResponse) return certificatesResponse;
+
+      const pilaResponse = await handlePilaRoutes(request, url, env, user);
+      if (pilaResponse) return pilaResponse;
 
       /*
        * ============================================================
