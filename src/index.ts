@@ -31,6 +31,7 @@ interface DianEmployeeExtraInfo {
 import { BankDisbursementService } from './services/bankDisbursement';
 import { sendJson } from './http';
 import { handleBenefitRoutes } from './routes/benefits';
+import { handleCertificateRoutes } from './routes/certificates';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -4169,6 +4170,8 @@ export default {
 
       const benefitsResponse = await handleBenefitRoutes(request, url, env, user);
       if (benefitsResponse) return benefitsResponse;
+      const certificatesResponse = await handleCertificateRoutes(request, url, env, user);
+      if (certificatesResponse) return certificatesResponse;
 
       /*
        * ============================================================

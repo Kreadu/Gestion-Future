@@ -3294,6 +3294,7 @@ function App({ me, onSignOut }) {
                     >
                       🚪 Retiro y liquidación definitiva
                     </button>
+                    {' '}<CertificatesButton employee={selectedEmp} />
                   </div>
 
                   {currentSettlementStatus === 'GENERATED' && (
