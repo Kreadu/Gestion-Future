@@ -4,3 +4,4 @@ node_modules
 *.backup*
 coverage
 src/dashboard/app.generated.ts
+tests/e2e/e2e-fallo.png
