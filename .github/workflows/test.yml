@@ -3,8 +3,8 @@ name: CI/CD Pipeline - Gestion-Future
 on:
   push:
     branches: [ "main" ]
+  # Todos los PR, también los que apuntan a otra rama (PR apilados).
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -44,6 +44,12 @@ jobs:
 
       - name: Ejecutar Pruebas Automatizadas (Jest)
         run: npm test
+
+      - name: Instalar Firefox para la prueba end-to-end
+        run: npx playwright install --with-deps firefox
+
+      - name: Prueba end-to-end del dashboard (Firefox)
+        run: npm run e2e
 
       - name: Aplicar Migraciones D1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
