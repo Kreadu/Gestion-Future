@@ -31,6 +31,8 @@ interface DianEmployeeExtraInfo {
 import { BankDisbursementService } from './services/bankDisbursement';
 import { sendJson } from './http';
 import { handleBenefitRoutes } from './routes/benefits';
+import { handleImportRoutes } from './routes/imports';
+import { validateEmployeeInput, insertEmployee } from './services/employeeValidation';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -879,107 +881,19 @@ export default {
           );
         }
 
-        const firstName = String(
-          body.firstName || ''
-        ).trim();
+        const validation = validateEmployeeInput(body);
 
-        const lastName = String(
-          body.lastName || ''
-        ).trim();
-
-        const taxId = String(
-          body.taxId || ''
-        ).trim();
-
-        const salary = Number(body.salary);
-
-        if (!firstName || !lastName || !taxId) {
+        if (!validation.ok) {
           return sendJson(
             {
               success: false,
-              error:
-                'Primer nombre, primer apellido y documento son obligatorios.',
+              error: validation.error,
             },
             400
           );
         }
 
-        if (!Number.isFinite(salary) || salary <= 0) {
-          return sendJson(
-            {
-              success: false,
-              error: 'El salario debe ser mayor que cero.',
-            },
-            400
-          );
-        }
-
-        const id = `EMP-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
-
-        await env.DB
-          .prepare(`
-            INSERT INTO employees (
-              id,
-              companyId,
-              firstName,
-              firstName2,
-              lastName,
-              lastName2,
-              taxId,
-              position,
-              contractType,
-              salary,
-              address,
-              city,
-              country,
-              phone,
-              whatsapp,
-              hireDate,
-              bankName,
-              bankAccountType,
-              bankAccountNumber,
-              arlRiskClass,
-              contractEndDate,
-              vacationDaysTakenBefore,
-              isIntegralSalary,
-              active,
-              createdAt
-            )
-            VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, ?22, ?23, ?24, 1, ?20
-            )
-          `)
-          .bind(
-            id,
-            companyId,
-            firstName,
-            body.firstName2 || null,
-            lastName,
-            body.lastName2 || null,
-            taxId,
-            body.position || null,
-            // Sin plazo escrito, la ley presume término indefinido
-            // (art. 47 CST): código DIAN 2.
-            body.contractType || '2',
-            salary,
-            body.address || null,
-            body.city || null,
-            body.country || 'Colombia',
-            body.phone || null,
-            body.whatsapp || null,
-            body.hireDate || null,
-            body.bankName || null,
-            body.bankAccountType || null,
-            body.bankAccountNumber || null,
-            createdAt,
-            normalizeArlRiskClass(body.arlRiskClass),
-            body.contractEndDate || null,
-            Math.max(0, Number(body.vacationDaysTakenBefore) || 0),
-            body.isIntegralSalary ? 1 : 0
-          )
-          .run();
+        const id = await insertEmployee(env.DB, companyId, validation.value);
 
         const row = await env.DB
           .prepare(`
@@ -4169,6 +4083,9 @@ export default {
 
       const benefitsResponse = await handleBenefitRoutes(request, url, env, user);
       if (benefitsResponse) return benefitsResponse;
+
+      const importsResponse = await handleImportRoutes(request, url, env, user);
+      if (importsResponse) return importsResponse;
 
       /*
        * ============================================================

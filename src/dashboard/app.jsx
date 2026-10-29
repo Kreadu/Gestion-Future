@@ -288,6 +288,7 @@ function App({ me, onSignOut }) {
   const [adminFeePct, setAdminFeePct] = useState('0');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [employeeModal, setEmployeeModal] = useState(false);
+  const [importModal, setImportModal] = useState(false);
 
   const [editingCompany, setEditingCompany] = useState(null);
   const [editingEmployee, setEditingEmployee] = useState(null);
@@ -3084,13 +3085,23 @@ function App({ me, onSignOut }) {
               </span>
             </div>
 
-            <button
-              className="btn btn-primary"
-              onClick={openNewEmployee}
-              disabled={!selectedCompany}
-            >
-              + Empleado
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="btn"
+                onClick={function() { setImportModal(true); }}
+                disabled={!selectedCompany}
+              >
+                📥 Importar
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={openNewEmployee}
+                disabled={!selectedCompany}
+              >
+                + Empleado
+              </button>
+            </div>
           </div>
 
           <div className="employee-list">
@@ -4129,6 +4140,17 @@ function App({ me, onSignOut }) {
           </div>
         );
       })()}
+
+      {importModal && selectedCompany && (
+        <EmployeeImportModal
+          company={selectedCompany}
+          employees={employees}
+          onClose={function() { setImportModal(false); }}
+          onImported={function() { loadEmployees(selectedCompany.id); }}
+          onError={setError}
+          onSuccess={setSuccess}
+        />
+      )}
 
       {employeeModal && (
         <div className="modal-backdrop">
