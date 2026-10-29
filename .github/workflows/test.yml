@@ -43,7 +43,7 @@ jobs:
         run: python3 tests/test_colombia_payroll_and_dian.py
 
       - name: Ejecutar Pruebas Automatizadas (Jest)
-        run: npx jest
+        run: npm test
 
       - name: Aplicar Migraciones D1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

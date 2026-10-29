@@ -2,6 +2,10 @@ name = "gestion-future-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
+# Compila el dashboard (JSX -> JS) antes de dev/deploy.
+[build]
+command = "node scripts/build-dashboard.mjs"
+
 [vars]
 ENVIRONMENT = "production"
 # Config pública del proyecto Firebase (Authentication) usada por el
