@@ -282,6 +282,7 @@ function App({ me, onSignOut }) {
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [employees, setEmployees] = useState([]);
   const [selectedEmp, setSelectedEmp] = useState(null);
+  const [showRetired, setShowRetired] = useState(false);
 
   const [companyModal, setCompanyModal] = useState(false);
   const [summaryModal, setSummaryModal] = useState(false);
@@ -494,6 +495,10 @@ function App({ me, onSignOut }) {
   }, [selectedCompanyId]);
 
   useEffect(function() {
+    if (selectedCompanyId) loadEmployees(selectedCompanyId);
+  }, [showRetired]);
+
+  useEffect(function() {
     if (selectedPeriodId) {
       loadSettlements(selectedPeriodId);
     } else {
@@ -556,7 +561,8 @@ function App({ me, onSignOut }) {
     try {
       setError('');
       const result = await api(
-        '/api/employees?companyId=' + encodeURIComponent(companyId)
+        '/api/employees?companyId=' + encodeURIComponent(companyId) +
+          (showRetired ? '&includeRetired=1' : '')
       );
 
       setEmployees(Array.isArray(result.data) ? result.data : []);
@@ -3080,8 +3086,16 @@ function App({ me, onSignOut }) {
             <div>
               <h2>👥 Empleados</h2>
               <span>
-                {employees.length} registrado(s)
+                {employees.filter(function(e) { return e.active; }).length} activo(s)
               </span>
+              <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '12px', marginTop: '4px' }}>
+                <input
+                  type="checkbox"
+                  checked={showRetired}
+                  onChange={function(e) { setShowRetired(e.target.checked); }}
+                />
+                Ver retirados
+              </label>
             </div>
 
             <button
@@ -3103,6 +3117,24 @@ function App({ me, onSignOut }) {
                 const isSelected =
                   selectedEmp &&
                   selectedEmp.id === employee.id;
+
+                if (!employee.active) {
+                  return (
+                    <div key={employee.id} className="employee-card" style={{ opacity: 0.8 }}>
+                      <div className="employee-name">
+                        {getEmployeeName(employee)}
+                      </div>
+                      <div className="employee-meta">
+                        CC/NIT: {employee.taxId}
+                        <br />
+                        <span className="badge">Retirado el {employee.terminationDate}</span>
+                      </div>
+                      <div className="button-row" style={{marginTop: '9px'}}>
+                        <CertificatesButton employee={employee} />
+                      </div>
+                    </div>
+                  );
+                }
 
                 return (
                   <div

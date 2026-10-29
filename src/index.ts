@@ -812,13 +812,14 @@ export default {
               bankAccountNumber,
               arlRiskClass,
               active,
+              terminationDate,
               createdAt
             FROM employees
             WHERE companyId = ?1
-              AND active = 1
-            ORDER BY firstName ASC, lastName ASC
+              AND (active = 1 OR (?2 = 1 AND terminationDate IS NOT NULL))
+            ORDER BY active DESC, firstName ASC, lastName ASC
           `)
-          .bind(companyId)
+          .bind(companyId, url.searchParams.get('includeRetired') === '1' ? 1 : 0)
           .all();
 
         const employees = (result.results || []).map(

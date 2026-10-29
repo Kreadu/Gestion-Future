@@ -158,7 +158,7 @@ export async function buildIncomeCertificate(
 
   const settlements = await env.DB
     .prepare(`
-      SELECT p.periodStart, p.periodEnd, s.resultJson
+      SELECT p.periodStart, p.periodEnd, p.status, s.resultJson
       FROM payroll_settlements s
       JOIN payroll_periods p ON p.id = s.periodId
       WHERE s.employeeId = ?1
@@ -202,6 +202,7 @@ export async function buildIncomeCertificate(
     settlements: (settlements.results || []).map(r => ({
       periodStart: String(r.periodStart),
       periodEnd: String(r.periodEnd),
+      closed: r.status === 'CLOSED',
       result: JSON.parse(String(r.resultJson)),
     })),
     benefitPayments: (benefits.results || []).map(r => ({

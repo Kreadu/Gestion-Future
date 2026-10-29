@@ -236,6 +236,21 @@ try {
     await expectText(page, 'Empleado retirado.');
   });
 
+  await step('Certificados del retirado: ingresos y retenciones (220) y laboral', async () => {
+    await page.getByLabel('Ver retirados').check();
+    await expectText(page, 'Retirado el 2026-12-31');
+    await page.getByRole('button', { name: /Certificados/ }).click();
+    const m = modal(page);
+    await m.locator('#cert-year').fill('2026');
+    await m.getByRole('button', { name: 'Generar certificado' }).click();
+    await expectText(m, 'Año gravable 2026');
+    await expectText(m, 'Indemnización por despido');
+    await m.getByRole('button', { name: 'Certificado laboral' }).click();
+    await expectText(m, 'Representante legal');
+    await page.keyboard.press('Escape');
+    await page.locator('.modal').waitFor({ state: 'detached' });
+  });
+
   await step('Usuarios: dar y quitar acceso a un administrador de empresa', async () => {
     await page.getByRole('button', { name: /Usuarios/ }).click();
     await page.locator('#user-email').fill('jefe@espiga.co');

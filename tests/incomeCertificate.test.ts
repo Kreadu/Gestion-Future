@@ -170,6 +170,24 @@ describe('computeIncomeCertificate', () => {
   });
 });
 
+describe('periodos sin cerrar', () => {
+  test('no certifica nóminas de periodos en borrador y lo avisa', () => {
+    const cert = computeIncomeCertificate({
+      year: 2026,
+      settlements: [
+        { ...settlement('2026-01-01', '2026-01-31'), closed: true },
+        { ...settlement('2026-02-01', '2026-02-28'), closed: false },
+      ],
+      benefitPayments: [],
+      termination: null,
+    });
+
+    expect(cert.settlementsCount).toBe(1);
+    expect(box(cert, 'salarios')).toBe(2_000_000);
+    expect(cert.notes.some(n => n.includes('sin cerrar'))).toBe(true);
+  });
+});
+
 describe('certificatePeriod', () => {
   test('acota al año, a la fecha de ingreso y a la de retiro', () => {
     expect(certificatePeriod(2026, '2020-01-01', null)).toEqual({ from: '2026-01-01', to: '2026-12-31' });

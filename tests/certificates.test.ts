@@ -26,7 +26,7 @@ beforeEach(resetDb);
 const AUX = CONSTANTS_2026.AUXILIO_TRANSPORTE;
 const box = (data: any, key: string) => data.certificate.boxes.find((b: any) => b.key === key).value;
 
-async function liquidate(companyId: string, employeeId: string, start: string, end: string) {
+async function liquidate(companyId: string, employeeId: string, start: string, end: string, close = true) {
   const period = await call(SUPER, 'POST', '/api/payroll-periods', {
     companyId,
     periodStart: start,
@@ -40,6 +40,13 @@ async function liquidate(companyId: string, employeeId: string, start: string, e
     daysWorked: 30,
   });
   expect(calc.status).toBe(201);
+
+  if (close) {
+    await env.DB
+      .prepare(`UPDATE payroll_periods SET status = 'CLOSED' WHERE id = ?1`)
+      .bind(period.json.data.id)
+      .run();
+  }
 }
 
 describe('Certificado de ingresos y retenciones (formulario 220)', () => {

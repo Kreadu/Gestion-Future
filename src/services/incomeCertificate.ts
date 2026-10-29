@@ -18,6 +18,8 @@ export type BenefitType = 'PRIMA' | 'CESANTIAS' | 'INTERESES_CESANTIAS';
 export interface CertificateSettlementRow {
   periodStart: string;
   periodEnd: string;
+  /** Periodo cerrado (pagado). Los borradores no se certifican. */
+  closed?: boolean;
   /** resultJson de payroll_settlements ya parseado. */
   result: any;
 }
@@ -180,9 +182,14 @@ export function computeIncomeCertificate(input: IncomeCertificateInput): IncomeC
   let retencionNomina = 0;
   let retencionIndemnizacion = 0;
   let settlementsCount = 0;
+  let draftCount = 0;
 
   for (const s of input.settlements) {
     if (!inYear(s.periodEnd, year)) continue;
+    if (s.closed === false) {
+      draftCount++;
+      continue;
+    }
     settlementsCount++;
 
     const r = s.result || {};
@@ -276,6 +283,10 @@ export function computeIncomeCertificate(input: IncomeCertificateInput): IncomeC
     'Otros pagos incluye el auxilio de transporte y la indemnización por despido.',
     `Cesantías e intereses: se certifican los del año ${year - 1}, consignados o pagados en ${year}. Los de ${year} van en el certificado de ${year + 1}, salvo los pagados en la liquidación definitiva.`,
   ];
+
+  if (draftCount > 0) {
+    notes.push(`Hay ${draftCount} nómina(s) de ${year} en periodos sin cerrar; no se incluyen hasta cerrar el periodo.`);
+  }
 
   if (settlementsCount === 0) {
     notes.push(`No hay nóminas liquidadas en la plataforma para ${year}.`);
