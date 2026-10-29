@@ -32,6 +32,7 @@ import { BankDisbursementService } from './services/bankDisbursement';
 import { sendJson } from './http';
 import { handleBenefitRoutes } from './routes/benefits';
 import { handleCertificateRoutes } from './routes/certificates';
+import { handleImportRoutes } from './routes/imports';
 import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
 import { handlePortalRoutes } from './routes/portal';
 import { getDashboardHtml } from './dashboard';
@@ -4205,6 +4206,9 @@ export default {
       if (benefitsResponse) return benefitsResponse;
       const certificatesResponse = await handleCertificateRoutes(request, url, env, user);
       if (certificatesResponse) return certificatesResponse;
+
+      const importsResponse = await handleImportRoutes(request, url, env, user);
+      if (importsResponse) return importsResponse;
 
       const pilaResponse = await handlePilaRoutes(request, url, env, user);
       if (pilaResponse) return pilaResponse;
