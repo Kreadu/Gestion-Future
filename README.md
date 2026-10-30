@@ -76,7 +76,11 @@ npm run dev        # wrangler dev
 npm run typecheck  # tsc --noEmit
 npm test           # jest
 python3 tests/test_colombia_payroll_and_dian.py
+npm run e2e        # recorrido completo en Firefox (Playwright, Firebase simulado)
+E2E_BROWSER=chromium npm run e2e   # el mismo recorrido en Chrome/Chromium
 ```
+
+Con `CHROMIUM_PATH=/ruta/a/chrome` el E2E usa un Chrome ya instalado en vez del de Playwright.
 
 ## Despliegue
 
@@ -86,6 +90,6 @@ El workflow de GitHub Actions (`.github/workflows/test.yml`) corre typecheck y p
 
 - **SUPER_ADMIN**: personal de Kreadu (la outsourcing). Acceso a todas las empresas; único rol que puede crear/eliminar empresas.
 - **TENANT_ADMIN**: administrador de una pyme cliente. Sólo ve y gestiona su propia empresa (empleados, nómina, usuarios de esa empresa).
-- **EMPLOYEE**: reservado para el portal del empleado (pendiente de implementar).
+- **EMPLOYEE**: empleado de una empresa cliente, vinculado a su ficha. Entra al portal del empleado en modo sólo lectura: perfil, desprendibles de periodos cerrados, prestaciones y certificados (laboral e ingresos y retenciones 220). No ve datos de otros empleados.
 
 Cada usuario se autentica con su cuenta de Google vía Firebase Auth; el rol y la empresa asociada viven en la tabla `users` de D1 (no en custom claims de Firebase), y todo el acceso a datos de una empresa se valida en el Worker contra ese registro.

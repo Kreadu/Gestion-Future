@@ -41,7 +41,7 @@ describe('Recargo dominical/festivo (Ley 2466 de 2025)', () => {
     expect(result.dominicalFestivoValue).toBeCloseTo(expected, 2);
   });
 
-  test('horas extra en domingo/festivo suman el recargo de extra diurna y el dominical', () => {
+  test('horas extra en domingo/festivo pagan la hora completa más ambos recargos (factor 2.15)', () => {
     const baseSalary = 3_000_000;
     const hourlyRate = baseSalary / CONSTANTS_2026.MONTHLY_ORDINARY_HOURS;
 
@@ -52,13 +52,15 @@ describe('Recargo dominical/festivo (Ley 2466 de 2025)', () => {
       })
     );
 
-    const combinedSurcharge =
-      (CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER - 1) +
+    // La hora extra no está cubierta por el salario: se paga la hora
+    // (100%) + 25% de extra diurna + 90% dominical = 2.15.
+    const factor =
+      CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER +
       CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE;
 
-    expect(combinedSurcharge).toBeCloseTo(1.15, 5);
+    expect(factor).toBeCloseTo(2.15, 5);
 
-    const expected = 4 * hourlyRate * combinedSurcharge;
+    const expected = 4 * hourlyRate * factor;
     expect(result.dominicalFestivoValue).toBeCloseTo(expected, 2);
   });
 
@@ -121,7 +123,7 @@ describe('Salario integral', () => {
     ).toThrow(ColombiaPayrollEngineError);
   });
 
-  test('con 13 SMMLV, el IBC es el 70% del devengado y las provisiones son 0', () => {
+  test('con 13 SMMLV, el IBC es el 70% del devengado y sólo se provisionan vacaciones', () => {
     const integralSalary = CONSTANTS_2026.SMMLV * 13;
 
     const result = ColombiaPayrollEngine.calculate(
@@ -139,8 +141,16 @@ describe('Salario integral', () => {
     expect(result.provisions.cesantias).toBe(0);
     expect(result.provisions.interesesCesantias).toBe(0);
     expect(result.provisions.primaServicios).toBe(0);
-    expect(result.provisions.vacaciones).toBe(0);
-    expect(result.provisions.totalProvisions).toBe(0);
+    // El salario integral incluye las prestaciones excepto las
+    // vacaciones (art. 132 CST).
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      integralSalary * CONSTANTS_2026.VACACIONES_RATE,
+      1
+    );
+    expect(result.provisions.totalProvisions).toBeCloseTo(
+      result.provisions.vacaciones,
+      2
+    );
   });
 });
 
@@ -212,6 +222,94 @@ describe('Retención en la fuente de empleados (procedimiento 1, simplificado)',
     expect(result.employeeDeductions.retencionFuente).toBeGreaterThan(0);
     expect(result.netPay).toBeCloseTo(
       result.grossEarnings - result.employeeDeductions.totalDeductions,
+      2
+    );
+  });
+});
+
+describe('Retención en la fuente: tope de la renta exenta (Ley 2277 de 2022)', () => {
+  test('la renta exenta del 25% no supera 790 UVT anuales (790/12 UVT al mes)', () => {
+    const baseSalary = 30_000_000;
+
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({ baseSalaryMonthly: baseSalary })
+    );
+
+    const ibc = result.ibcSecuritySocial;
+    const mandatory = ibc * 0.08 + result.employeeDeductions.fspValue;
+    const ingresoGravable = baseSalary - mandatory;
+    const rentaExenta = Math.min(
+      ingresoGravable * 0.25,
+      (790 / 12) * CONSTANTS_2026.UVT
+    );
+    const baseUVT = (ingresoGravable - rentaExenta) / CONSTANTS_2026.UVT;
+
+    // 360 < baseUVT < 640 → tramo del 33% con 69 UVT acumulados.
+    expect(baseUVT).toBeGreaterThan(360);
+    expect(baseUVT).toBeLessThan(640);
+
+    const expected = ((baseUVT - 360) * 0.33 + 69) * CONSTANTS_2026.UVT;
+
+    expect(result.employeeDeductions.retencionFuente).toBeCloseTo(expected, 0);
+  });
+});
+
+describe('Exoneración art. 114-1 ET', () => {
+  test('aplica a quien devenga menos de 10 SMMLV', () => {
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({ baseSalaryMonthly: 5_000_000, isExempt114_1: true })
+    );
+
+    expect(result.employerContributions.health8_5pct).toBe(0);
+    expect(result.employerContributions.sena2pct).toBe(0);
+    expect(result.employerContributions.icbf3pct).toBe(0);
+  });
+
+  test('no aplica a quien devenga 10 SMMLV o más, aunque la empresa sea exonerada', () => {
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({
+        baseSalaryMonthly: CONSTANTS_2026.SMMLV * 10,
+        isExempt114_1: true,
+      })
+    );
+
+    expect(result.employerContributions.health8_5pct).toBeGreaterThan(0);
+    expect(result.employerContributions.sena2pct).toBeGreaterThan(0);
+    expect(result.employerContributions.icbf3pct).toBeGreaterThan(0);
+  });
+});
+
+describe('Provisión de vacaciones (art. 192 CST)', () => {
+  test('excluye horas extra y trabajo dominical/festivo de la base', () => {
+    const baseSalary = 2_000_000;
+
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({
+        baseSalaryMonthly: baseSalary,
+        extraDiurna: 4,
+        horasDominicalFestivo: 8,
+        horasExtraDominicalFestivo: 2,
+      })
+    );
+
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      baseSalary * CONSTANTS_2026.VACACIONES_RATE,
+      2
+    );
+  });
+
+  test('incluye el recargo nocturno ordinario', () => {
+    const baseSalary = 2_000_000;
+    const hourlyRate = baseSalary / CONSTANTS_2026.MONTHLY_ORDINARY_HOURS;
+
+    const result = ColombiaPayrollEngine.calculate(
+      baseInput({ baseSalaryMonthly: baseSalary, recargoNocturno: 10 })
+    );
+
+    const recargo = 10 * hourlyRate * CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
+
+    expect(result.provisions.vacaciones).toBeCloseTo(
+      (baseSalary + recargo) * CONSTANTS_2026.VACACIONES_RATE,
       2
     );
   });

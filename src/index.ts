@@ -1,9 +1,12 @@
 import ColombiaPayrollEngine, {
   ColombiaPayrollEngineError,
 } from './engine/countries/colombiaEngine';
+import { RiskClass } from './types/payroll';
 import type {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
+  EmployeeLeaveInput,
+  EmployeeLeaveType,
 } from './types/payroll';
 
 import { DianNominaXmlService } from './services/dianNominaXmlService';
@@ -26,7 +29,19 @@ interface DianEmployeeExtraInfo {
 }
 
 import { BankDisbursementService } from './services/bankDisbursement';
+import { sendJson } from './http';
+import { handleBenefitRoutes } from './routes/benefits';
+import { handleCertificateRoutes } from './routes/certificates';
+import { handleImportRoutes } from './routes/imports';
+import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
+import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
+import { handleAccountingRoutes } from './routes/accounting';
+import { handleAuditLogRoutes } from './routes/auditLog';
+import { handleOverviewRoutes } from './routes/overview';
+import { handlePortalRoutes } from './routes/portal';
+import { handleRequestRoutes } from './routes/requests';
 import { getDashboardHtml } from './dashboard';
+import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
   authenticate,
   requireRole,
@@ -51,6 +66,8 @@ import {
 
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
+import { intersectDateRanges } from './services/dateRanges';
+import { createEmployeeLeave, EMPLOYEE_LEAVE_TYPES, validateLeaveInput } from './routes/leaves';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -95,6 +112,7 @@ interface Company {
   legalRepresentative?: string | null;
   taxRegime?: string | null;
   economicActivity?: string | null;
+  isExempt114_1: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -119,18 +137,29 @@ interface Employee {
   bankName?: string | null;
   bankAccountType?: string | null;
   bankAccountNumber?: string | null;
+  arlRiskClass: number;
+  contractEndDate?: string | null;
+  terminationDate?: string | null;
+  vacationDaysTakenBefore: number;
+  isIntegralSalary: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
 
-function sendJson(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-  });
+interface EmployeeLeave {
+  id: string;
+  employeeId: string;
+  companyId: string;
+  leaveType: EmployeeLeaveType;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  accumulatedDaysBefore: number;
+  businessDays?: number | null;
+  notes?: string | null;
+  createdAt?: string | null;
 }
+
 
 function normalizeCompany(row: any): Company {
   return {
@@ -149,6 +178,8 @@ function normalizeCompany(row: any): Company {
     legalRepresentative: row.legalRepresentative ?? null,
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
+    isExempt114_1: !!row.isExempt114_1,
+    ...pilaAffiliationOf(row, 'company'),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -175,7 +206,43 @@ function normalizeEmployee(row: any): Employee {
     bankName: row.bankName ?? null,
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
+    arlRiskClass: normalizeArlRiskClass(row.arlRiskClass),
+    contractEndDate: row.contractEndDate ?? null,
+    terminationDate: row.terminationDate ?? null,
+    vacationDaysTakenBefore: Number(row.vacationDaysTakenBefore ?? 0),
+    isIntegralSalary: !!row.isIntegralSalary,
+    ...pilaAffiliationOf(row, 'employee'),
     active: !!row.active,
+    createdAt: row.createdAt ?? null,
+  };
+}
+
+/** Clase de riesgo ARL 1-5; cualquier otro valor cae a 1 (riesgo mínimo). */
+function normalizeArlRiskClass(value: unknown): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? n : 1;
+}
+
+const ARL_RISK_CLASS_RATES: Record<number, RiskClass> = {
+  1: RiskClass.CLASS_I,
+  2: RiskClass.CLASS_II,
+  3: RiskClass.CLASS_III,
+  4: RiskClass.CLASS_IV,
+  5: RiskClass.CLASS_V,
+};
+
+function normalizeEmployeeLeave(row: any): EmployeeLeave {
+  return {
+    id: String(row.id),
+    employeeId: String(row.employeeId),
+    companyId: String(row.companyId),
+    leaveType: row.leaveType as EmployeeLeaveType,
+    startDate: String(row.startDate ?? ''),
+    endDate: String(row.endDate ?? ''),
+    totalDays: Number(row.totalDays ?? 0),
+    accumulatedDaysBefore: Number(row.accumulatedDaysBefore ?? 0),
+    businessDays: row.businessDays == null ? null : Number(row.businessDays),
+    notes: row.notes ?? null,
     createdAt: row.createdAt ?? null,
   };
 }
@@ -188,6 +255,8 @@ function normalizeProfessional(row: any): Professional {
     lastName: String(row.lastName ?? ''),
     lastName2: row.lastName2 ?? null,
     taxId: String(row.taxId ?? ''),
+    documentType: (row.documentType || '13') as Professional['documentType'],
+    dv: row.dv ?? null,
     profession: String(row.profession ?? ''),
     email: row.email ?? null,
     phone: row.phone ?? null,
@@ -195,6 +264,10 @@ function normalizeProfessional(row: any): Professional {
     bankName: row.bankName ?? null,
     bankAccountType: row.bankAccountType ?? null,
     bankAccountNumber: row.bankAccountNumber ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -207,6 +280,10 @@ function normalizePublicProfessional(row: any) {
     lastName: String(row.lastName ?? ''),
     profession: String(row.profession ?? ''),
     city: row.city ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
   };
 }
 
@@ -295,13 +372,21 @@ export default {
             apiKey: env.FIREBASE_API_KEY,
             authDomain: env.FIREBASE_AUTH_DOMAIN,
             projectId: env.FIREBASE_PROJECT_ID,
-          }),
+          }, LEGAL_VERSION),
           {
             headers: {
               'Content-Type': 'text/html; charset=utf-8',
             },
           }
         );
+      }
+
+      // Términos y política de datos: pública, sin autenticación,
+      // para que cualquier titular pueda consultarla (Ley 1581/2012).
+      if (url.pathname === '/legal') {
+        return new Response(getLegalHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
       }
 
       /*
@@ -324,6 +409,14 @@ export default {
           data: user,
         });
       }
+
+      // Solicitudes de vacaciones/permisos (empleado y administrador).
+      const requestsResponse = await handleRequestRoutes(request, url, env, user);
+      if (requestsResponse) return requestsResponse;
+
+      // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
+      const portalResponse = await handlePortalRoutes(request, url, env, user);
+      if (portalResponse) return portalResponse;
 
       /*
        * ============================================================
@@ -358,6 +451,11 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
+              arlCode,
+              pilaContributorType,
+              divipolaCode,
+              arlActivityCode,
               active,
               createdAt
             FROM companies
@@ -396,6 +494,18 @@ export default {
         const name = String(body.name || '').trim();
         const nit = String(body.nit || '').trim();
 
+        if (body.acceptedTermsVersion !== LEGAL_VERSION) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Debes aceptar los Términos de uso y la Política de ' +
+                'tratamiento de datos para crear la empresa.',
+            },
+            400
+          );
+        }
+
         if (!name) {
           return sendJson(
             {
@@ -417,6 +527,7 @@ export default {
         }
 
         const id = `COMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'company');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -438,12 +549,18 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
+              termsVersion,
+              termsAcceptedAt,
+              termsAcceptedBy,
+              termsAcceptedIp,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?18,
+              ?19, ?17, ?20, ?21, 1, ?17
             )
           `)
           .bind(
@@ -463,9 +580,14 @@ export default {
             body.taxRegime || null,
             body.economicActivity || null,
             body.logo || null,
-            createdAt
+            createdAt,
+            body.isExempt114_1 ? 1 : 0,
+            LEGAL_VERSION,
+            user.email,
+            request.headers.get('CF-Connecting-IP')
           )
           .run();
+        await savePilaAffiliation(env, 'company', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -545,6 +667,8 @@ export default {
           );
         }
 
+        const companyPila = parsePilaAffiliation(body, 'company');
+
         await env.DB
           .prepare(`
             UPDATE companies
@@ -563,7 +687,8 @@ export default {
               legalRepresentative = ?12,
               taxRegime = ?13,
               economicActivity = ?14,
-              logo = ?15
+              logo = ?15,
+              isExempt114_1 = ?17
             WHERE id = ?16
           `)
           .bind(
@@ -582,9 +707,11 @@ export default {
             body.taxRegime ?? null,
             body.economicActivity ?? null,
             body.logo ?? existing.logo ?? null,
-            companyId
+            companyId,
+            (body.isExempt114_1 ?? existing.isExempt114_1) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'company', companyId, companyPila);
 
         const row = await env.DB
           .prepare(`
@@ -707,14 +834,29 @@ export default {
               phone,
               whatsapp,
               hireDate,
+              bankName,
+              bankAccountType,
+              bankAccountNumber,
+              arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
+              documentType,
+              pilaContributorType,
+              pilaContributorSubtype,
+              epsCode,
+              afpCode,
+              ccfCode,
+              divipolaCode,
               active,
+              terminationDate,
               createdAt
             FROM employees
             WHERE companyId = ?1
-              AND active = 1
-            ORDER BY firstName ASC, lastName ASC
+              AND (active = 1 OR (?2 = 1 AND terminationDate IS NOT NULL))
+            ORDER BY active DESC, firstName ASC, lastName ASC
           `)
-          .bind(companyId)
+          .bind(companyId, url.searchParams.get('includeRetired') === '1' ? 1 : 0)
           .all();
 
         const employees = (result.results || []).map(
@@ -812,6 +954,7 @@ export default {
         }
 
         const id = `EMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'employee');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -836,12 +979,16 @@ export default {
               bankName,
               bankAccountType,
               bankAccountNumber,
+              arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 1, ?19
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, ?22, ?23, ?24, 1, ?20
             )
           `)
           .bind(
@@ -853,7 +1000,9 @@ export default {
             body.lastName2 || null,
             taxId,
             body.position || null,
-            body.contractType || '1',
+            // Sin plazo escrito, la ley presume término indefinido
+            // (art. 47 CST): código DIAN 2.
+            body.contractType || '2',
             salary,
             body.address || null,
             body.city || null,
@@ -864,9 +1013,14 @@ export default {
             body.bankName || null,
             body.bankAccountType || null,
             body.bankAccountNumber || null,
-            createdAt
+            createdAt,
+            normalizeArlRiskClass(body.arlRiskClass),
+            body.contractEndDate || null,
+            Math.max(0, Number(body.vacationDaysTakenBefore) || 0),
+            body.isIntegralSalary ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -944,6 +1098,8 @@ export default {
           );
         }
 
+        const employeePila = parsePilaAffiliation(body, 'employee');
+
         await env.DB
           .prepare(`
             UPDATE employees
@@ -964,7 +1120,11 @@ export default {
               hireDate = ?14,
               bankName = ?15,
               bankAccountType = ?16,
-              bankAccountNumber = ?17
+              bankAccountNumber = ?17,
+              arlRiskClass = ?19,
+              contractEndDate = ?20,
+              vacationDaysTakenBefore = ?21,
+              isIntegralSalary = ?22
             WHERE id = ?18
           `)
           .bind(
@@ -991,7 +1151,7 @@ export default {
             ).trim(),
 
             body.position ?? null,
-            body.contractType ?? '1',
+            body.contractType ?? existing.contractType ?? '2',
             salary,
             body.address ?? null,
             body.city ?? null,
@@ -1002,9 +1162,21 @@ export default {
             body.bankName ?? existing.bankName ?? null,
             body.bankAccountType ?? existing.bankAccountType ?? null,
             body.bankAccountNumber ?? existing.bankAccountNumber ?? null,
-            employeeId
+            employeeId,
+            normalizeArlRiskClass(
+              body.arlRiskClass ?? existing.arlRiskClass
+            ),
+            body.contractEndDate !== undefined
+              ? body.contractEndDate || null
+              : existing.contractEndDate ?? null,
+            Math.max(
+              0,
+              Number(body.vacationDaysTakenBefore ?? existing.vacationDaysTakenBefore) || 0
+            ),
+            (body.isIntegralSalary ?? existing.isIntegralSalary) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', employeeId, employeePila);
 
         const row = await env.DB
           .prepare(`
@@ -1087,6 +1259,250 @@ export default {
         return sendJson({
           success: true,
           message: 'Empleado eliminado correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * INCAPACIDADES Y LICENCIAS DE MATERNIDAD/PATERNIDAD
+       *
+       * No se rastrea automáticamente la continuidad entre
+       * incapacidades: quien registra una incapacidad general indica
+       * manualmente `accumulatedDaysBefore` (ver migrations/0005).
+       * ============================================================
+       */
+
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'GET'
+      ) {
+        const employeeId = url.searchParams.get('employeeId');
+
+        if (!employeeId) {
+          return sendJson(
+            { success: false, error: 'employeeId es obligatorio.' },
+            400
+          );
+        }
+
+        const employeeRow = await env.DB
+          .prepare(`SELECT id, companyId FROM employees WHERE id = ?1`)
+          .bind(employeeId)
+          .first();
+
+        if (!employeeRow) {
+          return sendJson(
+            { success: false, error: 'Empleado no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(employeeRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+            ORDER BY startDate DESC
+          `)
+          .bind(employeeId)
+          .all();
+
+        const leaves = (result.results || []).map(normalizeEmployeeLeave);
+
+        return sendJson({ success: true, data: leaves });
+      }
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'POST'
+      ) {
+        return createEmployeeLeave(env, user, await request.json() as any);
+      }
+
+      const employeeLeaveMatch =
+        url.pathname.match(/^\/api\/employee-leaves\/([^/]+)$/);
+
+      if (
+        employeeLeaveMatch &&
+        request.method === 'PUT'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        const body = await request.json() as any;
+
+        const leaveType = String(body.leaveType || '').trim();
+        const startDate = String(body.startDate || '').trim();
+        const endDate = String(body.endDate || '').trim();
+
+        if (!leaveType || !startDate || !endDate) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType, startDate y endDate son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (
+          !EMPLOYEE_LEAVE_TYPES.includes(leaveType as EmployeeLeaveType)
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
+                'MATERNITY_LEAVE, PATERNITY_LEAVE o VACATION.',
+            },
+            400
+          );
+        }
+
+        const checked = await validateLeaveInput(env, String(existing.employeeId), body, leaveId);
+        if ('error' in checked) return checked.error;
+        const { totalDays, accumulatedDaysBefore, businessDays } = checked;
+
+        await env.DB
+          .prepare(`
+            UPDATE employee_leaves
+            SET
+              leaveType = ?1,
+              startDate = ?2,
+              endDate = ?3,
+              totalDays = ?4,
+              accumulatedDaysBefore = ?5,
+              notes = ?6,
+              businessDays = ?8
+            WHERE id = ?7
+          `)
+          .bind(
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            body.notes || null,
+            leaveId,
+            businessDays
+          )
+          .run();
+
+        // Vacaciones que vinieron de una solicitud del portal: el empleado
+        // ve las fechas nuevas; si dejan de ser vacaciones, se cancela.
+        if (leaveType === 'VACATION') {
+          await env.DB
+            .prepare(`UPDATE employee_requests SET startDate = ?1, endDate = ?2, businessDays = ?3 WHERE leaveId = ?4`)
+            .bind(startDate, endDate, businessDays, leaveId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              UPDATE employee_requests
+              SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                  decisionNotes = 'El administrador cambió la novedad: ya no son vacaciones.'
+              WHERE leaveId = ?3
+            `)
+            .bind(user.email, new Date().toISOString(), leaveId)
+            .run();
+        }
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          data: {
+            id: leaveId,
+            employeeId: String(existing.employeeId),
+            companyId: String(existing.companyId),
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            businessDays,
+            notes: body.notes || null,
+            createdAt: existing.createdAt ?? null,
+          },
+        });
+      }
+
+      if (
+        employeeLeaveMatch &&
+        request.method === 'DELETE'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT id, companyId FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        await env.DB
+          .prepare(`DELETE FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .run();
+
+        // Si venía de una solicitud del portal, el empleado debe ver que
+        // ya no está aprobada.
+        await env.DB
+          .prepare(`
+            UPDATE employee_requests
+            SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                decisionNotes = 'La novedad de vacaciones fue eliminada por el administrador.'
+            WHERE leaveId = ?3
+          `)
+          .bind(user.email, new Date().toISOString(), leaveId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Incapacidad/licencia eliminada correctamente.',
         });
       }
 
@@ -1231,64 +1647,45 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, String(periodRow.companyId));
 
-        if (periodRow.status === 'CLOSED') {
+        // Mismas reglas que GET .../close-review (src/routes/closeReview.ts).
+        const blockers = await periodCloseBlockers(env, periodRow);
+
+        if (blockers.length > 0) {
           return sendJson(
-            { success: false, error: 'El periodo ya está cerrado.' },
-            400
-          );
-        }
-
-        const totals = await env.DB
-          .prepare(`
-            SELECT
-              COUNT(*) AS total,
-              SUM(CASE WHEN dianStatus != 'GENERATED' THEN 1 ELSE 0 END) AS pending
-            FROM payroll_settlements
-            WHERE periodId = ?1
-          `)
-          .bind(periodId)
-          .first();
-
-        const total = Number((totals as any)?.total ?? 0);
-        const pending = Number((totals as any)?.pending ?? 0);
-
-        if (total === 0) {
-          return sendJson(
-            {
-              success: false,
-              error: 'El periodo no tiene liquidaciones todavía.',
-            },
-            400
-          );
-        }
-
-        if (pending > 0) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                `Faltan ${pending} liquidación(es) por generar su XML DIAN ` +
-                'antes de poder cerrar el periodo.',
-            },
+            { success: false, error: blockers[0].message },
             400
           );
         }
 
         const closedAt = new Date().toISOString();
 
-        await env.DB
+        const closeResult = await env.DB
           .prepare(`
             UPDATE payroll_periods
             SET status = 'CLOSED', closedAt = ?1
             WHERE id = ?2
+              AND status = 'DRAFT'
+              AND NOT EXISTS (
+                SELECT 1 FROM payroll_settlements
+                WHERE periodId = ?2 AND dianStatus != 'GENERATED'
+              )
           `)
           .bind(closedAt, periodId)
           .run();
 
+        // Otro usuario cerró el periodo o recalculó una liquidación
+        // entre la revisión y este UPDATE.
+        if (!closeResult.meta?.changes) {
+          return sendJson(
+            { success: false, error: 'El periodo cambió mientras se cerraba; revisa de nuevo antes de cerrar.' },
+            409
+          );
+        }
+
         await audit(
           env,
           user,
-          'UPDATE',
+          'CLOSE',
           'payroll_period',
           periodId,
           String(periodRow.companyId)
@@ -1443,6 +1840,11 @@ export default {
 
         const employee = normalizeEmployee(employeeRow);
 
+        const companyExemption = await env.DB
+          .prepare(`SELECT isExempt114_1 FROM companies WHERE id = ?1`)
+          .bind(employee.companyId)
+          .first();
+
         if (employee.companyId !== String(periodRow.companyId)) {
           return sendJson(
             {
@@ -1486,6 +1888,73 @@ export default {
             {
               success: false,
               error: 'Los días trabajados deben estar entre 1 y 30.',
+            },
+            400
+          );
+        }
+
+        // Incapacidades/licencias que se solapen con el periodo: se
+        // detectan aquí (no las elige el frontend), y `daysWorked` del
+        // body son siempre los días NORMALES — el backend nunca los
+        // sobreescribe, sólo valida que quepan junto con la licencia
+        // dentro del mes.
+        const overlappingLeavesResult = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+              AND startDate <= ?2
+              AND endDate >= ?3
+          `)
+          .bind(employeeId, String(periodRow.periodEnd), String(periodRow.periodStart))
+          .all();
+
+        const overlappingLeaves = overlappingLeavesResult.results || [];
+
+        // Un mismo período puede tener más de una incapacidad/licencia
+        // (ej. 3 días a inicios de mes + 5 días más adelante) — se
+        // pasan todas al motor y él las suma. No pueden solaparse
+        // ENTRE SÍ porque eso ya se valida al registrarlas
+        // (POST /api/employee-leaves).
+        const leaves: EmployeeLeaveInput[] = overlappingLeaves.map(
+          (row) => {
+            const leaveRow = normalizeEmployeeLeave(row);
+
+            // Ya sabemos que se solapan con el periodo (la consulta
+            // SQL lo garantiza), así que la intersección nunca es
+            // null aquí.
+            const intersection = intersectDateRanges(
+              leaveRow.startDate,
+              leaveRow.endDate,
+              String(periodRow.periodStart),
+              String(periodRow.periodEnd)
+            )!;
+
+            return {
+              type: leaveRow.leaveType,
+              daysInPeriod: intersection.days,
+              startDate: intersection.start,
+              endDate: intersection.end,
+              accumulatedDaysBefore:
+                leaveRow.leaveType === 'GENERAL_INCAPACITY'
+                  ? leaveRow.accumulatedDaysBefore
+                  : undefined,
+            };
+          }
+        );
+
+        const totalLeaveDays = leaves.reduce(
+          (sum, l) => sum + l.daysInPeriod,
+          0
+        );
+
+        if (totalLeaveDays > 0 && daysWorked + totalLeaveDays > 30) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Días trabajados + días de incapacidad/licencia no ' +
+                'pueden superar 30.',
             },
             400
           );
@@ -1544,6 +2013,10 @@ export default {
           horasDominicalFestivo,
           horasExtraDominicalFestivo,
           isIntegralSalary: !!body.isIntegralSalary,
+          riskClass: ARL_RISK_CLASS_RATES[employee.arlRiskClass],
+          isExempt114_1: !!companyExemption?.isExempt114_1,
+
+          leaves,
 
           overtimeHours: {
             extraDiurna,
@@ -1636,7 +2109,7 @@ export default {
         await audit(
           env,
           user,
-          existing ? 'UPDATE' : 'CREATE',
+          existing ? 'RECALCULATE' : 'CREATE',
           'payroll_settlement',
           settlementId,
           employee.companyId
@@ -1734,9 +2207,24 @@ export default {
         const body = await request.json().catch(() => ({})) as any;
         const employeeExtraInput = body?.employeeExtra || {};
 
+        // El tipo de contrato y la cuenta salen del empleado guardado,
+        // no del navegador (antes el dashboard mandaba siempre '1').
+        const employeeRow = await env.DB
+          .prepare(`
+            SELECT contractType, bankName, bankAccountType, bankAccountNumber
+            FROM employees
+            WHERE id = ?1
+          `)
+          .bind(settlementRow.employeeId)
+          .first<any>();
+
+        const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
+          ? String(employeeRow.contractType)
+          : '2';
+
         const employeeExtra: DianEmployeeExtraInfo = {
           typeDocument: employeeExtraInput.typeDocument || '13',
-          typeContract: employeeExtraInput.typeContract || '1',
+          typeContract: contractType as DianEmployeeExtraInfo['typeContract'],
 
           /*
            * 42 = transferencia bancaria.
@@ -1744,9 +2232,9 @@ export default {
            */
           paymentMethod: employeeExtraInput.paymentMethod || '42',
 
-          bankName: employeeExtraInput.bankName || undefined,
-          accountNumber: employeeExtraInput.accountNumber || undefined,
-          accountType: employeeExtraInput.accountType || undefined,
+          bankName: employeeRow?.bankName || undefined,
+          accountNumber: employeeRow?.bankAccountNumber || undefined,
+          accountType: employeeRow?.bankAccountType || undefined,
         };
 
         const payrollResult: ColombiaPayrollResult = JSON.parse(
@@ -1792,7 +2280,7 @@ export default {
         await audit(
           env,
           user,
-          'UPDATE',
+          'GENERATE_XML',
           'payroll_settlement',
           settlementId,
           String(settlementRow.companyId)
@@ -1874,6 +2362,7 @@ export default {
 
           employeesMap.set(String(row.employeeId), {
             bankCode: row.bankName || 'N/A',
+            bankAccountType: row.bankAccountType || 'N/A',
             bankAccount: row.bankAccountNumber || 'N/A',
             taxId: row.taxId || 'N/A',
           });
@@ -1883,6 +2372,8 @@ export default {
           payrolls,
           employeesMap
         );
+
+        await audit(env, user, 'EXPORT', 'bank_file', periodId, String(periodRow.companyId));
 
         return sendJson({ success: true, data: csv });
       }
@@ -1981,6 +2472,48 @@ export default {
           );
         }
 
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        // El dígito de verificación sólo aplica (y sólo se persiste)
+        // cuando el documento es NIT — mismo patrón que `companies`.
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
+        // Tarifa "sugerida": opcional — precarga el formulario al
+        // crear una vinculación, pero cada empresa la puede cambiar.
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
         const id = `PRO-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
@@ -1989,10 +2522,11 @@ export default {
             .prepare(`
               INSERT INTO professionals (
                 id, firstName, firstName2, lastName, lastName2, taxId,
-                profession, email, phone, city, bankName,
-                bankAccountType, bankAccountNumber, active, createdAt
+                documentType, dv, profession, email, phone, city,
+                bankName, bankAccountType, bankAccountNumber,
+                defaultHourlyRate, active, createdAt
               )
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17)
             `)
             .bind(
               id,
@@ -2001,6 +2535,8 @@ export default {
               lastName,
               body.lastName2 || null,
               taxId,
+              documentType,
+              dv,
               profession,
               body.email || null,
               body.phone || null,
@@ -2008,6 +2544,7 @@ export default {
               body.bankName || null,
               body.bankAccountType || null,
               body.bankAccountNumber || null,
+              defaultHourlyRate,
               createdAt
             )
             .run();
@@ -2032,6 +2569,176 @@ export default {
           { success: true, data: normalizeProfessional(row) },
           201
         );
+      }
+
+      const professionalMatch =
+        url.pathname.match(/^\/api\/professionals\/([^/]+)$/);
+
+      if (
+        professionalMatch &&
+        request.method === 'PUT'
+      ) {
+        const professionalId = decodeURIComponent(professionalMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Profesional no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+
+        // `professionals` es una bolsa compartida entre empresas, no
+        // pertenece a ninguna: sólo puede editarlo quien ya tiene
+        // derecho a ver sus datos completos (SUPER_ADMIN, o una
+        // empresa con una vinculación activa con él) — misma regla
+        // que decide qué normalizador usa GET /api/professionals.
+        if (user.role !== 'SUPER_ADMIN') {
+          const ownEngagement = await env.DB
+            .prepare(`
+              SELECT id
+              FROM engagements
+              WHERE professionalId = ?1
+                AND companyId = ?2
+                AND active = 1
+            `)
+            .bind(professionalId, user.companyId)
+            .first();
+
+          if (!ownEngagement) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Sólo puedes editar profesionales con los que tu ' +
+                  'empresa tenga una vinculación activa.',
+              },
+              403
+            );
+          }
+        }
+
+        const body = await request.json() as any;
+
+        const firstName = String(body.firstName || '').trim();
+        const lastName = String(body.lastName || '').trim();
+        const taxId = String(body.taxId || '').trim();
+        const profession = String(body.profession || '').trim();
+
+        if (!firstName || !lastName || !taxId || !profession) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Primer nombre, primer apellido, documento y profesión son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
+        try {
+          await env.DB
+            .prepare(`
+              UPDATE professionals
+              SET
+                firstName = ?1,
+                firstName2 = ?2,
+                lastName = ?3,
+                lastName2 = ?4,
+                taxId = ?5,
+                documentType = ?6,
+                dv = ?7,
+                profession = ?8,
+                email = ?9,
+                phone = ?10,
+                city = ?11,
+                bankName = ?12,
+                bankAccountType = ?13,
+                bankAccountNumber = ?14,
+                defaultHourlyRate = ?15
+              WHERE id = ?16
+            `)
+            .bind(
+              firstName,
+              body.firstName2 || null,
+              lastName,
+              body.lastName2 || null,
+              taxId,
+              documentType,
+              dv,
+              profession,
+              body.email || null,
+              body.phone || null,
+              body.city || null,
+              body.bankName || null,
+              body.bankAccountType || null,
+              body.bankAccountNumber || null,
+              defaultHourlyRate,
+              professionalId
+            )
+            .run();
+        } catch {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe otro profesional con ese documento.',
+            },
+            409
+          );
+        }
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        await audit(env, user, 'UPDATE', 'professional', professionalId, null);
+
+        return sendJson({ success: true, data: normalizeProfessional(row) });
       }
 
       /*
@@ -2279,12 +2986,22 @@ export default {
           .prepare(`
             SELECT
               e.*,
+              p.id AS p_id,
               p.firstName AS p_firstName,
               p.firstName2 AS p_firstName2,
               p.lastName AS p_lastName,
               p.lastName2 AS p_lastName2,
               p.profession AS p_profession,
-              p.taxId AS p_taxId
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType,
+              p.dv AS p_dv,
+              p.email AS p_email,
+              p.phone AS p_phone,
+              p.city AS p_city,
+              p.bankName AS p_bankName,
+              p.bankAccountType AS p_bankAccountType,
+              p.bankAccountNumber AS p_bankAccountNumber,
+              p.defaultHourlyRate AS p_defaultHourlyRate
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
             WHERE e.companyId = ?1
@@ -2294,15 +3011,32 @@ export default {
           .bind(companyId)
           .all();
 
+        // Una empresa con vinculación activa ya tiene derecho a ver
+        // los datos completos del profesional (misma regla que
+        // GET /api/professionals), así que aquí se incluyen todos —
+        // es lo que necesita el dashboard para poder editarlo.
         const data = (result.results || []).map((row: any) => ({
           ...normalizeEngagement(row),
           professional: {
+            id: row.p_id,
             firstName: row.p_firstName,
             firstName2: row.p_firstName2,
             lastName: row.p_lastName,
             lastName2: row.p_lastName2,
             profession: row.p_profession,
             taxId: row.p_taxId,
+            documentType: row.p_documentType || '13',
+            dv: row.p_dv ?? null,
+            email: row.p_email ?? null,
+            phone: row.p_phone ?? null,
+            city: row.p_city ?? null,
+            bankName: row.p_bankName ?? null,
+            bankAccountType: row.p_bankAccountType ?? null,
+            bankAccountNumber: row.p_bankAccountNumber ?? null,
+            defaultHourlyRate:
+              row.p_defaultHourlyRate === null || row.p_defaultHourlyRate === undefined
+                ? null
+                : Number(row.p_defaultHourlyRate),
           },
         }));
 
@@ -2691,7 +3425,8 @@ export default {
               p.firstName2 AS p_firstName2,
               p.lastName AS p_lastName,
               p.lastName2 AS p_lastName2,
-              p.taxId AS p_taxId
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
             WHERE e.id = ?1
@@ -2714,6 +3449,32 @@ export default {
 
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, engagement.companyId);
+
+        // Cada liquidación gasta un consecutivo DIAN (nómina electrónica o
+        // documento soporte): un mismo tramo no se liquida dos veces.
+        const overlapping = await env.DB
+          .prepare(`
+            SELECT periodStart, periodEnd
+            FROM settlements
+            WHERE engagementId = ?1
+              AND periodStart <= ?3
+              AND periodEnd >= ?2
+            LIMIT 1
+          `)
+          .bind(engagementId, periodStart, periodEnd)
+          .first();
+
+        if (overlapping) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                `Esta vinculación ya tiene una liquidación del ${(overlapping as any).periodStart} ` +
+                `al ${(overlapping as any).periodEnd}; no se puede liquidar dos veces el mismo periodo.`,
+            },
+            409
+          );
+        }
 
         const hoursResult = await env.DB
           .prepare(`
@@ -2806,7 +3567,9 @@ export default {
               employerInfo,
               {
                 typeDocument: '13',
-                typeContract: '1',
+                typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
+                  ? String(engagement.contractType)
+                  : '2') as DianEmployeeExtraInfo['typeContract'],
                 paymentMethod: '42',
               },
               nominaConsecutive
@@ -2879,7 +3642,9 @@ export default {
             };
 
             const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
-              typeDocument: '13',
+              typeDocument:
+                (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
+                '13',
               concept: settlementResult.retentionConcept,
             };
 
@@ -2974,6 +3739,45 @@ export default {
 
       /*
        * ============================================================
+       * PERSONAL POR HORAS - ANULAR LIQUIDACIÓN
+       *
+       * Permite rehacer una liquidación mal hecha (el cálculo rechaza
+       * un tramo ya liquidado). El documento DIAN generado no se ha
+       * transmitido (la transmisión aún no existe); queda el registro
+       * en la actividad.
+       * ============================================================
+       */
+
+      const hourlySettlementMatch = url.pathname.match(/^\/api\/hourly\/settlements\/([^/]+)$/);
+
+      if (hourlySettlementMatch && request.method === 'DELETE') {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const settlementId = decodeURIComponent(hourlySettlementMatch[1]);
+        const row = await env.DB
+          .prepare(`
+            SELECT s.id, g.companyId
+            FROM settlements s
+            JOIN engagements g ON g.id = s.engagementId
+            WHERE s.id = ?1
+          `)
+          .bind(settlementId)
+          .first();
+
+        if (!row) {
+          return sendJson({ success: false, error: 'Liquidación no encontrada.' }, 404);
+        }
+
+        requireCompanyAccess(user, String(row.companyId));
+
+        await env.DB.prepare(`DELETE FROM settlements WHERE id = ?1`).bind(settlementId).run();
+        await audit(env, user, 'DELETE', 'settlement', settlementId, String(row.companyId));
+
+        return sendJson({ success: true, message: 'Liquidación anulada.' });
+      }
+
+      /*
+       * ============================================================
        * USUARIOS - LISTAR
        *
        * SUPER_ADMIN ve todos los usuarios; TENANT_ADMIN sólo los de
@@ -2995,7 +3799,11 @@ export default {
               AND (?1 IS NULL OR companyId = ?1)
             ORDER BY email ASC
           `)
-          .bind(user.role === 'SUPER_ADMIN' ? null : user.companyId)
+          .bind(
+            user.role === 'SUPER_ADMIN'
+              ? url.searchParams.get('companyId') || null
+              : user.companyId
+          )
           .all();
 
         return sendJson({
@@ -3097,27 +3905,36 @@ export default {
           }
         }
 
-        const id = `USR-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
+        // Un EMPLOYEE entra al portal del empleado: debe quedar enlazado
+        // a un empleado de su misma empresa, o vería datos ajenos.
+        const employeeId =
+          role === 'EMPLOYEE' ? String(body.employeeId || '').trim() : null;
 
-        try {
-          await env.DB
-            .prepare(`
-              INSERT INTO users (
-                id, email, role, companyId, employeeId, active, createdAt
-              )
-              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-            `)
-            .bind(
-              id,
-              email,
-              role,
-              companyId,
-              body.employeeId || null,
-              createdAt
-            )
-            .run();
-        } catch {
+        if (role === 'EMPLOYEE') {
+          const employee = employeeId
+            ? await env.DB
+                .prepare(`SELECT id FROM employees WHERE id = ?1 AND companyId = ?2`)
+                .bind(employeeId, companyId)
+                .first()
+            : null;
+
+          if (!employee) {
+            return sendJson(
+              {
+                success: false,
+                error: 'Selecciona un empleado de esta empresa para el usuario.',
+              },
+              400
+            );
+          }
+        }
+
+        const existingUser = await env.DB
+          .prepare(`SELECT id, active FROM users WHERE email = ?1`)
+          .bind(email)
+          .first<{ id: string; active: number }>();
+
+        if (existingUser && existingUser.active) {
           return sendJson(
             {
               success: false,
@@ -3125,6 +3942,32 @@ export default {
             },
             409
           );
+        }
+
+        // Un correo desactivado antes se reactiva con el nuevo rol y
+        // empresa (el correo es único en la tabla).
+        const id = existingUser ? existingUser.id : `USR-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        if (existingUser) {
+          await env.DB
+            .prepare(`
+              UPDATE users
+              SET role = ?2, companyId = ?3, employeeId = ?4, active = 1
+              WHERE id = ?1
+            `)
+            .bind(id, role, companyId, employeeId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              INSERT INTO users (
+                id, email, role, companyId, employeeId, active, createdAt
+              )
+              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+            `)
+            .bind(id, email, role, companyId, employeeId, createdAt)
+            .run();
         }
 
         await audit(env, user, 'CREATE', 'user', id, companyId);
@@ -3154,6 +3997,16 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
 
         const targetUserId = decodeURIComponent(userMatch[1]);
+
+        if (targetUserId === user.id) {
+          return sendJson(
+            {
+              success: false,
+              error: 'No puedes quitarte el acceso a ti mismo.',
+            },
+            400
+          );
+        }
 
         const existing = await env.DB
           .prepare(`
@@ -3203,6 +4056,29 @@ export default {
           message: 'Usuario deshabilitado correctamente.',
         });
       }
+
+      const benefitsResponse = await handleBenefitRoutes(request, url, env, user);
+      if (benefitsResponse) return benefitsResponse;
+      const certificatesResponse = await handleCertificateRoutes(request, url, env, user);
+      if (certificatesResponse) return certificatesResponse;
+
+      const importsResponse = await handleImportRoutes(request, url, env, user);
+      if (importsResponse) return importsResponse;
+
+      const pilaResponse = await handlePilaRoutes(request, url, env, user);
+      if (pilaResponse) return pilaResponse;
+
+      const closeReviewResponse = await handleCloseReviewRoutes(request, url, env, user);
+      if (closeReviewResponse) return closeReviewResponse;
+
+      const accountingResponse = await handleAccountingRoutes(request, url, env, user);
+      if (accountingResponse) return accountingResponse;
+
+      const auditLogResponse = await handleAuditLogRoutes(request, url, env, user);
+      if (auditLogResponse) return auditLogResponse;
+
+      const overviewResponse = await handleOverviewRoutes(request, url, env, user);
+      if (overviewResponse) return overviewResponse;
 
       /*
        * ============================================================
