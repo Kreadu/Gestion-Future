@@ -119,3 +119,20 @@ Fuentes de proveedor consultadas el 2026-10-29:
 - El archivo generado `src/dashboard/app.generated.ts` está ignorado por Git. `npm run build:dashboard` lo regenera a partir de `src/dashboard/app.jsx` y `src/dashboard/components/*.jsx`.
 - Las ramas WIP se basan en revisiones anteriores. Algunos diffs completos eliminan módulos que sí existen en `feat/employee-leaves`; revisar commits/archivos puntuales y no fusionar esos diffs completos sin comprobarlos.
 - La lectura `.xlsx/.xls` depende de que el navegador pueda cargar SheetJS desde cdnjs. Si el producto debe funcionar sin ese CDN, evaluar empaquetar la librería dentro de la aplicación.
+
+## Continuación de revisión (2026-10-29)
+
+- El usuario pidió abrir el programa en Firefox/Chrome. La causa del bloqueo local era un ciclo de rebuild: Wrangler vigila `src` y `scripts/build-dashboard.mjs` reescribía `src/dashboard/app.generated.ts` aunque su contenido no cambiara. El generador ahora compara el contenido antes de escribir. Wrangler quedó listo en `http://127.0.0.1:8787`.
+- Se corrigió el CSS global de controles en `src/dashboard.ts`: los checkbox ya no reciben ancho y padding de campos de texto; tienen tamaño compacto, margen cero y color de acento.
+- E2E Firefox repetido después de las correcciones: **20 pasos pasaron**, incluidos certificados del retirado, gestión de usuarios, portal del empleado, importación Excel y revisión de errores inesperados de consola/JavaScript/HTTP. Comando: `npm run e2e`.
+- Un primer intento sin permisos falló antes del navegador porque el entorno bloqueó `listen` en `0.0.0.0:8801` (`EPERM`). La repetición autorizada pudo abrir el servidor y completar Firefox.
+- No se ejecutó el E2E de Chrome ni el conjunto Jest/Python en esta continuación. La aplicación no se verificó en producción.
+
+## Chrome y limpieza de acciones simuladas (2026-10-30)
+
+- `tests/e2e/browser.mjs` acepta `E2E_BROWSER=chromium` (y `CHROMIUM_PATH` para un Chrome instalado). **E2E en Chromium 1228: 21/21 pasos pasaron.** El único fallo inicial era un falso positivo: Chromium escribe en consola "Failed to load resource: 400" para el 400 esperado del bloqueo Ley 1955; ese mensaje se ignora porque la respuesta ya se registra (con URL) en el manejador de `response`.
+- E2E Firefox repetido: 21/21 pasos pasaron.
+- Se eliminaron `src/components/Dashboard.tsx`, `BulkEmployeeImportExport.tsx` y `EmployeePortal.tsx`: ningún archivo los importaba (la UI real es `src/dashboard/app.jsx`). Eran los que mostraban `alert()` de "Transmitir a DIAN" e "Importar" sin hacer nada.
+- README: rol `EMPLOYEE` descrito como portal implementado; comandos E2E de Firefox y Chrome.
+- `jest.config.js` ignora `.claude/` (las copias en `.claude/worktrees` hacían fallar `npm test` con suites viejas).
+- Verificación: `tsc --noEmit` OK; Jest 20 suites / 208 pruebas OK; Python 4 pruebas OK.

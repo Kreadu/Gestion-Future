@@ -1,8 +1,10 @@
 /**
- * Abre el dashboard en Firefox (Playwright) con Firebase simulado y
- * registra errores de consola, excepciones y respuestas >= 400.
+ * Abre el dashboard en Firefox (o Chromium con E2E_BROWSER=chromium) vía
+ * Playwright, con Firebase simulado, y registra errores de consola,
+ * excepciones y respuestas >= 400.
+ * CHROMIUM_PATH permite usar un Chrome/Chromium ya instalado.
  */
-import { firefox } from 'playwright';
+import { firefox, chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 const stub = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'firebaseStub.js'), 'utf8');
 
 export async function openDashboard({ baseUrl = 'http://localhost:8788', as = 'super@kreadu.com', headless = true } = {}) {
-  const browser = await firefox.launch({ headless });
+  const browser = process.env.E2E_BROWSER === 'chromium'
+    ? await chromium.launch({ headless, executablePath: process.env.CHROMIUM_PATH || undefined })
+    : await firefox.launch({ headless });
   const context = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: 'es-CO' });
   const problems = [];
 
@@ -22,7 +26,11 @@ export async function openDashboard({ baseUrl = 'http://localhost:8788', as = 's
   }, as);
 
   const page = await context.newPage();
-  page.on('console', m => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
+  // Chromium repite en consola cada respuesta >= 400 sin la URL; esas ya
+  // quedan registradas (con URL) en el manejador de 'response'.
+  page.on('console', m => {
+    if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) problems.push('console: ' + m.text());
+  });
   page.on('pageerror', e => problems.push('pageerror: ' + e.message));
   page.on('response', async r => {
     if (r.status() >= 400 && r.url().startsWith(baseUrl)) {

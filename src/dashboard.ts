@@ -244,7 +244,7 @@ export function getDashboardHtml(
       letter-spacing: .03em;
     }
 
-    input,
+    input:not([type="checkbox"]),
     select {
       width: 100%;
       padding: 10px 11px;
@@ -255,10 +255,19 @@ export function getDashboardHtml(
       outline: none;
     }
 
-    input:focus,
+    input:not([type="checkbox"]):focus,
     select:focus {
       border-color: #2563eb;
       box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      margin: 0;
+      accent-color: #2563eb;
+      flex: 0 0 auto;
     }
 
     input:disabled,

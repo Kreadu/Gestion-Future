@@ -38,8 +38,13 @@ const { code } = await transform(source, {
 // El código va dentro de un <script> inline: "</script" lo cerraría.
 const safe = code.replace(/<\/script/gi, '<\\/script');
 
-writeFileSync(
-  join(dir, 'app.generated.ts'),
+const outputPath = join(dir, 'app.generated.ts');
+const output =
   '// Generado por scripts/build-dashboard.mjs desde app.jsx. No editar.\n' +
-    `export const DASHBOARD_APP_JS = ${JSON.stringify(safe)};\n`
-);
+  `export const DASHBOARD_APP_JS = ${JSON.stringify(safe)};\n`;
+
+// Wrangler vigila `src` durante `wrangler dev`. Si reescribimos este archivo
+// generado aunque el contenido sea idéntico, cada build dispara otro build.
+if (!existsSync(outputPath) || readFileSync(outputPath, 'utf8') !== output) {
+  writeFileSync(outputPath, output);
+}

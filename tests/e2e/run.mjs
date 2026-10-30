@@ -1,5 +1,5 @@
 /**
- * Prueba end-to-end del dashboard en Firefox (Playwright).
+ * Prueba end-to-end del dashboard en Firefox o Chromium (Playwright).
  *
  * Levanta tests/e2e/server.mjs en un puerto libre (base nueva en
  * memoria), recorre los flujos principales como lo haría una persona
