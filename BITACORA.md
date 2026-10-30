@@ -151,3 +151,18 @@ Primera brecha de `MEJORAS.md` / issue #11 cerrada. Siigo y Alegra validan antes
 - Decisiones tomadas sin consultar: los avisos no bloquean (el periodo puede necesitar cerrarse aunque falte un dato PILA); en un periodo cerrado sólo se informa el bloqueo, no avisos.
 - Verificación: `tests/closeReview.test.ts` (9 pruebas); Jest 21 suites / 217 pruebas; E2E Firefox 21/21 con el nuevo paso "Revisión antes de cerrar y cerrar periodo".
 - El usuario indicó que la prueba de navegador es en **un** navegador: desde aquí se corre sólo Firefox (`npm run e2e`); la opción Chromium queda disponible.
+
+## Comprobante contable de nómina (2026-10-30)
+
+Segunda brecha del issue #11 (Siigo y Alegra contabilizan la nómina; aquí no se podía).
+
+- `GET /api/payroll-periods/:id/accounting` (`src/routes/accounting.ts` + `src/services/payrollAccounting.ts`) arma el asiento del periodo en CSV: `CUENTA, NOMBRE_CUENTA, TERCERO_DOCUMENTO, TERCERO_NOMBRE, ENTIDAD, DETALLE, DEBITO, CREDITO`.
+- Cuentas PUC (Decreto 2650): gasto 5105 (sueldos, extras y recargos, auxilio de transporte, aportes EPS/AFP/ARL/CCF/ICBF/SENA, cesantías, intereses, prima, vacaciones) contra 2505 salarios por pagar, 2365 retención, 2370 aportes, 2380 pensiones y 2610 provisiones.
+- Tercero: el empleado en gasto, salarios por pagar y retención; la administradora (código PILA de EPS/AFP/ARL/CCF, o ICBF/SENA) en los pasivos 2370/2380, para conciliar con el pago de la PILA. El contador asocia cada código a su NIT.
+- Vacaciones disfrutadas: se debitan contra la provisión 261015 (el gasto ya se causó mes a mes). Incapacidades/licencias recobrables: cuenta por cobrar 138095 a la EPS (o a la ARL si son de origen laboral).
+- Sueldos (510506) se arma con sus componentes y sólo absorbe hasta 2 pesos de redondeo; si devengados ≠ neto + deducciones por más, se avisa por empleado (el asiento sigue cuadrado, la diferencia queda en sueldos).
+- Dashboard: botón "📒 Comprobante contable" en la barra del periodo (`src/dashboard/components/accounting.jsx`), con totales débito/crédito y descarga CSV en UTF-8 con BOM (Excel muestra bien las tildes).
+- Avisos: periodo en borrador; liquidación con `resultJson` dañado (se omite, no da 500); cuentas y códigos que el contador debe confirmar (issue #9).
+- Revisión de código aplicada: vacaciones gastadas dos veces, recobro sin cuenta por cobrar, sueldos como cifra de cuadre que escondía descuadres, `JSON.parse` sin protección, tercero de los pasivos, consultas en serie y Escape duplicado (se quitó el manejador propio de los modales de cierre y contable; el global de `app.jsx` ya cierra). No se cambió el 403/404 entre empresas porque todas las rutas lo hacen igual.
+- No incluye todavía las liquidaciones del personal por horas/contratistas (tabla `settlements`), que llevan otras cuentas (honorarios 5110).
+- Verificación: `tests/payrollAccounting.test.ts` (10 pruebas); Jest 22 suites / 227 pruebas; E2E Firefox 22/22 con el paso "Comprobante contable: cuadrado y descarga".

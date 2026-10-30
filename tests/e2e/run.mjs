@@ -155,6 +155,19 @@ try {
     await page.keyboard.press('Escape');
   });
 
+  await step('Comprobante contable: cuadrado y descarga', async () => {
+    await page.getByRole('button', { name: /Comprobante contable/ }).click();
+    const m = page.getByRole('dialog', { name: 'Comprobante contable' });
+    await m.getByText('✅ Cuadrado').waitFor();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      m.getByRole('button', { name: /Descargar comprobante/ }).click(),
+    ]);
+    const name = download.suggestedFilename();
+    if (!/^COMPROBANTE_NOMINA_900123456_2026-10-01_2026-10-31\.csv$/.test(name)) throw new Error('Descarga inesperada: ' + name);
+    await page.keyboard.press('Escape');
+  });
+
   await step('Revisión antes de cerrar y cerrar periodo', async () => {
     await page.getByRole('button', { name: /Cerrar periodo/ }).click();
     const m = page.getByRole('dialog', { name: 'Revisión antes de cerrar' });

@@ -3286,6 +3286,7 @@ function App({ me, onSignOut }) {
                 )}
 
                 {selectedPeriod && <PilaButton period={selectedPeriod} />}
+                {selectedPeriod && <AccountingButton period={selectedPeriod} />}
 
                 {showCloseReview && selectedPeriod && (
                   <CloseReviewModal

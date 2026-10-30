@@ -35,6 +35,7 @@ import { handleCertificateRoutes } from './routes/certificates';
 import { handleImportRoutes } from './routes/imports';
 import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
 import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
+import { handleAccountingRoutes } from './routes/accounting';
 import { handlePortalRoutes } from './routes/portal';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
@@ -4197,6 +4198,9 @@ export default {
 
       const closeReviewResponse = await handleCloseReviewRoutes(request, url, env, user);
       if (closeReviewResponse) return closeReviewResponse;
+
+      const accountingResponse = await handleAccountingRoutes(request, url, env, user);
+      if (accountingResponse) return accountingResponse;
 
       /*
        * ============================================================

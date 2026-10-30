@@ -22,12 +22,6 @@ function CloseReviewModal({ period, onClosed, onClose }) {
     return function() { cancelled = true; };
   }, [period.id]);
 
-  useEffect(function() {
-    function onKey(e) { if (e.key === 'Escape') onClose(); }
-    window.addEventListener('keydown', onKey);
-    return function() { window.removeEventListener('keydown', onKey); };
-  }, []);
-
   async function confirm() {
     setClosing(true);
     setError('');

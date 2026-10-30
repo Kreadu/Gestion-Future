@@ -12,7 +12,7 @@ export interface EmployeeBankDetails {
  * un apóstrofo a lo que empieza por = + - @ para que Excel no lo
  * interprete como fórmula (inyección CSV).
  */
-function cell(value: unknown): string {
+export function csvCell(value: unknown): string {
   let text = String(value ?? '');
 
   if (/^[=+\-@\t\r]/.test(text)) {
@@ -35,11 +35,11 @@ export class BankDisbursementService {
     const rows = payrolls.map(p => {
       const emp = employeesMap.get(p.employeeId);
       return [
-        cell(emp?.taxId || p.taxId || 'N/A'),
-        cell(p.employeeName),
-        cell(emp?.bankCode || 'N/A'),
-        cell(emp?.bankAccountType || 'N/A'),
-        cell(emp?.bankAccount || 'N/A'),
+        csvCell(emp?.taxId || p.taxId || 'N/A'),
+        csvCell(p.employeeName),
+        csvCell(emp?.bankCode || 'N/A'),
+        csvCell(emp?.bankAccountType || 'N/A'),
+        csvCell(emp?.bankAccount || 'N/A'),
         p.netPay.toFixed(2)
       ].join(',');
     });
