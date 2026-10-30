@@ -40,6 +40,7 @@ import { handleAuditLogRoutes } from './routes/auditLog';
 import { handleOverviewRoutes } from './routes/overview';
 import { handlePortalRoutes } from './routes/portal';
 import { handleRequestRoutes } from './routes/requests';
+import { handleLogoRoutes, parseCompanyLogo, saveCompanyLogo, logoMetaFromRow, LOGO_UPDATED_AT_SQL } from './routes/logos';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -96,7 +97,8 @@ interface Env {
 }
 
 interface Company {
-  logo?: string;
+  hasLogo: boolean;
+  logoVersion: string | null;
   id: string;
   name: string;
   nit: string;
@@ -178,6 +180,7 @@ function normalizeCompany(row: any): Company {
     legalRepresentative: row.legalRepresentative ?? null,
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
+    ...logoMetaFromRow(row),
     isExempt114_1: !!row.isExempt114_1,
     ...pilaAffiliationOf(row, 'company'),
     active: !!row.active,
@@ -414,6 +417,9 @@ export default {
       const requestsResponse = await handleRequestRoutes(request, url, env, user);
       if (requestsResponse) return requestsResponse;
 
+      const logoResponse = await handleLogoRoutes(request, url, env, user);
+      if (logoResponse) return logoResponse;
+
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
       if (portalResponse) return portalResponse;
@@ -450,7 +456,7 @@ export default {
               legalRepresentative,
               taxRegime,
               economicActivity,
-              logo,
+              ${LOGO_UPDATED_AT_SQL},
               isExempt114_1,
               arlCode,
               pilaContributorType,
@@ -526,6 +532,7 @@ export default {
           );
         }
 
+        const logo = parseCompanyLogo(body.logo);
         const id = `COMP-${crypto.randomUUID()}`;
         const pila = parsePilaAffiliation(body, 'company');
         const createdAt = new Date().toISOString();
@@ -579,7 +586,7 @@ export default {
             body.legalRepresentative || null,
             body.taxRegime || null,
             body.economicActivity || null,
-            body.logo || null,
+            null,
             createdAt,
             body.isExempt114_1 ? 1 : 0,
             LEGAL_VERSION,
@@ -587,11 +594,12 @@ export default {
             request.headers.get('CF-Connecting-IP')
           )
           .run();
+        await saveCompanyLogo(env, id, logo);
         await savePilaAffiliation(env, 'company', id, pila);
 
         const row = await env.DB
           .prepare(`
-            SELECT *
+            SELECT *, ${LOGO_UPDATED_AT_SQL}
             FROM companies
             WHERE id = ?1
           `)
@@ -668,6 +676,7 @@ export default {
         }
 
         const companyPila = parsePilaAffiliation(body, 'company');
+        const logo = parseCompanyLogo(body.logo);
 
         await env.DB
           .prepare(`
@@ -687,9 +696,8 @@ export default {
               legalRepresentative = ?12,
               taxRegime = ?13,
               economicActivity = ?14,
-              logo = ?15,
-              isExempt114_1 = ?17
-            WHERE id = ?16
+              isExempt114_1 = ?16
+            WHERE id = ?15
           `)
           .bind(
             name,
@@ -706,16 +714,16 @@ export default {
             body.legalRepresentative ?? null,
             body.taxRegime ?? null,
             body.economicActivity ?? null,
-            body.logo ?? existing.logo ?? null,
             companyId,
             (body.isExempt114_1 ?? existing.isExempt114_1) ? 1 : 0
           )
           .run();
+        await saveCompanyLogo(env, companyId, logo);
         await savePilaAffiliation(env, 'company', companyId, companyPila);
 
         const row = await env.DB
           .prepare(`
-            SELECT *
+            SELECT *, ${LOGO_UPDATED_AT_SQL}
             FROM companies
             WHERE id = ?1
           `)
@@ -3279,6 +3287,32 @@ export default {
        * de pagarle (Ley 1955/2019 art. 244).
        * ============================================================
        */
+
+      if (
+        url.pathname === '/api/pila-verifications' &&
+        request.method === 'GET'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+        const engagementId = String(url.searchParams.get('engagementId') || '').trim();
+        if (!engagementId) {
+          return sendJson({ success: false, error: 'engagementId es obligatorio.' }, 400);
+        }
+
+        const engagement = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+        if (!engagement) {
+          return sendJson({ success: false, error: 'Vinculación no encontrada o inactiva.' }, 404);
+        }
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const rows = await env.DB
+          .prepare(`SELECT period FROM pila_verifications WHERE engagementId = ?1 AND verified = 1 ORDER BY period DESC`)
+          .bind(engagementId)
+          .all();
+        return sendJson({ success: true, data: rows.results || [] });
+      }
 
       if (
         url.pathname === '/api/pila-verifications' &&

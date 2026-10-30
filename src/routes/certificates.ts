@@ -12,6 +12,7 @@
  */
 
 import { sendJson } from '../http';
+import { logoMetaFromRow, LOGO_UPDATED_AT_SQL } from './logos';
 import {
   requireRole,
   requireCompanyAccess,
@@ -40,7 +41,8 @@ export interface CertificateCompany {
   phone: string | null;
   email: string | null;
   legalRepresentative: string | null;
-  logo: string | null;
+  hasLogo: boolean;
+  logoVersion: string | null;
 }
 
 export interface CertificateEmployee {
@@ -97,7 +99,7 @@ function mapCompany(row: any): CertificateCompany {
     phone: row.phone ?? null,
     email: row.email ?? null,
     legalRepresentative: row.legalRepresentative ?? null,
-    logo: row.logo ?? null,
+    ...logoMetaFromRow(row),
   };
 }
 
@@ -134,7 +136,7 @@ async function loadEmployeeAndCompany(env: RouteEnv, employeeId: string) {
   }
 
   const company = await env.DB
-    .prepare(`SELECT * FROM companies WHERE id = ?1`)
+    .prepare(`SELECT *, ${LOGO_UPDATED_AT_SQL} FROM companies WHERE id = ?1`)
     .bind(employee.companyId)
     .first<any>();
 

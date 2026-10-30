@@ -52,6 +52,7 @@ export function getDashboardHtml(
     }
 
     .app {
+      position: relative;
       min-height: 100vh;
       background:
         radial-gradient(circle at top left, rgba(30, 64, 175, .18), transparent 30%),
@@ -554,7 +555,7 @@ export function getDashboardHtml(
          (ej. al guardar) antes quedaba renderizado detrás del fondo
          del modal — invisible, aunque el mensaje sí existía. */
       position: fixed;
-      top: 16px;
+      top: 88px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 10000;
@@ -567,6 +568,13 @@ export function getDashboardHtml(
       color: #fecaca;
       font-size: 13px;
       box-shadow: 0 12px 34px rgba(0, 0, 0, .5);
+      pointer-events: none;
+    }
+
+    .page-footer {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
+      padding: 7px 16px; text-align: center; font-size: 11px; color: #8193aa;
+      background: rgba(7, 17, 31, .96); border-top: 1px solid #1d3047;
     }
 
     .success {
@@ -611,6 +619,10 @@ export function getDashboardHtml(
         width: 100%;
         justify-content: flex-start;
       }
+
+      .alert { top: 190px; }
+      .page-footer { position: absolute; left: 0; right: 0; bottom: 0; max-height: 90px; overflow-y: auto; padding: 5px 8px; font-size: 10px; }
+      .app { padding-bottom: 100px; }
 
       .layout {
         display: block;

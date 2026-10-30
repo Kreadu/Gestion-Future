@@ -225,3 +225,15 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - `xlsx@0.18.5` se agrega como dependencia de producción y `scripts/build-dashboard.mjs` lo incorpora al HTML del dashboard; se retiró la carga desde cdnjs.
 - Verificación: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25, incluida la importación de Excel.
+
+## Logos y accesibilidad (2026-10-30)
+
+- Se portó selectivamente la rama WIP: logos en `company_logos` con migración 0015 y ruta autenticada, asociación de 89 etiquetas con campos, aviso PILA actualizado, mensajes accesibles y pie móvil sin tapar contenido; la validación usuario/empresa ya estaba en `main`.
+- Verificación: TypeScript pasó, Jest 27/27 suites (264 pruebas) y E2E Firefox 25/25 sin errores de consola, JavaScript ni HTTP.
+- El aviso de worker de Jest de issue #16 queda para revisar: en CI no salió; al ejecutar local con `--forceExit` sólo aparece el aviso estándar de handles abiertos.
+
+
+## CI remoto PR #22 (2026-10-30)
+
+- Primer intento de CI: TypeScript, las 4 pruebas Python y Jest pasaron. El E2E completó 24/25 pasos; el chequeo final reportó `404 GET /api/pila-verifications?engagementId=...`.
+- Corregido en `src/index.ts` del PR #22 con una ruta GET protegida por rol y acceso a empresa. El segundo CI debe confirmar el flujo completo antes del merge.

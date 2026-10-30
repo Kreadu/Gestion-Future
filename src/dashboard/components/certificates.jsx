@@ -182,7 +182,7 @@ function EmploymentCertificateSheet({ data }) {
   return (
     <div className="cert-sheet" style={{ ...certSheetStyle, fontSize: '14px', lineHeight: 1.7, padding: '48px 56px' }}>
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
-        {company.logo && <img src={company.logo} alt="" style={{ maxHeight: '60px', marginBottom: '8px' }} />}
+        {company.hasLogo && <CompanyLogo company={company} style={{ maxHeight: '60px', marginBottom: '8px' }} />}
         <div style={{ fontSize: '16px', fontWeight: 700 }}>{company.name}</div>
         <div>NIT {certNit(company)}</div>
         {company.address && <div style={{ fontSize: '12px' }}>{company.address}{company.city ? ' · ' + company.city : ''}</div>}
