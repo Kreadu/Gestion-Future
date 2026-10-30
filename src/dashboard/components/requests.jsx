@@ -149,8 +149,12 @@ function RequestsSection({ company, onError, onSuccess }) {
   const [busy, setBusy] = useState('');
 
   const companyId = company ? company.id : '';
+  // Descarta cargas anteriores si cambian empresa o estado antes de que respondan.
+  const loadSeq = useRef(0);
 
   async function load() {
+    const seq = ++loadSeq.current;
+
     if (!companyId) {
       setRequests([]);
       return;
@@ -158,8 +162,10 @@ function RequestsSection({ company, onError, onSuccess }) {
     try {
       const r = await api('/api/employee-requests?companyId=' + encodeURIComponent(companyId) +
         '&status=' + encodeURIComponent(status));
+      if (seq !== loadSeq.current) return;
       setRequests(r.data || []);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       onError(err.message);
     }
   }

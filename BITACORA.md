@@ -210,3 +210,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - Hecho: revisión antes del cierre, comprobante contable PUC (nómina, jornada parcial, contratistas), solicitudes del portal, registro de actividad, panel de empresas; arreglos de la revisión de código (novedades que cruzan el periodo, administradoras faltantes, liquidaciones por horas que cruzan el borde, choque solicitud/novedad, edición de novedad sincroniza la solicitud, bandeja sin N+1, anular liquidación por horas). Validación de novedades unificada (POST/PUT). Jest 258, E2E Firefox 25/25.
 - **Pendiente:** ver `SIGUIENTE.md` (instrucciones para la IA que continúe). Resumen: (1) guardia de respuestas fuera de orden en `src/dashboard/components/requests.jsx` (como `loadSeq` de activity.jsx); (2) E2E con fechas relativas a hoy (hoy fijas en 2026: el paso de solicitudes y el panel fallan desde nov-2026/2027); (3) empaquetar SheetJS en vez de cdnjs; (4) rama `wip/logos-accesibilidad`; (5) rama `wip/dian-firma-envio` (envío real requiere certificado, issue #17).
+
+## Guardia de solicitudes fuera de orden (2026-10-30)
+
+- `RequestsSection.load` ahora descarta respuestas y errores obsoletos si cambió la empresa o el filtro; al quitar la empresa también invalida la carga pendiente.
+- Verificación local: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25.
