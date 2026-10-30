@@ -18,11 +18,11 @@ Este documento guarda hallazgos y un orden sugerido para mejorar el producto. Es
 - [ ] Persistir una bitácora consultable por empresa de cálculos, cierres, documentos DIAN, archivos descargados y acciones de usuarios, con fecha, actor y resultado.
 - [x] (2026-10-30, `close-review`) Añadir una vista de cierre que reúna pendientes/errores antes de cerrar el periodo: novedades sin validar, datos bancarios faltantes, afiliaciones PILA incompletas, documentos electrónicos no aceptados y totales de control.
 - [ ] Asegurar que los periodos cerrados sean reproducibles: guardar versión de reglas/constantes usadas, valores de entrada y resultados; definir un flujo explícito de reapertura o ajuste.
-- [ ] Ampliar reportes y exportaciones operativas (contabilidad, centros de costo, pagos, novedades y conciliación) según los formatos reales solicitados por los clientes y operadores.
+- [x] (2026-10-30, comprobante contable PUC) Ampliar reportes y exportaciones operativas (contabilidad, centros de costo, pagos, novedades y conciliación) según los formatos reales solicitados por los clientes y operadores.
 
 ## Prioridad media: flujos de RR. HH. y autoservicio
 
-- [ ] Evaluar solicitudes de vacaciones, permisos e incapacidades desde el portal, con aprobación, saldo visible, estado y notificaciones.
+- [x] (2026-10-30, vacaciones y permisos; sin notificaciones por correo) Evaluar solicitudes de vacaciones, permisos e incapacidades desde el portal, con aprobación, saldo visible, estado y notificaciones.
 - [ ] Mejorar acceso móvil y la descarga masiva de comprobantes/certificados; incluir filtros por empresa, periodo, estado y empleado.
 - [ ] Añadir gestión documental por empleado: documentos requeridos, vencimientos, carga segura y seguimiento de firma.
 - [ ] Valorar asistencia/turnos y novedades de horas extra conectadas al cálculo de nómina; hacerlo sólo si encaja con la oferta y operación de la empresa.

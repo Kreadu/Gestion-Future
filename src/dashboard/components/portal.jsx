@@ -334,7 +334,8 @@ function EmployeePortal({ me, onSignOut }) {
     ['datos', '👤 Mis datos'],
     ['desprendibles', '💵 Desprendibles'],
     ['prestaciones', '🏦 Prestaciones'],
-    ['certificados', '📄 Certificados']
+    ['certificados', '📄 Certificados'],
+    ['solicitudes', '📨 Solicitudes']
   ];
 
   function renderDatos() {
@@ -535,6 +536,7 @@ function EmployeePortal({ me, onSignOut }) {
         {!loading && emp && tab === 'desprendibles' && renderDesprendibles()}
         {!loading && emp && tab === 'prestaciones' && renderPrestaciones()}
         {!loading && emp && tab === 'certificados' && renderCertificados()}
+        {!loading && emp && tab === 'solicitudes' && <PortalRequests onError={setError} />}
       </main>
 
       {sheet && sheet.kind === 'payslip' && (

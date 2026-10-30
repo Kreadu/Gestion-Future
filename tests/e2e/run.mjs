@@ -297,7 +297,7 @@ try {
     await expectText(page, 'ana@espiga.co');
   });
 
-  await step('Portal del empleado: desprendible y certificado 220', async () => {
+  await step('Portal del empleado: desprendible, certificado 220 y solicitud', async () => {
     const portal = await openDashboard({ baseUrl, as: 'ana@espiga.co', headless: !process.env.HEADED });
     try {
       const p = portal.page;
@@ -309,10 +309,32 @@ try {
       await p.locator('#portal-cert-year').fill('2026');
       await p.getByRole('button', { name: 'Generar' }).last().click();
       await expectText(p, 'Año gravable 2026');
+
+      await p.getByRole('button', { name: '✕ Cerrar' }).click();
+
+      // Solicitud de permiso para hoy (Ana se retira el 2026-12-31).
+      await p.getByRole('tab', { name: /Solicitudes/ }).click();
+      await p.locator('#req-type').selectOption('PERMISSION');
+      const today = new Date().toISOString().slice(0, 10);
+      await p.locator('#req-start').fill(today);
+      await p.locator('#req-end').fill(today);
+      await p.locator('#req-reason').fill('Cita médica');
+      await p.getByRole('button', { name: 'Enviar solicitud' }).click();
+      await expectText(p, 'Solicitud enviada');
+      await expectText(p, 'Pendiente');
       if (portal.problems.length) throw new Error(portal.problems.join(' || '));
     } finally {
       await portal.browser.close();
     }
+  });
+
+  await step('Solicitudes: el administrador aprueba el permiso pedido en el portal', async () => {
+    await page.getByRole('button', { name: /Solicitudes/ }).click();
+    await expectText(page, 'Cita médica');
+    await page.getByRole('button', { name: 'Aprobar' }).click();
+    await expectText(page, 'Permiso aprobado.');
+    await page.locator('#requests-status').selectOption('APPROVED');
+    await page.locator('td', { hasText: 'Aprobada' }).waitFor();
   });
 
   await step('Importar un empleado desde Excel y validar la vista previa', async () => {

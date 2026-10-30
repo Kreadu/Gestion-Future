@@ -37,6 +37,7 @@ import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffili
 import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
 import { handleAccountingRoutes } from './routes/accounting';
 import { handlePortalRoutes } from './routes/portal';
+import { handleRequestRoutes } from './routes/requests';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
 import {
@@ -64,7 +65,7 @@ import {
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
 import { intersectDateRanges } from './services/dateRanges';
-import { businessDaysBetween } from './services/colombiaHolidays';
+import { createEmployeeLeave, EMPLOYEE_LEAVE_TYPES, vacationBusinessDays } from './routes/leaves';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -406,6 +407,10 @@ export default {
           data: user,
         });
       }
+
+      // Solicitudes de vacaciones/permisos (empleado y administrador).
+      const requestsResponse = await handleRequestRoutes(request, url, env, user);
+      if (requestsResponse) return requestsResponse;
 
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
@@ -1265,28 +1270,6 @@ export default {
        * ============================================================
        */
 
-      const EMPLOYEE_LEAVE_TYPES: EmployeeLeaveType[] = [
-        'GENERAL_INCAPACITY',
-        'WORK_INCAPACITY',
-        'MATERNITY_LEAVE',
-        'PATERNITY_LEAVE',
-        'VACATION',
-      ];
-
-      // Vacaciones: días hábiles a descontar del saldo. Si no vienen,
-      // se cuentan de lunes a sábado sin festivos.
-      const vacationBusinessDays = (
-        leaveType: string,
-        body: any,
-        startDate: string,
-        endDate: string
-      ): number | null => {
-        if (leaveType !== 'VACATION') return null;
-        const given = Number(body.businessDays);
-        return Number.isFinite(given) && given > 0
-          ? given
-          : businessDaysBetween(startDate, endDate);
-      };
 
       if (
         url.pathname === '/api/employee-leaves' &&
@@ -1335,164 +1318,7 @@ export default {
         url.pathname === '/api/employee-leaves' &&
         request.method === 'POST'
       ) {
-        const body = await request.json() as any;
-
-        const employeeId = String(body.employeeId || '').trim();
-        const leaveType = String(body.leaveType || '').trim();
-        const startDate = String(body.startDate || '').trim();
-        const endDate = String(body.endDate || '').trim();
-
-        if (!employeeId || !leaveType || !startDate || !endDate) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'employeeId, leaveType, startDate y endDate son obligatorios.',
-            },
-            400
-          );
-        }
-
-        if (
-          !EMPLOYEE_LEAVE_TYPES.includes(leaveType as EmployeeLeaveType)
-        ) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
-                'MATERNITY_LEAVE, PATERNITY_LEAVE o VACATION.',
-            },
-            400
-          );
-        }
-
-        const employeeRow = await env.DB
-          .prepare(`SELECT id, companyId FROM employees WHERE id = ?1 AND active = 1`)
-          .bind(employeeId)
-          .first();
-
-        if (!employeeRow) {
-          return sendJson(
-            { success: false, error: 'Empleado no encontrado o inactivo.' },
-            404
-          );
-        }
-
-        requireRole(user, ['TENANT_ADMIN']);
-        requireCompanyAccess(user, String(employeeRow.companyId));
-
-        const start = new Date(`${startDate}T00:00:00Z`);
-        const end = new Date(`${endDate}T00:00:00Z`);
-
-        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-          return sendJson(
-            { success: false, error: 'startDate/endDate inválidas.' },
-            400
-          );
-        }
-
-        const totalDays =
-          Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
-
-        if (totalDays < 1) {
-          return sendJson(
-            {
-              success: false,
-              error: 'endDate debe ser igual o posterior a startDate.',
-            },
-            400
-          );
-        }
-
-        // Un empleado no puede tener dos incapacidades/licencias
-        // simultáneas (sí puede tener varias en el mismo MES, una
-        // tras otra — eso el motor lo suma sin problema al liquidar).
-        const overlappingExisting = await env.DB
-          .prepare(`
-            SELECT id
-            FROM employee_leaves
-            WHERE employeeId = ?1
-              AND startDate <= ?2
-              AND endDate >= ?3
-          `)
-          .bind(employeeId, endDate, startDate)
-          .first();
-
-        if (overlappingExisting) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'Ya existe una incapacidad/licencia registrada para ' +
-                'este empleado que se solapa con estas fechas.',
-            },
-            400
-          );
-        }
-
-        // Sólo aplica (y sólo se persiste) para incapacidad general —
-        // en el resto de tipos siempre es 0.
-        const accumulatedDaysBefore =
-          leaveType === 'GENERAL_INCAPACITY'
-            ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
-            : 0;
-
-        const businessDays = vacationBusinessDays(leaveType, body, startDate, endDate);
-        const id = `LV-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
-
-        await env.DB
-          .prepare(`
-            INSERT INTO employee_leaves (
-              id, employeeId, companyId, leaveType, startDate, endDate,
-              totalDays, accumulatedDaysBefore, businessDays, notes, createdAt
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-          `)
-          .bind(
-            id,
-            employeeId,
-            String(employeeRow.companyId),
-            leaveType,
-            startDate,
-            endDate,
-            totalDays,
-            accumulatedDaysBefore,
-            businessDays,
-            body.notes || null,
-            createdAt
-          )
-          .run();
-
-        await audit(
-          env,
-          user,
-          'CREATE',
-          'employee_leave',
-          id,
-          String(employeeRow.companyId)
-        );
-
-        return sendJson(
-          {
-            success: true,
-            data: {
-              id,
-              employeeId,
-              companyId: String(employeeRow.companyId),
-              leaveType,
-              startDate,
-              endDate,
-              totalDays,
-              accumulatedDaysBefore,
-              businessDays,
-              notes: body.notes || null,
-              createdAt,
-            },
-          },
-          201
-        );
+        return createEmployeeLeave(env, user, await request.json() as any);
       }
 
       const employeeLeaveMatch =
@@ -1684,6 +1510,18 @@ export default {
         await env.DB
           .prepare(`DELETE FROM employee_leaves WHERE id = ?1`)
           .bind(leaveId)
+          .run();
+
+        // Si venía de una solicitud del portal, el empleado debe ver que
+        // ya no está aprobada.
+        await env.DB
+          .prepare(`
+            UPDATE employee_requests
+            SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                decisionNotes = 'La novedad de vacaciones fue eliminada por el administrador.'
+            WHERE leaveId = ?3
+          `)
+          .bind(user.email, new Date().toISOString(), leaveId)
           .run();
 
         await audit(

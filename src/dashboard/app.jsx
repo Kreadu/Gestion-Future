@@ -3047,6 +3047,13 @@ function App({ me, onSignOut }) {
         >
           👤 Usuarios
         </button>
+
+        <button
+          className={'btn' + (activeSection === 'requests' ? ' btn-primary' : '')}
+          onClick={function() { setActiveSection('requests'); }}
+        >
+          📨 Solicitudes
+        </button>
       </div>
 
       {error && (
@@ -3065,6 +3072,14 @@ function App({ me, onSignOut }) {
 
       {activeSection === 'benefits' && (
         <BenefitsSection
+          company={selectedCompany}
+          onError={setError}
+          onSuccess={setSuccess}
+        />
+      )}
+
+      {activeSection === 'requests' && (
+        <RequestsSection
           company={selectedCompany}
           onError={setError}
           onSuccess={setSuccess}

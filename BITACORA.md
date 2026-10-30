@@ -175,3 +175,21 @@ Pedido del usuario: el comprobante contable debía cubrir también el personal p
   - **Contratistas** (`INDEPENDENT_SERVICES`): honorarios → D 511095 / C 236515 retención / C 233525 honorarios por pagar; servicios → D 513595 / C 236525 / C 233595. Tercero = el contratista. Si neto ≠ bruto − retención por más de 2 pesos, aviso.
 - **Error encontrado y corregido:** se podía liquidar dos veces la misma vinculación en el mismo periodo. Cada vez se creaba un registro nuevo y se gastaba otro consecutivo DIAN (nómina electrónica o documento soporte). Ahora `POST /api/hourly/settlements/calculate` responde 409 si el tramo se cruza con uno ya liquidado, antes de gastar consecutivo. Para datos viejos con duplicados, el comprobante usa la liquidación más reciente y lo avisa.
 - Verificación: `tests/payrollAccounting.test.ts` (14 pruebas) y `tests/hourlySettlements.test.ts` (nuevo), escritos antes del código; Jest 23 suites / 232 pruebas; E2E Firefox 22/22.
+
+## Solicitudes de vacaciones y permisos desde el portal (2026-10-30)
+
+Tercera brecha del issue #11 (Buk y Factorial tienen autoservicio con aprobación).
+
+- Migración `0013_employee_requests.sql` (0011 y 0012 quedan reservadas para las ramas `wip/dian-firma-envio` y `wip/logos-accesibilidad`).
+- `src/routes/requests.ts`:
+  - Empleado: `GET/POST /api/portal/requests`, `POST /api/portal/requests/:id/cancel` (sólo pendientes; la de otro empleado da 404).
+  - Administrador: `GET /api/employee-requests?companyId=&status=`, `POST /api/employee-requests/:id/approve|reject` con `notes`.
+- Aprobar vacaciones registra la novedad con `createEmployeeLeave` (`src/routes/leaves.ts`, extraído de `index.ts` para que el registro manual y la aprobación validen igual). Si falla (p. ej. se cruza con una incapacidad), la solicitud vuelve a pendiente. La solicitud se "reclama" con un `UPDATE ... WHERE status = 'PENDING'`, así que no se aprueba dos veces.
+- Borrar la novedad de unas vacaciones aprobadas pasa la solicitud a CANCELLED con nota, para que el empleado lo vea.
+- Validaciones: fechas reales (rechaza 2026-02-31), desde hoy en hora Colombia (UTC-5), máximo 120 días, al menos un día hábil para vacaciones, sin pasar la fecha de retiro, sin cruzarse con otra solicitud pendiente/aprobada, motivo obligatorio para permisos.
+- Saldo disponible = saldo causado hoy − vacaciones ya registradas que empiezan después − otras solicitudes de vacaciones pendientes. Si se pide más, se permite (vacaciones anticipadas de común acuerdo) pero se marca `exceedsBalance` al empleado y al administrador.
+- Decisiones tomadas sin consultar: los permisos quedan como registro aprobado, sin efecto en la nómina (no hay todavía novedad de "licencia remunerada/no remunerada"); no hay notificación por correo (no existe infraestructura de correo).
+- Interfaz: pestaña "📨 Solicitudes" en el portal (formulario + lista con estado y respuesta) y sección "📨 Solicitudes" del administrador con filtro por estado, aprobar y rechazar con motivo (`src/dashboard/components/requests.jsx`).
+- Revisión de código aplicada: FK de `leaveId` que impedía borrar la novedad, rollback si `createEmployeeLeave` lanza excepción, fechas imposibles, hora de Colombia, solicitudes que pasan del retiro, rango sin tope, saldo que ignoraba otras pendientes, consultas en serie en la bandeja y verificación de rol antes de buscar la solicitud. Pendiente: `PUT /api/employee-leaves/:id` mantiene su propia copia de validaciones (anterior a este cambio).
+- El paso E2E del permiso usa la fecha de hoy y Ana se retira el 2026-12-31 en el recorrido: a partir de 2027 hay que actualizar las fechas fijas del E2E.
+- Verificación: `tests/employeeRequests.test.ts` (11 pruebas, escritas antes del código); Jest 24 suites / 243 pruebas; E2E Firefox 23/23 con la solicitud en el portal y la aprobación del administrador.
