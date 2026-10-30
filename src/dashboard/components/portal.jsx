@@ -95,8 +95,8 @@ function PortalSheet({ title, subtitle, company, onClose, children }) {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {company && company.logo && (
-              <img src={company.logo} alt={'Logo de ' + company.name}
+            {company && company.hasLogo && (
+              <CompanyLogo company={company}
                 style={{ maxHeight: '42px', maxWidth: '120px', objectFit: 'contain' }} />
             )}
             <button className="btn portal-no-print" onClick={function() { window.print(); }}>🖨️ Imprimir</button>

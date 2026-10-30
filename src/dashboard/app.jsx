@@ -121,6 +121,128 @@ async function api(url, options) {
   return data;
 }
 
+// ---- Logos de empresa ----
+// El listado de empresas sólo trae `hasLogo`/`logoVersion`; la imagen
+// se pide aparte a GET /api/companies/:id/logo con el token (no sirve
+// un <img src> directo) y se muestra como blob URL. Se cachea una vez
+// por empresa y versión.
+const companyLogoCache = {};
+
+function fetchCompanyLogoUrl(companyId, version) {
+  const cached = companyLogoCache[companyId];
+
+  if (cached && cached.version === version) {
+    return cached.promise;
+  }
+
+  if (cached) {
+    cached.promise.then(function(url) { URL.revokeObjectURL(url); }, function() {});
+  }
+
+  const promise = (async function() {
+    const currentUser = firebase.auth().currentUser;
+    const headers = {};
+
+    if (currentUser) {
+      headers.Authorization = 'Bearer ' + await currentUser.getIdToken();
+    }
+
+    const response = await fetch(
+      '/api/companies/' + encodeURIComponent(companyId) + '/logo?v=' + encodeURIComponent(version || ''),
+      { headers: headers }
+    );
+
+    if (!response.ok) {
+      throw new Error('No se pudo cargar el logo.');
+    }
+
+    return URL.createObjectURL(await response.blob());
+  })();
+
+  companyLogoCache[companyId] = { version: version, promise: promise };
+
+  promise.catch(function() {
+    if (companyLogoCache[companyId] && companyLogoCache[companyId].promise === promise) {
+      delete companyLogoCache[companyId];
+    }
+  });
+
+  return promise;
+}
+
+function CompanyLogo({ company, style }) {
+  const [src, setSrc] = useState('');
+  const id = company ? company.id : '';
+  const version = company && company.hasLogo ? String(company.logoVersion || '') : '';
+
+  useEffect(function() {
+    let alive = true;
+    setSrc('');
+
+    if (id && version) {
+      fetchCompanyLogoUrl(id, version).then(
+        function(url) { if (alive) setSrc(url); },
+        function() {}
+      );
+    }
+
+    return function() { alive = false; };
+  }, [id, version]);
+
+  if (!src) return null;
+
+  return <img src={src} alt={'Logo de ' + company.name} style={style} />;
+}
+
+// Reduce el logo en el navegador (máx. 400 px por lado) antes de
+// enviarlo. Un SVG pequeño (< 200 KB) se deja tal cual.
+const LOGO_MAX_PX = 400;
+
+function resizeLogoFile(file) {
+  return new Promise(function(resolve, reject) {
+    const reader = new FileReader();
+
+    reader.onerror = function() {
+      reject(new Error('No se pudo leer el archivo del logo.'));
+    };
+
+    reader.onload = function() {
+      const dataUrl = String(reader.result || '');
+
+      if (file.type === 'image/svg+xml' && file.size < 200 * 1024) {
+        resolve(dataUrl);
+        return;
+      }
+
+      const img = new Image();
+
+      img.onerror = function() {
+        reject(new Error('El archivo del logo no es una imagen válida.'));
+      };
+
+      img.onload = function() {
+        const w0 = img.naturalWidth || LOGO_MAX_PX;
+        const h0 = img.naturalHeight || LOGO_MAX_PX;
+        const scale = Math.min(1, LOGO_MAX_PX / Math.max(w0, h0));
+        const canvas = document.createElement('canvas');
+
+        canvas.width = Math.max(1, Math.round(w0 * scale));
+        canvas.height = Math.max(1, Math.round(h0 * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        // JPEG se queda en JPEG; el resto en PNG para conservar la transparencia.
+        resolve(file.type === 'image/jpeg'
+          ? canvas.toDataURL('image/jpeg', 0.9)
+          : canvas.toDataURL('image/png'));
+      };
+
+      img.src = dataUrl;
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 function LoginScreen({ error, loading, onSignIn }) {
   return (
     <div
@@ -437,6 +559,8 @@ function App({ me, onSignOut }) {
   });
 
   const [pilaModal, setPilaModal] = useState(false);
+  const [pilaVerifications, setPilaVerifications] = useState([]);
+  const pilaVerificationsLoadSeq = useRef(0);
   const [pilaForm, setPilaForm] = useState({
     period: '',
     declaredIbc: '',
@@ -525,6 +649,7 @@ function App({ me, onSignOut }) {
 
   useEffect(function() {
     setEditingEngagementRate(false);
+    loadPilaVerifications(selectedEngagementId);
   }, [selectedEngagementId]);
 
   // Si hay licencias detectadas para el periodo y "Días trabajados"
@@ -673,6 +798,7 @@ function App({ me, onSignOut }) {
     setEditingCompany(null);
 
     setCompanyForm({
+      logo: '',
       name: '',
       nit: '',
       dv: '',
@@ -704,6 +830,7 @@ function App({ me, onSignOut }) {
     setEditingCompany(selectedCompany);
 
     setCompanyForm({
+      logo: undefined,
       name: selectedCompany.name || '',
       nit: selectedCompany.nit || '',
       dv: selectedCompany.dv || '',
@@ -1783,6 +1910,18 @@ function App({ me, onSignOut }) {
     }
   }
 
+  async function loadPilaVerifications(engagementId) {
+    const loadSeq = ++pilaVerificationsLoadSeq.current;
+    setPilaVerifications([]);
+    if (!engagementId) return;
+    try {
+      const result = await api('/api/pila-verifications?engagementId=' + encodeURIComponent(engagementId));
+      if (loadSeq === pilaVerificationsLoadSeq.current) setPilaVerifications(result.data || []);
+    } catch (_) {
+      // Si no se puede comprobar, mantenemos visible el aviso preventivo.
+    }
+  }
+
   function openPilaModal() {
     clearMessages();
 
@@ -1830,6 +1969,7 @@ function App({ me, onSignOut }) {
 
       setSuccess('Verificación de PILA registrada.');
       setPilaModal(false);
+      await loadPilaVerifications(selectedEngagement.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2227,12 +2367,8 @@ function App({ me, onSignOut }) {
                   </div>
 
                   <div style={{display: 'flex', alignItems: 'center', gap: '14px'}}>
-                    {selectedCompany && selectedCompany.logo && (
-                      <img
-                        src={selectedCompany.logo}
-                        alt={'Logo de ' + selectedCompany.name}
-                        style={{maxHeight: '42px', maxWidth: '120px', objectFit: 'contain'}}
-                      />
+                    {selectedCompany && selectedCompany.hasLogo && (
+                      <CompanyLogo company={selectedCompany} style={{maxHeight: '42px', maxWidth: '120px', objectFit: 'contain'}} />
                     )}
 
                     <button
@@ -2682,7 +2818,7 @@ function App({ me, onSignOut }) {
           </button>
         </div>
 
-        {isIndependent && (
+        {isIndependent && pilaVerifications.length === 0 && (
           <div className="info-box" style={{marginBottom: '18px'}}>
             Antes de liquidar un periodo, debes verificar que el
             contratista pagó su seguridad social (PILA) para ese mes.
@@ -2797,8 +2933,8 @@ function App({ me, onSignOut }) {
           <div className="panel-body">
             <div className="form-grid">
               <div className="form-group full">
-                <label>Buscar por nombre o profesión</label>
-                <input
+                <label htmlFor="gf-field-1-buscar-por-nombre-o-profesion">Buscar por nombre o profesión</label>
+                <input id="gf-field-1-buscar-por-nombre-o-profesion"
                   value={professionalQuery}
                   onChange={function(e) {
                     setProfessionalQuery(e.target.value);
@@ -2969,7 +3105,9 @@ function App({ me, onSignOut }) {
           <span className="badge">Motor Colombia 2026</span>
 
           <div className="company-selector">
+            {selectedCompany && selectedCompany.hasLogo && <CompanyLogo company={selectedCompany} style={{height: '30px', maxWidth: '80px', objectFit: 'contain', background: '#fff', borderRadius: '6px', padding: '2px'}} />}
             <select
+              aria-label="Empresa"
               value={selectedCompanyId}
               onChange={function(e) {
                 setSelectedCompanyId(e.target.value);
@@ -2992,6 +3130,8 @@ function App({ me, onSignOut }) {
               className="btn"
               onClick={openEditCompany}
               disabled={!selectedCompany}
+              aria-label="Editar empresa"
+              title="Editar empresa"
             >
               ✏️
             </button>
@@ -3090,13 +3230,13 @@ function App({ me, onSignOut }) {
       </div>
 
       {error && (
-        <div className="alert">
+        <div className="alert" role="alert">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="alert success">
+        <div className="alert success" role="status">
           {success}
         </div>
       )}
@@ -3286,8 +3426,8 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Periodo</label>
-                  <select
+                  <label htmlFor="gf-field-2-periodo">Periodo</label>
+                  <select id="gf-field-2-periodo"
                     value={selectedPeriodId}
                     onChange={function(e) {
                       setSelectedPeriodId(e.target.value);
@@ -3430,24 +3570,24 @@ function App({ me, onSignOut }) {
 
                   <div className="form-grid">
                     <div className="form-group">
-                      <label>Empleado</label>
-                      <input
+                      <label htmlFor="gf-field-3-empleado">Empleado</label>
+                      <input id="gf-field-3-empleado"
                         value={getEmployeeName(selectedEmp)}
                         disabled
                       />
                     </div>
 
                     <div className="form-group">
-                      <label>Salario mensual</label>
-                      <input
+                      <label htmlFor="gf-field-4-salario-mensual" className="required">Salario mensual</label>
+                      <input id="gf-field-4-salario-mensual"
                         value={formatCOP(payrollForm.baseSalary)}
-                        disabled
+                        disabled required
                       />
                     </div>
 
                     <div className="form-group">
-                      <label>Días trabajados</label>
-                      <input
+                      <label htmlFor="gf-field-5-dias-trabajados">Días trabajados</label>
+                      <input id="gf-field-5-dias-trabajados"
                         type="number"
                         min="1"
                         max="30"
@@ -3603,8 +3743,8 @@ function App({ me, onSignOut }) {
 
                   <div className="form-grid">
                     <div className="form-group">
-                      <label>Extra diurna</label>
-                      <input
+                      <label htmlFor="gf-field-6-extra-diurna">Extra diurna</label>
+                      <input id="gf-field-6-extra-diurna"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3620,8 +3760,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Extra nocturna</label>
-                      <input
+                      <label htmlFor="gf-field-7-extra-nocturna">Extra nocturna</label>
+                      <input id="gf-field-7-extra-nocturna"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3637,8 +3777,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Recargo nocturno</label>
-                      <input
+                      <label htmlFor="gf-field-8-recargo-nocturno">Recargo nocturno</label>
+                      <input id="gf-field-8-recargo-nocturno"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3654,8 +3794,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Dominical/festivo</label>
-                      <input
+                      <label htmlFor="gf-field-9-dominical-festivo">Dominical/festivo</label>
+                      <input id="gf-field-9-dominical-festivo"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3671,8 +3811,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>Extra dominical/festivo</label>
-                      <input
+                      <label htmlFor="gf-field-10-extra-dominical-festivo">Extra dominical/festivo</label>
+                      <input id="gf-field-10-extra-dominical-festivo"
                         type="number"
                         min="0"
                         step="0.01"
@@ -3816,7 +3956,7 @@ function App({ me, onSignOut }) {
                     borderRadius: '10px',
                     background: '#020617'
                   }}>
-                    <label style={{
+                    <label htmlFor="f-companyForm-logo" style={{
                       display: 'block',
                       marginBottom: '8px',
                       fontWeight: '700'
@@ -3843,6 +3983,8 @@ function App({ me, onSignOut }) {
                             padding: '6px'
                           }}
                         />
+                      ) : companyForm.logo === undefined && editingCompany && editingCompany.hasLogo ? (
+                        <CompanyLogo company={editingCompany} style={{width: '90px', height: '90px', objectFit: 'contain', background: '#fff', borderRadius: '8px', padding: '6px'}} />
                       ) : (
                         <div style={{
                           width: '90px',
@@ -3861,7 +4003,7 @@ function App({ me, onSignOut }) {
                       )}
 
                       <div>
-                        <input
+                        <input id="f-companyForm-logo"
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/svg+xml"
                           style={{fontSize: '12px'}}
@@ -3869,64 +4011,62 @@ function App({ me, onSignOut }) {
                             const file = e.target.files?.[0];
                             if (!file) return;
 
-                            if (file.size > 2 * 1024 * 1024) {
-                              alert('El logo no puede superar 2 MB.');
+                            if (file.size > 10 * 1024 * 1024) {
+                              setError('El archivo original no puede superar 10 MB.');
                               return;
                             }
 
-                            const reader = new FileReader();
-
-                            reader.onload = () => {
-                              setCompanyForm({
-                                ...companyForm,
-                                logo: String(reader.result || '')
-                              });
-                            };
-
-                            reader.readAsDataURL(file);
+                            resizeLogoFile(file).then(
+                              function(logo) { setCompanyForm(function(prev) { return { ...prev, logo: logo }; }); },
+                              function(err) { setError(err.message); }
+                            );
                           }}
                         />
+
+                        {(companyForm.logo || (editingCompany && editingCompany.hasLogo)) && (
+                          <button type="button" className="btn" style={{marginTop: '8px'}} onClick={function() { setCompanyForm(function(prev) { return { ...prev, logo: '' }; }); }}>Quitar logo</button>
+                        )}
 
                         <div style={{
                           marginTop: '7px',
                           fontSize: '11px',
                           color: '#94a3b8'
                         }}>
-                          PNG, JPG, WEBP o SVG · máximo 2 MB
+                          PNG, JPG, WEBP o SVG · se reduce a un máximo de 512 KB
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <label>Razón social</label>
+                  <label htmlFor="gf-field-11-razon-social" className="required">Razón social</label>
 
-                  <input
+                  <input id="gf-field-11-razon-social"
                     value={companyForm.name}
                     onChange={function(e) {
                       setCompanyForm({
                         ...companyForm,
                         name: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>NIT</label>
-                  <input
+                  <label htmlFor="gf-field-12-nit" className="required">NIT</label>
+                  <input id="gf-field-12-nit"
                     value={companyForm.nit}
                     onChange={function(e) {
                       setCompanyForm({
                         ...companyForm,
                         nit: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Dígito verificación</label>
-                  <input
+                  <label htmlFor="gf-field-13-digito-verificacion">Dígito verificación</label>
+                  <input id="gf-field-13-digito-verificacion"
                     value={companyForm.dv}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3938,8 +4078,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
+                  <label htmlFor="gf-field-14-direccion">Dirección</label>
+                  <input id="gf-field-14-direccion"
                     value={companyForm.address}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3951,8 +4091,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="gf-field-15-ciudad">Ciudad</label>
+                  <input id="gf-field-15-ciudad"
                     value={companyForm.city}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3964,8 +4104,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Departamento</label>
-                  <input
+                  <label htmlFor="gf-field-16-departamento">Departamento</label>
+                  <input id="gf-field-16-departamento"
                     value={companyForm.department}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3977,8 +4117,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Código postal</label>
-                  <input
+                  <label htmlFor="gf-field-17-codigo-postal">Código postal</label>
+                  <input id="gf-field-17-codigo-postal"
                     value={companyForm.postalCode}
                     onChange={function(e) {
                       setCompanyForm({
@@ -3990,8 +4130,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="gf-field-18-telefono">Teléfono</label>
+                  <input id="gf-field-18-telefono"
                     value={companyForm.phone}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4003,8 +4143,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
+                  <label htmlFor="gf-field-19-whatsapp">WhatsApp</label>
+                  <input id="gf-field-19-whatsapp"
                     value={companyForm.whatsapp}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4016,8 +4156,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Correo</label>
-                  <input
+                  <label htmlFor="gf-field-20-correo">Correo</label>
+                  <input id="gf-field-20-correo"
                     type="email"
                     value={companyForm.email}
                     onChange={function(e) {
@@ -4030,8 +4170,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Contacto</label>
-                  <input
+                  <label htmlFor="gf-field-21-contacto">Contacto</label>
+                  <input id="gf-field-21-contacto"
                     value={companyForm.contactName}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4043,8 +4183,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Representante legal</label>
-                  <input
+                  <label htmlFor="gf-field-22-representante-legal">Representante legal</label>
+                  <input id="gf-field-22-representante-legal"
                     value={companyForm.legalRepresentative}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4056,8 +4196,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Régimen tributario</label>
-                  <select
+                  <label htmlFor="gf-field-23-regimen-tributario">Régimen tributario</label>
+                  <select id="gf-field-23-regimen-tributario"
                     value={companyForm.taxRegime}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4072,7 +4212,7 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Exoneración de aportes (art. 114-1 ET)</label>
+                  <div style={{fontWeight: '700'}}>Exoneración de aportes (art. 114-1 ET)</div>
                   <label className="legal-accept" style={{ marginTop: '4px' }}>
                     <input
                       type="checkbox"
@@ -4092,8 +4232,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group full">
-                  <label>Actividad económica</label>
-                  <input
+                  <label htmlFor="gf-field-24-actividad-economica">Actividad económica</label>
+                  <input id="gf-field-24-actividad-economica"
                     value={companyForm.economicActivity}
                     onChange={function(e) {
                       setCompanyForm({
@@ -4205,8 +4345,8 @@ function App({ me, onSignOut }) {
 
                     <div className="form-grid" style={{ marginTop: '16px' }}>
                       <div className="form-group">
-                        <label>% de administración (outsourcing)</label>
-                        <input
+                        <label htmlFor="gf-field-25-de-administracion-outsourcing">% de administración (outsourcing)</label>
+                        <input id="gf-field-25-de-administracion-outsourcing"
                           type="number"
                           min="0"
                           step="0.5"
@@ -4215,12 +4355,12 @@ function App({ me, onSignOut }) {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Valor administración</label>
-                        <input value={formatCOP(summary.fee)} disabled />
+                        <label htmlFor="gf-field-26-valor-administracion">Valor administración</label>
+                        <input id="gf-field-26-valor-administracion" value={formatCOP(summary.fee)} disabled />
                       </div>
                       <div className="form-group full">
-                        <label>Total a facturar a la empresa (costo total + administración)</label>
-                        <input value={formatCOP(summary.invoice)} disabled />
+                        <label htmlFor="gf-field-27-total-a-facturar-a-la-empresa-costo-total-administracion">Total a facturar a la empresa (costo total + administración)</label>
+                        <input id="gf-field-27-total-a-facturar-a-la-empresa-costo-total-administracion" value={formatCOP(summary.invoice)} disabled />
                       </div>
                     </div>
 
@@ -4283,21 +4423,21 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Primer nombre</label>
-                  <input
+                  <label htmlFor="gf-field-28-primer-nombre" className="required">Primer nombre</label>
+                  <input id="gf-field-28-primer-nombre"
                     value={employeeForm.firstName}
                     onChange={function(e) {
                       setEmployeeForm({
                         ...employeeForm,
                         firstName: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo nombre</label>
-                  <input
+                  <label htmlFor="gf-field-29-segundo-nombre">Segundo nombre</label>
+                  <input id="gf-field-29-segundo-nombre"
                     value={employeeForm.firstName2}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4309,21 +4449,21 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Primer apellido</label>
-                  <input
+                  <label htmlFor="gf-field-30-primer-apellido" className="required">Primer apellido</label>
+                  <input id="gf-field-30-primer-apellido"
                     value={employeeForm.lastName}
                     onChange={function(e) {
                       setEmployeeForm({
                         ...employeeForm,
                         lastName: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo apellido</label>
-                  <input
+                  <label htmlFor="gf-field-31-segundo-apellido">Segundo apellido</label>
+                  <input id="gf-field-31-segundo-apellido"
                     value={employeeForm.lastName2}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4335,21 +4475,21 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Documento</label>
-                  <input
+                  <label htmlFor="gf-field-32-documento" className="required">Documento</label>
+                  <input id="gf-field-32-documento"
                     value={employeeForm.taxId}
                     onChange={function(e) {
                       setEmployeeForm({
                         ...employeeForm,
                         taxId: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Cargo</label>
-                  <input
+                  <label htmlFor="gf-field-33-cargo">Cargo</label>
+                  <input id="gf-field-33-cargo"
                     value={employeeForm.position}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4361,8 +4501,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo contrato DIAN</label>
-                  <select
+                  <label htmlFor="gf-field-34-tipo-contrato-dian">Tipo contrato DIAN</label>
+                  <select id="gf-field-34-tipo-contrato-dian"
                     value={employeeForm.contractType}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4380,8 +4520,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Clase de riesgo ARL</label>
-                  <select
+                  <label htmlFor="gf-field-35-clase-de-riesgo-arl">Clase de riesgo ARL</label>
+                  <select id="gf-field-35-clase-de-riesgo-arl"
                     value={employeeForm.arlRiskClass}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4399,8 +4539,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Salario mensual</label>
-                  <input
+                  <label htmlFor="gf-field-36-salario-mensual" className="required">Salario mensual</label>
+                  <input id="gf-field-36-salario-mensual"
                     type="number"
                     min="0"
                     value={employeeForm.salary}
@@ -4409,13 +4549,13 @@ function App({ me, onSignOut }) {
                         ...employeeForm,
                         salary: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
+                  <label htmlFor="gf-field-37-direccion">Dirección</label>
+                  <input id="gf-field-37-direccion"
                     value={employeeForm.address}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4427,8 +4567,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="gf-field-38-ciudad">Ciudad</label>
+                  <input id="gf-field-38-ciudad"
                     value={employeeForm.city}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4440,8 +4580,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>País</label>
-                  <input
+                  <label htmlFor="gf-field-39-pais">País</label>
+                  <input id="gf-field-39-pais"
                     value={employeeForm.country}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4453,8 +4593,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="gf-field-40-telefono">Teléfono</label>
+                  <input id="gf-field-40-telefono"
                     value={employeeForm.phone}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4466,8 +4606,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
+                  <label htmlFor="gf-field-41-whatsapp">WhatsApp</label>
+                  <input id="gf-field-41-whatsapp"
                     value={employeeForm.whatsapp}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4479,8 +4619,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha ingreso</label>
-                  <input
+                  <label htmlFor="gf-field-42-fecha-ingreso">Fecha ingreso</label>
+                  <input id="gf-field-42-fecha-ingreso"
                     type="date"
                     value={employeeForm.hireDate}
                     onChange={function(e) {
@@ -4494,8 +4634,8 @@ function App({ me, onSignOut }) {
 
                 {(employeeForm.contractType === '1' || employeeForm.contractType === '3') && (
                   <div className="form-group">
-                    <label>Fin pactado del contrato</label>
-                    <input
+                    <label htmlFor="gf-field-43-fin-pactado-del-contrato">Fin pactado del contrato</label>
+                    <input id="gf-field-43-fin-pactado-del-contrato"
                       type="date"
                       value={employeeForm.contractEndDate}
                       onChange={function(e) {
@@ -4509,8 +4649,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group">
-                  <label>Días de vacaciones ya disfrutados antes de usar la plataforma</label>
-                  <input
+                  <label htmlFor="gf-field-44-dias-de-vacaciones-ya-disfrutados-antes-de-usar-la-plataforma">Días de vacaciones ya disfrutados antes de usar la plataforma</label>
+                  <input id="gf-field-44-dias-de-vacaciones-ya-disfrutados-antes-de-usar-la-plataforma"
                     type="number"
                     min="0"
                     step="0.5"
@@ -4543,8 +4683,8 @@ function App({ me, onSignOut }) {
                 <PilaEmployeeFields form={employeeForm} setForm={setEmployeeForm} />
 
                 <div className="form-group">
-                  <label>Banco</label>
-                  <input
+                  <label htmlFor="gf-field-45-banco">Banco</label>
+                  <input id="gf-field-45-banco"
                     value={employeeForm.bankName}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4556,8 +4696,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de cuenta</label>
-                  <select
+                  <label htmlFor="gf-field-46-tipo-de-cuenta">Tipo de cuenta</label>
+                  <select id="gf-field-46-tipo-de-cuenta"
                     value={employeeForm.bankAccountType}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4572,8 +4712,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Número de cuenta</label>
-                  <input
+                  <label htmlFor="gf-field-47-numero-de-cuenta">Número de cuenta</label>
+                  <input id="gf-field-47-numero-de-cuenta"
                     value={employeeForm.bankAccountNumber}
                     onChange={function(e) {
                       setEmployeeForm({
@@ -4625,8 +4765,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="gf-field-48-periodo-desde" className="required">Periodo desde</label>
+                  <input id="gf-field-48-periodo-desde"
                     type="date"
                     value={periodForm.periodStart}
                     onChange={function(e) {
@@ -4634,13 +4774,13 @@ function App({ me, onSignOut }) {
                         ...periodForm,
                         periodStart: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="gf-field-49-periodo-hasta" className="required">Periodo hasta</label>
+                  <input id="gf-field-49-periodo-hasta"
                     type="date"
                     value={periodForm.periodEnd}
                     onChange={function(e) {
@@ -4648,7 +4788,7 @@ function App({ me, onSignOut }) {
                         ...periodForm,
                         periodEnd: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
               </div>
@@ -4691,15 +4831,15 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Tipo</label>
-                  <select
+                  <label htmlFor="gf-field-50-tipo" className="required">Tipo</label>
+                  <select id="gf-field-50-tipo"
                     value={leaveForm.leaveType}
                     onChange={function(e) {
                       setLeaveForm({
                         ...leaveForm,
                         leaveType: e.target.value
                       });
-                    }}
+                    }} required
                   >
                     <option value="GENERAL_INCAPACITY">Incapacidad general (enfermedad común)</option>
                     <option value="WORK_INCAPACITY">Incapacidad laboral (ARL)</option>
@@ -4710,8 +4850,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha inicio</label>
-                  <input
+                  <label htmlFor="gf-field-51-fecha-inicio" className="required">Fecha inicio</label>
+                  <input id="gf-field-51-fecha-inicio"
                     type="date"
                     value={leaveForm.startDate}
                     onChange={function(e) {
@@ -4719,13 +4859,13 @@ function App({ me, onSignOut }) {
                         ...leaveForm,
                         startDate: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha fin</label>
-                  <input
+                  <label htmlFor="gf-field-52-fecha-fin" className="required">Fecha fin</label>
+                  <input id="gf-field-52-fecha-fin"
                     type="date"
                     value={leaveForm.endDate}
                     onChange={function(e) {
@@ -4733,14 +4873,14 @@ function App({ me, onSignOut }) {
                         ...leaveForm,
                         endDate: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 {leaveForm.leaveType === 'VACATION' && (
                   <div className="form-group full">
-                    <label>Días hábiles (opcional)</label>
-                    <input
+                    <label htmlFor="gf-field-53-dias-habiles-opcional">Días hábiles (opcional)</label>
+                    <input id="gf-field-53-dias-habiles-opcional"
                       type="number"
                       min="0"
                       step="0.5"
@@ -4758,8 +4898,8 @@ function App({ me, onSignOut }) {
 
                 {leaveForm.leaveType === 'GENERAL_INCAPACITY' && (
                   <div className="form-group full">
-                    <label>Días acumulados de incapacidad continua ANTES de esta</label>
-                    <input
+                    <label htmlFor="gf-field-54-dias-acumulados-de-incapacidad-continua-antes-de-esta">Días acumulados de incapacidad continua ANTES de esta</label>
+                    <input id="gf-field-54-dias-acumulados-de-incapacidad-continua-antes-de-esta"
                       type="number"
                       min="0"
                       value={leaveForm.accumulatedDaysBefore}
@@ -4774,8 +4914,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group full">
-                  <label>Notas (opcional)</label>
-                  <input
+                  <label htmlFor="gf-field-55-notas-opcional">Notas (opcional)</label>
+                  <input id="gf-field-55-notas-opcional"
                     value={leaveForm.notes}
                     onChange={function(e) {
                       setLeaveForm({
@@ -4825,21 +4965,21 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Primer nombre</label>
-                  <input
+                  <label htmlFor="gf-field-56-primer-nombre" className="required">Primer nombre</label>
+                  <input id="gf-field-56-primer-nombre"
                     value={professionalForm.firstName}
                     onChange={function(e) {
                       setProfessionalForm({
                         ...professionalForm,
                         firstName: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo nombre</label>
-                  <input
+                  <label htmlFor="gf-field-57-segundo-nombre">Segundo nombre</label>
+                  <input id="gf-field-57-segundo-nombre"
                     value={professionalForm.firstName2}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4851,21 +4991,21 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Primer apellido</label>
-                  <input
+                  <label htmlFor="gf-field-58-primer-apellido" className="required">Primer apellido</label>
+                  <input id="gf-field-58-primer-apellido"
                     value={professionalForm.lastName}
                     onChange={function(e) {
                       setProfessionalForm({
                         ...professionalForm,
                         lastName: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Segundo apellido</label>
-                  <input
+                  <label htmlFor="gf-field-59-segundo-apellido">Segundo apellido</label>
+                  <input id="gf-field-59-segundo-apellido"
                     value={professionalForm.lastName2}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4877,21 +5017,21 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Documento</label>
-                  <input
+                  <label htmlFor="gf-field-60-documento" className="required">Documento</label>
+                  <input id="gf-field-60-documento"
                     value={professionalForm.taxId}
                     onChange={function(e) {
                       setProfessionalForm({
                         ...professionalForm,
                         taxId: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de documento</label>
-                  <select
+                  <label htmlFor="gf-field-61-tipo-de-documento">Tipo de documento</label>
+                  <select id="gf-field-61-tipo-de-documento"
                     value={professionalForm.documentType}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4910,8 +5050,8 @@ function App({ me, onSignOut }) {
 
                 {professionalForm.documentType === '31' && (
                   <div className="form-group">
-                    <label>DV (dígito de verificación)</label>
-                    <input
+                    <label htmlFor="gf-field-62-dv-digito-de-verificacion">DV (dígito de verificación)</label>
+                    <input id="gf-field-62-dv-digito-de-verificacion"
                       value={professionalForm.dv}
                       onChange={function(e) {
                         setProfessionalForm({
@@ -4925,8 +5065,8 @@ function App({ me, onSignOut }) {
                 )}
 
                 <div className="form-group">
-                  <label>Profesión</label>
-                  <input
+                  <label htmlFor="gf-field-63-profesion" className="required">Profesión</label>
+                  <input id="gf-field-63-profesion"
                     value={professionalForm.profession}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4934,13 +5074,13 @@ function App({ me, onSignOut }) {
                         profession: e.target.value
                       });
                     }}
-                    placeholder="Ej: Contador, Electricista..."
+                    placeholder="Ej: Contador, Electricista..." required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Correo</label>
-                  <input
+                  <label htmlFor="gf-field-64-correo">Correo</label>
+                  <input id="gf-field-64-correo"
                     type="email"
                     value={professionalForm.email}
                     onChange={function(e) {
@@ -4953,8 +5093,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
+                  <label htmlFor="gf-field-65-telefono">Teléfono</label>
+                  <input id="gf-field-65-telefono"
                     value={professionalForm.phone}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4966,8 +5106,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
+                  <label htmlFor="gf-field-66-ciudad">Ciudad</label>
+                  <input id="gf-field-66-ciudad"
                     value={professionalForm.city}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4979,8 +5119,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Banco</label>
-                  <input
+                  <label htmlFor="gf-field-67-banco">Banco</label>
+                  <input id="gf-field-67-banco"
                     value={professionalForm.bankName}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -4992,8 +5132,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tipo de cuenta</label>
-                  <select
+                  <label htmlFor="gf-field-68-tipo-de-cuenta">Tipo de cuenta</label>
+                  <select id="gf-field-68-tipo-de-cuenta"
                     value={professionalForm.bankAccountType}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -5008,8 +5148,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Número de cuenta</label>
-                  <input
+                  <label htmlFor="gf-field-69-numero-de-cuenta">Número de cuenta</label>
+                  <input id="gf-field-69-numero-de-cuenta"
                     value={professionalForm.bankAccountNumber}
                     onChange={function(e) {
                       setProfessionalForm({
@@ -5021,8 +5161,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tarifa por hora (por defecto, opcional)</label>
-                  <input
+                  <label htmlFor="gf-field-70-tarifa-por-hora-por-defecto-opcional">Tarifa por hora (por defecto, opcional)</label>
+                  <input id="gf-field-70-tarifa-por-hora-por-defecto-opcional"
                     type="number"
                     min="0"
                     step="0.01"
@@ -5090,15 +5230,15 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group full">
-                  <label>Modalidad</label>
-                  <select
+                  <label htmlFor="gf-field-71-modalidad" className="required">Modalidad</label>
+                  <select id="gf-field-71-modalidad"
                     value={engagementForm.vinculationType}
                     onChange={function(e) {
                       setEngagementForm({
                         ...engagementForm,
                         vinculationType: e.target.value
                       });
-                    }}
+                    }} required
                   >
                     <option value="INDEPENDENT_SERVICES">
                       Contratista independiente (prestación de servicios)
@@ -5110,8 +5250,8 @@ function App({ me, onSignOut }) {
                 </div>
 
                 <div className="form-group">
-                  <label>Tarifa por hora</label>
-                  <input
+                  <label htmlFor="gf-field-72-tarifa-por-hora" className="required">Tarifa por hora</label>
+                  <input id="gf-field-72-tarifa-por-hora"
                     type="number"
                     min="0"
                     value={engagementForm.hourlyRate}
@@ -5120,13 +5260,13 @@ function App({ me, onSignOut }) {
                         ...engagementForm,
                         hourlyRate: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha inicio</label>
-                  <input
+                  <label htmlFor="gf-field-73-fecha-inicio" className="required">Fecha inicio</label>
+                  <input id="gf-field-73-fecha-inicio"
                     type="date"
                     value={engagementForm.startDate}
                     onChange={function(e) {
@@ -5134,13 +5274,13 @@ function App({ me, onSignOut }) {
                         ...engagementForm,
                         startDate: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Fecha fin (opcional)</label>
-                  <input
+                  <label htmlFor="gf-field-74-fecha-fin-opcional">Fecha fin (opcional)</label>
+                  <input id="gf-field-74-fecha-fin-opcional"
                     type="date"
                     value={engagementForm.endDate}
                     onChange={function(e) {
@@ -5155,8 +5295,8 @@ function App({ me, onSignOut }) {
                 {engagementForm.vinculationType === 'INDEPENDENT_SERVICES' ? (
                   <>
                     <div className="form-group">
-                      <label>Concepto de retención</label>
-                      <select
+                      <label htmlFor="gf-field-75-concepto-de-retencion">Concepto de retención</label>
+                      <select id="gf-field-75-concepto-de-retencion"
                         value={engagementForm.retentionConcept}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5171,8 +5311,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group">
-                      <label>¿Declarante de renta?</label>
-                      <select
+                      <label htmlFor="gf-field-76-declarante-de-renta">¿Declarante de renta?</label>
+                      <select id="gf-field-76-declarante-de-renta"
                         value={engagementForm.isIncomeTaxFiler ? '1' : '0'}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5187,8 +5327,8 @@ function App({ me, onSignOut }) {
                     </div>
 
                     <div className="form-group full">
-                      <label>Objeto / entregable del contrato</label>
-                      <input
+                      <label htmlFor="gf-field-77-objeto-entregable-del-contrato" className="required">Objeto / entregable del contrato</label>
+                      <input id="gf-field-77-objeto-entregable-del-contrato"
                         value={engagementForm.deliverableDescription}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5196,15 +5336,15 @@ function App({ me, onSignOut }) {
                             deliverableDescription: e.target.value
                           });
                         }}
-                        placeholder="Ej: Elaborar los estados financieros mensuales"
+                        placeholder="Ej: Elaborar los estados financieros mensuales" required
                       />
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="form-group">
-                      <label>Horas semanales (máx. 42)</label>
-                      <input
+                      <label htmlFor="gf-field-78-horas-semanales-max-42" className="required">Horas semanales (máx. 42)</label>
+                      <input id="gf-field-78-horas-semanales-max-42"
                         type="number"
                         min="1"
                         max="42"
@@ -5214,13 +5354,13 @@ function App({ me, onSignOut }) {
                             ...engagementForm,
                             weeklyHours: e.target.value
                           });
-                        }}
+                        }} required
                       />
                     </div>
 
                     <div className="form-group">
-                      <label>Tipo contrato DIAN</label>
-                      <select
+                      <label htmlFor="gf-field-79-tipo-contrato-dian">Tipo contrato DIAN</label>
+                      <select id="gf-field-79-tipo-contrato-dian"
                         value={engagementForm.contractType}
                         onChange={function(e) {
                           setEngagementForm({
@@ -5277,8 +5417,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="gf-field-80-periodo-desde" className="required">Periodo desde</label>
+                  <input id="gf-field-80-periodo-desde"
                     type="date"
                     value={timeEntryForm.periodStart}
                     onChange={function(e) {
@@ -5286,13 +5426,13 @@ function App({ me, onSignOut }) {
                         ...timeEntryForm,
                         periodStart: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="gf-field-81-periodo-hasta" className="required">Periodo hasta</label>
+                  <input id="gf-field-81-periodo-hasta"
                     type="date"
                     value={timeEntryForm.periodEnd}
                     onChange={function(e) {
@@ -5300,13 +5440,13 @@ function App({ me, onSignOut }) {
                         ...timeEntryForm,
                         periodEnd: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Horas trabajadas</label>
-                  <input
+                  <label htmlFor="gf-field-82-horas-trabajadas" className="required">Horas trabajadas</label>
+                  <input id="gf-field-82-horas-trabajadas"
                     type="number"
                     min="0"
                     step="0.5"
@@ -5316,13 +5456,13 @@ function App({ me, onSignOut }) {
                         ...timeEntryForm,
                         hours: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group full">
-                  <label>Notas (opcional)</label>
-                  <input
+                  <label htmlFor="gf-field-83-notas-opcional">Notas (opcional)</label>
+                  <input id="gf-field-83-notas-opcional"
                     value={timeEntryForm.notes}
                     onChange={function(e) {
                       setTimeEntryForm({
@@ -5379,8 +5519,8 @@ function App({ me, onSignOut }) {
 
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo (AAAA-MM)</label>
-                  <input
+                  <label htmlFor="gf-field-84-periodo-aaaa-mm" className="required">Periodo (AAAA-MM)</label>
+                  <input id="gf-field-84-periodo-aaaa-mm"
                     value={pilaForm.period}
                     onChange={function(e) {
                       setPilaForm({
@@ -5388,13 +5528,13 @@ function App({ me, onSignOut }) {
                         period: e.target.value
                       });
                     }}
-                    placeholder="2026-09"
+                    placeholder="2026-09" required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>IBC declarado por el contratista</label>
-                  <input
+                  <label htmlFor="gf-field-85-ibc-declarado-por-el-contratista" className="required">IBC declarado por el contratista</label>
+                  <input id="gf-field-85-ibc-declarado-por-el-contratista"
                     type="number"
                     min="0"
                     value={pilaForm.declaredIbc}
@@ -5403,13 +5543,13 @@ function App({ me, onSignOut }) {
                         ...pilaForm,
                         declaredIbc: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group full">
-                  <label>Referencia de planilla (opcional)</label>
-                  <input
+                  <label htmlFor="gf-field-86-referencia-de-planilla-opcional">Referencia de planilla (opcional)</label>
+                  <input id="gf-field-86-referencia-de-planilla-opcional"
                     value={pilaForm.planillaReference}
                     onChange={function(e) {
                       setPilaForm({
@@ -5459,8 +5599,8 @@ function App({ me, onSignOut }) {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Periodo desde</label>
-                  <input
+                  <label htmlFor="gf-field-87-periodo-desde" className="required">Periodo desde</label>
+                  <input id="gf-field-87-periodo-desde"
                     type="date"
                     value={settlementForm.periodStart}
                     onChange={function(e) {
@@ -5468,13 +5608,13 @@ function App({ me, onSignOut }) {
                         ...settlementForm,
                         periodStart: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 <div className="form-group">
-                  <label>Periodo hasta</label>
-                  <input
+                  <label htmlFor="gf-field-88-periodo-hasta" className="required">Periodo hasta</label>
+                  <input id="gf-field-88-periodo-hasta"
                     type="date"
                     value={settlementForm.periodEnd}
                     onChange={function(e) {
@@ -5482,14 +5622,14 @@ function App({ me, onSignOut }) {
                         ...settlementForm,
                         periodEnd: e.target.value
                       });
-                    }}
+                    }} required
                   />
                 </div>
 
                 {selectedEngagement.retentionConcept === 'HONORARIOS' && (
                   <div className="form-group full">
-                    <label>Tarifa de retención vigente (%)</label>
-                    <input
+                    <label htmlFor="gf-field-89-tarifa-de-retencion-vigente">Tarifa de retención vigente (%)</label>
+                    <input id="gf-field-89-tarifa-de-retencion-vigente"
                       type="number"
                       min="0"
                       max="100"
@@ -5632,19 +5772,7 @@ function StorageNotice() {
 
 function PageFooter() {
   return (
-    <div style={{
-      position: 'fixed',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      zIndex: 500,
-      padding: '7px 16px',
-      textAlign: 'center',
-      fontSize: '11px',
-      color: '#8193aa',
-      background: 'rgba(7, 17, 31, 0.92)',
-      borderTop: '1px solid #1d3047'
-    }}>
+    <footer className="page-footer">
       <strong>KREADU S.A.S.</strong> - Empresa AI Business Systems Lab -
       Academy - KREADU School
       {' · '}
@@ -5658,7 +5786,7 @@ function PageFooter() {
         Solicitar acceso o eliminación de mis datos
       </a>
       <StorageNotice />
-    </div>
+    </footer>
   );
 }
 

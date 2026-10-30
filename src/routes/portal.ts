@@ -26,6 +26,7 @@ import { HttpError, type AuthUser } from '../auth/authz';
 import { vacationBalance } from './benefits';
 import { buildEmploymentCertificate, buildIncomeCertificate } from './certificates';
 import { employeeName } from './periodEmployees';
+import { logoMetaFromRow, LOGO_UPDATED_AT_SQL } from './logos';
 
 interface RouteEnv {
   DB: D1Database;
@@ -76,7 +77,7 @@ async function loadOwnEmployee(env: RouteEnv, user: AuthUser) {
   }
 
   const company = await env.DB
-    .prepare(`SELECT id, name, nit, dv, address, city, phone, email, legalRepresentative, logo FROM companies WHERE id = ?1`)
+    .prepare(`SELECT id, name, nit, dv, address, city, phone, email, legalRepresentative, ${LOGO_UPDATED_AT_SQL} FROM companies WHERE id = ?1`)
     .bind(user.companyId)
     .first<any>();
 
@@ -107,6 +108,7 @@ function publicEmployee(e: any) {
 
 function publicCompany(c: any) {
   return {
+    id: String(c.id),
     name: c.name,
     nit: c.nit ?? null,
     dv: c.dv ?? null,
@@ -115,7 +117,7 @@ function publicCompany(c: any) {
     phone: c.phone ?? null,
     email: c.email ?? null,
     legalRepresentative: c.legalRepresentative ?? null,
-    logo: c.logo ?? null,
+    ...logoMetaFromRow(c),
   };
 }
 
