@@ -5,8 +5,50 @@ import type {
   DianXmlGenerationResult,
 } from '../types/payroll';
 
+/** 1 = producción, 2 = pruebas (habilitación). */
+export type DianEnvironment = '1' | '2';
+
+export interface DianNominaOptions {
+  periodStart?: string;
+  periodEnd?: string;
+  environment?: DianEnvironment;
+}
+
+export const NOMINA_INDIVIDUAL_TIPO_XML = '102';
+
+async function sha384Hex(value: string): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-384', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Fecha y hora actuales de Colombia (UTC-5, sin horario de verano). */
+function colombiaNow(): { date: string; time: string } {
+  const iso = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+  return { date: iso.slice(0, 10), time: `${iso.slice(11, 19)}-05:00` };
+}
+
+function lastDayOfMonth(isoDate: string): string {
+  const [year, month] = isoDate.split('-').map(Number);
+  const day = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${isoDate.substring(0, 7)}-${String(day).padStart(2, '0')}`;
+}
+
+/** Días calendario entre dos fechas ISO, ambos inclusive. */
+function daysBetweenInclusive(from: string, to: string): number {
+  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+  return Math.floor(ms / 86400000) + 1;
+}
+
 export class DianNominaXmlService {
 
+  /**
+   * CUNE según el anexo técnico de nómina electrónica (Res. 000013 de 2021):
+   * SHA-384(NumNE + FecNE + HorNE + ValDev + ValDed + ValTolNE + NitNE +
+   * DocEmp + TipoXML + SoftwarePin + TipAmb). Si no hay SHA-384 disponible
+   * se lanza el error: un CUNE inventado sería rechazado por la DIAN.
+   */
   public static async calculateCUNE(
     consecutive: string,
     issueDate: string,
@@ -16,10 +58,11 @@ export class DianNominaXmlService {
     valTotal: number,
     employerNit: string,
     employeeDoc: string,
-    pinSoftware: string
+    tipoXml: string,
+    pinSoftware: string,
+    ambiente: DianEnvironment
   ): Promise<string> {
-
-    const rawString =
+    return sha384Hex(
       `${consecutive}` +
       `${issueDate}` +
       `${issueTime}` +
@@ -28,38 +71,19 @@ export class DianNominaXmlService {
       `${valTotal.toFixed(2)}` +
       `${employerNit}` +
       `${employeeDoc}` +
-      `${pinSoftware}`;
+      `${tipoXml}` +
+      `${pinSoftware}` +
+      `${ambiente}`
+    );
+  }
 
-    try {
-      const msgBuffer = new TextEncoder().encode(rawString);
-
-      const hashBuffer = await crypto.subtle.digest(
-        'SHA-384',
-        msgBuffer
-      );
-
-      const hashArray = Array.from(
-        new Uint8Array(hashBuffer)
-      );
-
-      return hashArray
-        .map(byte => byte.toString(16).padStart(2, '0'))
-        .join('');
-
-    } catch {
-      let hash = 0;
-
-      for (let i = 0; i < rawString.length; i++) {
-        hash =
-          (hash << 5) -
-          hash +
-          rawString.charCodeAt(i);
-
-        hash |= 0;
-      }
-
-      return `cune_simulated_${Math.abs(hash)}_${Date.now()}`;
-    }
+  /** Huella del software: SHA-384(SoftwareID + PIN + número del documento). */
+  public static async calculateSoftwareSC(
+    softwareId: string,
+    pinSoftware: string,
+    documentNumber: string
+  ): Promise<string> {
+    return sha384Hex(`${softwareId}${pinSoftware}${documentNumber}`);
   }
 
   private static escapeXml(value: string): string {
@@ -90,16 +114,19 @@ export class DianNominaXmlService {
     employeeExtra: DianEmployeeExtraInfo,
     consecutiveNumber: number,
     issueDateStr?: string,
-    issueTimeStr?: string
+    issueTimeStr?: string,
+    options: DianNominaOptions = {}
   ): Promise<DianXmlGenerationResult> {
 
-    const issueDate =
-      issueDateStr ||
-      new Date().toISOString().split('T')[0];
+    const now = colombiaNow();
+    const issueDate = issueDateStr || now.date;
+    const issueTime = issueTimeStr || now.time;
+    const ambiente: DianEnvironment = options.environment || '2';
 
-    const issueTime =
-      issueTimeStr ||
-      `${new Date().toTimeString().split(' ')[0]}-05:00`;
+    const periodStart = options.periodStart || `${issueDate.substring(0, 7)}-01`;
+    const periodEnd = options.periodEnd || lastDayOfMonth(periodStart);
+    const startDate = employeeExtra.startDate || periodStart;
+    const tiempoLaborado = Math.max(1, daysBetweenInclusive(startDate, periodEnd));
 
     const consecutive =
       `NE${consecutiveNumber
@@ -125,8 +152,21 @@ export class DianNominaXmlService {
         totalComprobante,
         employer.nit,
         payroll.taxId,
-        employer.pinSoftware
+        NOMINA_INDIVIDUAL_TIPO_XML,
+        employer.pinSoftware,
+        ambiente
       );
+
+    const softwareSC =
+      await this.calculateSoftwareSC(
+        employer.softwareId,
+        employer.pinSoftware,
+        consecutive
+      );
+
+    const qrBase = ambiente === '1'
+      ? 'https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey='
+      : 'https://catalogo-vpfe-hab.dian.gov.co/document/searchqr?documentkey=';
 
     const primerNombre =
       payroll.firstName || '';
@@ -152,16 +192,26 @@ export class DianNominaXmlService {
     const xmlContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <NominaIndividual
   xmlns="dian:gov:co:facturaelectronica:NominaIndividual"
+  xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+  xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+  xmlns:xades="http://uri.etsi.org/01903/v1.3.2#"
+  xmlns:xades141="http://uri.etsi.org/01903/v1.4.1#"
+  xmlns:xs="http://www.w3.org/2001/XMLSchema-instance"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="dian:gov:co:facturaelectronica:NominaIndividual NominaIndividual.xsd">
+  SchemaLocation=""
+  xsi:schemaLocation="dian:gov:co:facturaelectronica:NominaIndividual NominaIndividualElectronicaXSD.xsd">
 
-  <Novedad CCCNovedad="false"/>
+  <ext:UBLExtensions>
+    <ext:UBLExtension>
+      <ext:ExtensionContent></ext:ExtensionContent>
+    </ext:UBLExtension>
+  </ext:UBLExtensions>
 
   <Periodo
-    FechaIngreso="${this.escapeXml(employeeExtra.startDate || issueDate)}"
-    FechaLiquidacionInicio="${issueDate.substring(0, 7)}-01"
-    FechaLiquidacionFin="${issueDate.substring(0, 7)}-30"
-    TiempoLaborado="${payroll.daysWorked}.00"
+    FechaIngreso="${this.escapeXml(startDate)}"
+    FechaLiquidacionInicio="${this.escapeXml(periodStart)}"
+    FechaLiquidacionFin="${this.escapeXml(periodEnd)}"
+    TiempoLaborado="${tiempoLaborado}"
     FechaGen="${issueDate}"/>
 
   <NumeroSecuenciaXML
@@ -181,16 +231,16 @@ export class DianNominaXmlService {
     NIT="${this.escapeXml(employer.nit)}"
     DV="${this.escapeXml(employer.dv)}"
     SoftwareID="${this.escapeXml(employer.softwareId)}"
-    SoftwareSC="${cune.substring(0, 40)}"/>
+    SoftwareSC="${softwareSC}"/>
 
-  <CodigoQR>https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey=${cune}</CodigoQR>
+  <CodigoQR>${qrBase}${cune}</CodigoQR>
 
   <InformacionGeneral
     Version="V1.0: Documento Soporte de Pago de Nómina Electrónica"
-    Ambiente="${employer.testSetId ? '2' : '1'}"
-    TipoXML="102"
+    Ambiente="${ambiente}"
+    TipoXML="${NOMINA_INDIVIDUAL_TIPO_XML}"
     CUNE="${cune}"
-    EncripCUNE="SHA-384"
+    EncripCUNE="CUNE-SHA384"
     FechaGen="${issueDate}"
     HoraGen="${issueTime}"
     PeriodoNomina="5"
@@ -296,17 +346,11 @@ export class DianNominaXmlService {
 
   </Deducciones>
 
-  <DevengadosTotal>
-    ${totalDevengado.toFixed(2)}
-  </DevengadosTotal>
+  <DevengadosTotal>${totalDevengado.toFixed(2)}</DevengadosTotal>
 
-  <DeduccionesTotal>
-    ${totalDeducciones.toFixed(2)}
-  </DeduccionesTotal>
+  <DeduccionesTotal>${totalDeducciones.toFixed(2)}</DeduccionesTotal>
 
-  <ComprobanteTotal>
-    ${totalComprobante.toFixed(2)}
-  </ComprobanteTotal>
+  <ComprobanteTotal>${totalComprobante.toFixed(2)}</ComprobanteTotal>
 
 </NominaIndividual>`.trim();
 

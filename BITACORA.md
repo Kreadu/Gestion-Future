@@ -245,3 +245,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 - Issue #16: quedan corregidos aviso PILA, pie móvil, toast y validación empresa/empleado. Sigue abierto sólo para revisar el aviso local de worker/handles de Jest, que no apareció en CI.
 - Siguiente: revisar `wip/dian-firma-envio` contra `main`, portar por partes, auditar CUNE, completar firma XAdES y SOAP (#10). No afirmar que DIAN real está listo sin probarlo con certificado de firma, Software ID/PIN y test set entregados por el dueño (#17).
 - Pendiente operativo del dueño: confirmar que `raipimo36@gmail.com` entra con Firebase; en la conversación se modificó el email en D1 pero no quedó confirmada una sesión exitosa.
+
+## DIAN 1/4: CUNE del anexo técnico (2026-10-30)
+
+- CUNE = SHA-384(... + TipoXML 102 + PIN + TipAmb); SoftwareSC = SHA-384(SoftwareID + PIN + número); sin CUNE simulado; hora de Colombia, periodo real (antes día 30 fijo), fecha de ingreso, ambiente por `DIAN_AMBIENTE` (2 = habilitación por defecto) y nodo `ext:UBLExtensions` para la firma. Se portó `xmlC14n.ts` de `wip/dian-firma-envio`.
+- Verificación: `tests/dianCune.test.ts`; Jest 28 suites / 269 pruebas.

@@ -9,7 +9,7 @@ import type {
   EmployeeLeaveType,
 } from './types/payroll';
 
-import { DianNominaXmlService } from './services/dianNominaXmlService';
+import { DianNominaXmlService, type DianEnvironment } from './services/dianNominaXmlService';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -26,6 +26,7 @@ interface DianEmployeeExtraInfo {
   bankName?: string;
   accountNumber?: string;
   accountType?: 'AHORROS' | 'CORRIENTE';
+  startDate?: string;
 }
 
 import { BankDisbursementService } from './services/bankDisbursement';
@@ -94,6 +95,12 @@ interface Env {
   FIREBASE_AUTH_DOMAIN: string;
   DIAN_SOFTWARE_ID?: string;
   DIAN_SOFTWARE_PIN?: string;
+  /** '1' = producción; cualquier otro valor o ausente = habilitación ('2'). */
+  DIAN_AMBIENTE?: string;
+}
+
+function dianEnvironment(env: Env): DianEnvironment {
+  return env.DIAN_AMBIENTE === '1' ? '1' : '2';
 }
 
 interface Company {
@@ -2219,11 +2226,16 @@ export default {
         // no del navegador (antes el dashboard mandaba siempre '1').
         const employeeRow = await env.DB
           .prepare(`
-            SELECT contractType, bankName, bankAccountType, bankAccountNumber
+            SELECT contractType, bankName, bankAccountType, bankAccountNumber, hireDate
             FROM employees
             WHERE id = ?1
           `)
           .bind(settlementRow.employeeId)
+          .first<any>();
+
+        const periodRow = await env.DB
+          .prepare(`SELECT periodStart, periodEnd FROM payroll_periods WHERE id = ?1`)
+          .bind(settlementRow.periodId)
           .first<any>();
 
         const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
@@ -2243,6 +2255,7 @@ export default {
           bankName: employeeRow?.bankName || undefined,
           accountNumber: employeeRow?.bankAccountNumber || undefined,
           accountType: employeeRow?.bankAccountType || undefined,
+          startDate: employeeRow?.hireDate || undefined,
         };
 
         const payrollResult: ColombiaPayrollResult = JSON.parse(
@@ -2259,7 +2272,14 @@ export default {
           payrollResult,
           employerInfo,
           employeeExtra,
-          consecutiveNumber
+          consecutiveNumber,
+          undefined,
+          undefined,
+          {
+            periodStart: periodRow?.periodStart || undefined,
+            periodEnd: periodRow?.periodEnd || undefined,
+            environment: dianEnvironment(env),
+          }
         );
 
         const now = new Date().toISOString();
@@ -3605,8 +3625,12 @@ export default {
                   ? String(engagement.contractType)
                   : '2') as DianEmployeeExtraInfo['typeContract'],
                 paymentMethod: '42',
+                startDate: engagement.startDate || undefined,
               },
-              nominaConsecutive
+              nominaConsecutive,
+              undefined,
+              undefined,
+              { periodStart, periodEnd, environment: dianEnvironment(env) }
             );
 
             grossAmount = payrollResult.grossEarnings;
