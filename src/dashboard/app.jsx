@@ -3020,6 +3020,15 @@ function App({ me, onSignOut }) {
         padding: '12px 24px 0',
         borderBottom: '1px solid #1d3047'
       }}>
+        {isSuperAdmin && (
+          <button
+            className={'btn' + (activeSection === 'overview' ? ' btn-primary' : '')}
+            onClick={function() { setActiveSection('overview'); }}
+          >
+            🏢 Panel de empresas
+          </button>
+        )}
+
         <button
           className={'btn' + (activeSection === 'payroll' ? ' btn-primary' : '')}
           onClick={function() { setActiveSection('payroll'); }}
@@ -3082,6 +3091,16 @@ function App({ me, onSignOut }) {
           company={selectedCompany}
           onError={setError}
           onSuccess={setSuccess}
+        />
+      )}
+
+      {activeSection === 'overview' && (
+        <OverviewSection
+          onError={setError}
+          onOpenCompany={function(id) {
+            setSelectedCompanyId(id);
+            setActiveSection('payroll');
+          }}
         />
       )}
 

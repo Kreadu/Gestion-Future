@@ -346,6 +346,14 @@ try {
     await page.locator('#activity-action').selectOption('');
   });
 
+  await step('Panel de empresas: estado del mes y abrir la empresa', async () => {
+    await page.getByRole('button', { name: /Panel de empresas/ }).click();
+    // El nombre también está en una <option> oculta del selector de empresa.
+    await page.locator('td', { hasText: 'Panadería La Espiga S.A.S.' }).waitFor();
+    await page.getByRole('button', { name: 'Abrir' }).first().click();
+    await page.getByRole('button', { name: /Importar desde Excel/ }).waitFor();
+  });
+
   await step('Importar un empleado desde Excel y validar la vista previa', async () => {
     await page.getByRole('button', { name: /Nómina mensual/ }).click();
     await page.getByRole('button', { name: /Importar desde Excel/ }).click();

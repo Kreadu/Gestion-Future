@@ -37,6 +37,7 @@ import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffili
 import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
 import { handleAccountingRoutes } from './routes/accounting';
 import { handleAuditLogRoutes } from './routes/auditLog';
+import { handleOverviewRoutes } from './routes/overview';
 import { handlePortalRoutes } from './routes/portal';
 import { handleRequestRoutes } from './routes/requests';
 import { getDashboardHtml } from './dashboard';
@@ -4071,6 +4072,9 @@ export default {
 
       const auditLogResponse = await handleAuditLogRoutes(request, url, env, user);
       if (auditLogResponse) return auditLogResponse;
+
+      const overviewResponse = await handleOverviewRoutes(request, url, env, user);
+      if (overviewResponse) return overviewResponse;
 
       /*
        * ============================================================
