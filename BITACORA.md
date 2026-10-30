@@ -237,3 +237,11 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - Primer intento de CI: TypeScript, las 4 pruebas Python y Jest pasaron. El E2E completó 24/25 pasos; el chequeo final reportó `404 GET /api/pila-verifications?engagementId=...`.
 - Corregido en `src/index.ts` del PR #22 con una ruta GET protegida por rol y acceso a empresa. El segundo CI debe confirmar el flujo completo antes del merge.
+
+
+## Traspaso a la siguiente IA (2026-10-30)
+
+- Tareas #1–#4 fusionadas y desplegadas en `main`; PR #22/run 88 terminó verde. Issue #15 cerrado.
+- Issue #16: quedan corregidos aviso PILA, pie móvil, toast y validación empresa/empleado. Sigue abierto sólo para revisar el aviso local de worker/handles de Jest, que no apareció en CI.
+- Siguiente: revisar `wip/dian-firma-envio` contra `main`, portar por partes, auditar CUNE, completar firma XAdES y SOAP (#10). No afirmar que DIAN real está listo sin probarlo con certificado de firma, Software ID/PIN y test set entregados por el dueño (#17).
+- Pendiente operativo del dueño: confirmar que `raipimo36@gmail.com` entra con Firebase; en la conversación se modificó el email en D1 pero no quedó confirmada una sesión exitosa.
