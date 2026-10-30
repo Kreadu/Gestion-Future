@@ -32,7 +32,7 @@ Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspond
 
 Está en el issue #17: pago de GitHub Actions (el CI queda en cola), Firebase de producción (#6), certificado digital y habilitación DIAN, y validación del contador (#9).
 
-Estado para la siguiente IA (2026-10-30): #1–#4 implementados localmente/en PRs hasta el #3 fusionado; #4 está en el PR siguiente, pendiente de CI y merge. Issue #16: aviso PILA, pie móvil, toast y validación empresa/empleado corregidos; queda revisar el aviso de worker de Jest (no apareció en CI; local con --forceExit sólo mostró el aviso estándar de handles abiertos).
+Estado para la siguiente IA (2026-10-30): tareas #1–#4 ya están fusionadas en `main`. PR #22 está fusionado y desplegado; CI de `main` (run 88) quedó verde, incluyendo migración D1 0015 y despliegue Cloudflare. Issue #15 cerrado. En issue #16 quedan corregidos 4 de 5 puntos; sólo falta investigar el aviso local de worker/handles abiertos de Jest (no apareció en CI). Siguiente tarea: revisar `wip/dian-firma-envio` por partes, completar/verificar CUNE, XAdES y SOAP (#10), y probar el ambiente DIAN cuando el dueño entregue certificado, Software ID/PIN y test set (#17).
 
 
 ## Actualización CI PR #22 (2026-10-30)
@@ -40,3 +40,12 @@ Estado para la siguiente IA (2026-10-30): #1–#4 implementados localmente/en PR
 - Primer CI: typecheck, nómina Python, Jest y descarga de Firefox pasaron; falló el último paso del E2E por `404 GET /api/pila-verifications?engagementId=...` (los otros 24 pasos pasaron).
 - Corregido en el commit `ee23501`: añadido GET autenticado, valida rol, vinculación activa y acceso a empresa, y devuelve los periodos verificados.
 - **No fusionar PR #22 hasta que el CI de este último commit quede verde.** Revisar el E2E completo y después seguir con DIAN, issue #10/#17.
+
+
+## Continuación prioritaria para la siguiente IA
+
+1. Revisar `wip/dian-firma-envio` frente a `main` y portar sólo cambios vigentes (no fusionar la rama WIP completa).
+2. Auditar CUNE conforme al anexo DIAN; completar firma XAdES y envío SOAP. No declarar integración real lista hasta obtener credenciales y probar en set de habilitación.
+3. El dueño debe facilitar el certificado digital, Software ID/PIN y test set DIAN; no pegar secretos en issues ni commits.
+4. Investigar el aviso local de worker Jest que issue #16 menciona. El issue queda abierto por ese único punto; CI del PR #22 sí pasó.
+5. Confirmar con el dueño la prueba real de acceso Firebase para `raipimo36@gmail.com`: en la conversación previa se actualizó el correo en D1, pero no se confirmó un login exitoso.
