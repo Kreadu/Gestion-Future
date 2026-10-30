@@ -9,7 +9,8 @@ import type {
   EmployeeLeaveType,
 } from './types/payroll';
 
-import { DianNominaXmlService, type DianEnvironment } from './services/dianNominaXmlService';
+import { DianNominaXmlService } from './services/dianNominaXmlService';
+import { dianEnvironment, handleDianRoutes } from './routes/dian';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -97,10 +98,9 @@ interface Env {
   DIAN_SOFTWARE_PIN?: string;
   /** '1' = producción; cualquier otro valor o ausente = habilitación ('2'). */
   DIAN_AMBIENTE?: string;
-}
-
-function dianEnvironment(env: Env): DianEnvironment {
-  return env.DIAN_AMBIENTE === '1' ? '1' : '2';
+  DIAN_CERT_P12?: string;
+  DIAN_CERT_PASSWORD?: string;
+  DIAN_TEST_SET_ID?: string;
 }
 
 interface Company {
@@ -334,6 +334,17 @@ function normalizePayrollPeriod(row: any): PayrollPeriod {
   };
 }
 
+/** Mensajes de la última respuesta de la DIAN guardada. */
+function dianErrorsOf(responseJson: unknown): string[] {
+  if (!responseJson) return [];
+  try {
+    const parsed = JSON.parse(String(responseJson));
+    return Array.isArray(parsed.errors) ? parsed.errors.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizePayrollSettlement(row: any): PayrollSettlement {
   return {
     id: String(row.id),
@@ -354,6 +365,9 @@ function normalizePayrollSettlement(row: any): PayrollSettlement {
         : Number(row.dianConsecutive),
     dianCune: row.dianCune ?? null,
     dianGeneratedAt: row.dianGeneratedAt ?? null,
+    dianSubmissionStatus: row.dianSubmissionStatus ?? null,
+    dianSentAt: row.dianSentAt ?? null,
+    dianErrors: dianErrorsOf(row.dianResponseJson),
     createdAt: row.createdAt ?? null,
     updatedAt: row.updatedAt ?? null,
   };
@@ -426,6 +440,9 @@ export default {
 
       const logoResponse = await handleLogoRoutes(request, url, env, user);
       if (logoResponse) return logoResponse;
+
+      const dianResponse = await handleDianRoutes(request, url, env, user);
+      if (dianResponse) return dianResponse;
 
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
@@ -2170,11 +2187,16 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, String(settlementRow.companyId));
 
-        if ((settlementRow as any).dianStatus === 'GENERATED') {
+        // Se puede volver a generar (p. ej. tras un rechazo o al cambiar
+        // las credenciales) mientras la DIAN no lo tenga: conserva el número.
+        const submission = (settlementRow as any).dianSubmissionStatus;
+        if (submission === 'SENT' || submission === 'ACCEPTED') {
           return sendJson(
             {
               success: false,
-              error: 'Esta liquidación ya tiene un XML DIAN generado.',
+              error: submission === 'ACCEPTED'
+                ? 'La DIAN ya aceptó el XML de esta liquidación.'
+                : 'El XML de esta liquidación está en proceso en la DIAN.',
             },
             400
           );
@@ -2262,11 +2284,13 @@ export default {
           String((settlementRow as any).resultJson)
         );
 
-        const consecutiveNumber = await getNextDianConsecutive(
-          env.DB,
-          String(settlementRow.companyId),
-          'NOMINA'
-        );
+        const consecutiveNumber = (settlementRow as any).dianConsecutive
+          ? Number((settlementRow as any).dianConsecutive)
+          : await getNextDianConsecutive(
+            env.DB,
+            String(settlementRow.companyId),
+            'NOMINA'
+          );
 
         const xmlResult = await DianNominaXmlService.generateDSPNE(
           payrollResult,
@@ -2293,6 +2317,11 @@ export default {
               dianCune = ?2,
               dianXmlContent = ?3,
               dianGeneratedAt = ?4,
+              dianSubmissionStatus = NULL,
+              dianTrackId = NULL,
+              dianSignedXml = NULL,
+              dianResponseJson = NULL,
+              dianSentAt = NULL,
               updatedAt = ?4
             WHERE id = ?5
           `)

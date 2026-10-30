@@ -255,3 +255,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - `src/services/dianSigner.ts`: abre el `.p12` (node-forge), firma con WebCrypto RSA-SHA256, C14N inclusivo, tres referencias (documento enveloped, KeyInfo, SignedProperties) y política de firma DIAN v2 con su hash.
 - Verificación: `tests/dianSigner.test.ts` comprueba la firma con `xml-crypto` (verificador independiente) y que una alteración la invalida; certificado autofirmado de prueba en `tests/fixtures`.
+
+## DIAN 3/4: envío por servicio web (2026-10-30)
+
+- `dianWebService.ts` (ZIP deflate, sobre SOAP 1.2 firmado con WS-Security, SendTestSetAsync/SendNominaSync/GetStatusZip) y rutas `POST /api/payroll-settlements/:id/dian/send|status`, `GET .../dian/signed-xml`; migración 0016 con estado del envío (SENT/ACCEPTED/REJECTED), ZipKey, XML firmado y respuesta. Tras un rechazo se regenera con el mismo consecutivo; no se envía un XML hecho con otras credenciales o en otro ambiente.
+- Secretos nuevos: `DIAN_CERT_P12`, `DIAN_CERT_PASSWORD`, `DIAN_TEST_SET_ID` (`DIAN_AMBIENTE=1` para producción). Verificación: Jest 31 suites / 288 pruebas.

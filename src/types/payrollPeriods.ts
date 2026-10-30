@@ -41,6 +41,10 @@ export interface PayrollSettlement {
   dianConsecutive?: number | null;
   dianCune?: string | null;
   dianGeneratedAt?: string | null;
+  /** Envío a la DIAN: null = sin enviar. */
+  dianSubmissionStatus?: 'SENT' | 'ACCEPTED' | 'REJECTED' | null;
+  dianSentAt?: string | null;
+  dianErrors?: string[];
 
   createdAt?: string | null;
   updatedAt?: string | null;

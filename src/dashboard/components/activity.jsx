@@ -10,6 +10,7 @@ const ACTIVITY_ACTIONS = [
   ['', 'Todas'],
   ['CLOSE', 'Cierres de periodo'],
   ['GENERATE_XML', 'XML DIAN generados'],
+  ['SEND_DIAN', 'Envíos a la DIAN'],
   ['EXPORT', 'Descargas (banco, PILA, contable)'],
   ['CREATE', 'Creaciones'],
   ['UPDATE', 'Ediciones'],

@@ -43,6 +43,7 @@ const DESCRIPTIONS: Record<string, string> = {
   // Registros anteriores a oct-2026: no distinguían recálculo y XML.
   'UPDATE payroll_settlement': 'Recalculó una liquidación o generó su XML DIAN',
   'GENERATE_XML payroll_settlement': 'Generó el XML de nómina electrónica DIAN',
+  'SEND_DIAN payroll_settlement': 'Firmó y envió la nómina electrónica a la DIAN',
   'EXPORT bank_file': 'Descargó el archivo bancario',
   'EXPORT pila': 'Descargó el archivo PILA',
   'EXPORT accounting': 'Descargó el comprobante contable',
