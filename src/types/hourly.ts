@@ -25,6 +25,13 @@ export type VinculationType =
 
 export type RetentionConcept = 'SERVICIOS' | 'HONORARIOS';
 
+/**
+ * 13 = Cédula de ciudadanía, 31 = NIT, 22 = Cédula de extranjería,
+ * 41 = Pasaporte, 42 = Documento extranjero. Sólo NIT lleva dígito
+ * de verificación (dv).
+ */
+export type PersonDocumentType = '13' | '31' | '22' | '41' | '42';
+
 // ============================================================
 // ENTIDADES (formas normalizadas, tal como las devuelve la API)
 // ============================================================
@@ -36,6 +43,9 @@ export interface Professional {
   lastName: string;
   lastName2?: string | null;
   taxId: string;
+  documentType: PersonDocumentType;
+  /** Sólo aplica (y sólo se persiste) cuando documentType = '31' (NIT). */
+  dv?: string | null;
   profession: string;
   email?: string | null;
   phone?: string | null;
@@ -43,6 +53,12 @@ export interface Professional {
   bankName?: string | null;
   bankAccountType?: string | null;
   bankAccountNumber?: string | null;
+  /**
+   * Tarifa por hora "sugerida" del profesional: precarga el campo al
+   * crear una vinculación (engagement) con una empresa, que siempre
+   * puede cambiarla para esa vinculación puntual.
+   */
+  defaultHourlyRate?: number | null;
   active: boolean;
   createdAt?: string | null;
 }
@@ -50,7 +66,9 @@ export interface Professional {
 /**
  * Versión pública (sin datos de contacto ni bancarios) que se
  * devuelve cuando quien consulta no tiene un engagement propio con
- * ese profesional — ver `GET /api/professionals`.
+ * ese profesional — ver `GET /api/professionals`. Sí incluye
+ * `defaultHourlyRate`: es justo lo que se necesita para precargar el
+ * formulario al crear la PRIMERA vinculación con este profesional.
  */
 export interface PublicProfessional {
   id: string;
@@ -58,6 +76,7 @@ export interface PublicProfessional {
   lastName: string;
   profession: string;
   city?: string | null;
+  defaultHourlyRate?: number | null;
 }
 
 export interface Engagement {
@@ -213,11 +232,7 @@ export interface DocumentoSoportePayerInfo {
 }
 
 export interface DocumentoSoporteBeneficiaryInfo {
-  /**
-   * 13 = Cédula de ciudadanía, 31 = NIT, 22 = Cédula de extranjería,
-   * 41 = Pasaporte, 42 = Documento extranjero.
-   */
-  typeDocument: '13' | '31' | '22' | '41' | '42';
+  typeDocument: PersonDocumentType;
   concept: RetentionConcept;
 }
 

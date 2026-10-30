@@ -2,14 +2,18 @@ name = "gestion-future-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
+# Compila el dashboard (JSX -> JS) antes de dev/deploy.
+[build]
+command = "node scripts/build-dashboard.mjs"
+
 [vars]
 ENVIRONMENT = "production"
 # Config pública del proyecto Firebase (Authentication) usada por el
 # dashboard y por el Worker para verificar los ID tokens. No son
-# secretos: reemplázalos por los de tu propio proyecto Firebase.
-FIREBASE_PROJECT_ID = "TU-FIREBASE-PROJECT-ID"
-FIREBASE_API_KEY = "TU-FIREBASE-API-KEY"
-FIREBASE_AUTH_DOMAIN = "TU-FIREBASE-PROJECT-ID.firebaseapp.com"
+# secretos: Firebase los publica en el navegador de todas formas.
+FIREBASE_PROJECT_ID = "kreadu-dd0c9"
+FIREBASE_API_KEY = "AIzaSyCLWpzC7SGN_-t7SlrDiOf3rZqv59T8b0E"
+FIREBASE_AUTH_DOMAIN = "kreadu-dd0c9.firebaseapp.com"
 
 # DIAN_SOFTWARE_ID y DIAN_SOFTWARE_PIN sí son secretos: no van aquí.
 # Configúralos con:

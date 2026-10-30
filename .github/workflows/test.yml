@@ -2,9 +2,9 @@ name: CI/CD Pipeline - Gestion-Future
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/employee-leaves" ]
+  # Todos los PR, también los que apuntan a otra rama (PR apilados).
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -12,7 +12,7 @@ permissions:
 jobs:
   test-and-deploy:
     name: Pruebas Automatizadas y Despliegue
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clonar Repositorio
@@ -43,7 +43,13 @@ jobs:
         run: python3 tests/test_colombia_payroll_and_dian.py
 
       - name: Ejecutar Pruebas Automatizadas (Jest)
-        run: npx jest
+        run: npm test
+
+      - name: Instalar Firefox para la prueba end-to-end
+        run: npx playwright install --with-deps firefox
+
+      - name: Prueba end-to-end del dashboard (Firefox)
+        run: npm run e2e
 
       - name: Aplicar Migraciones D1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
