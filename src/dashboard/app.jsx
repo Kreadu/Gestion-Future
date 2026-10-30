@@ -2755,6 +2755,23 @@ function App({ me, onSignOut }) {
               >
                 📄 Ver documento DIAN generado
               </button>
+
+              <button
+                className="btn btn-danger"
+                onClick={async function() {
+                  if (!confirm('¿Anular esta liquidación para poder rehacerla?')) return;
+                  try {
+                    clearMessages();
+                    await api('/api/hourly/settlements/' + encodeURIComponent(settlementResult.id), { method: 'DELETE' });
+                    setSettlementResult(null);
+                    setSuccess('Liquidación anulada: puedes liquidar el periodo de nuevo.');
+                  } catch (err) {
+                    setError(err.message);
+                  }
+                }}
+              >
+                Anular liquidación
+              </button>
             </div>
           </div>
         )}

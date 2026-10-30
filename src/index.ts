@@ -67,7 +67,7 @@ import {
 import { DocumentoSoporteService } from './services/documentoSoporteService';
 import { getNextDianConsecutive } from './services/dianCounters';
 import { intersectDateRanges } from './services/dateRanges';
-import { createEmployeeLeave, EMPLOYEE_LEAVE_TYPES, vacationBusinessDays } from './routes/leaves';
+import { createEmployeeLeave, EMPLOYEE_LEAVE_TYPES, validateLeaveInput } from './routes/leaves';
 import { CONSTANTS_2026 } from './engine/countries/constants2026';
 
 import type {
@@ -1378,63 +1378,9 @@ export default {
           );
         }
 
-        const start = new Date(`${startDate}T00:00:00Z`);
-        const end = new Date(`${endDate}T00:00:00Z`);
-
-        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-          return sendJson(
-            { success: false, error: 'startDate/endDate inválidas.' },
-            400
-          );
-        }
-
-        const totalDays =
-          Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
-
-        if (totalDays < 1) {
-          return sendJson(
-            {
-              success: false,
-              error: 'endDate debe ser igual o posterior a startDate.',
-            },
-            400
-          );
-        }
-
-        // Excluye la propia licencia al validar solapes con otras del
-        // mismo empleado.
-        const overlappingExisting = await env.DB
-          .prepare(`
-            SELECT id
-            FROM employee_leaves
-            WHERE employeeId = ?1
-              AND id != ?2
-              AND startDate <= ?3
-              AND endDate >= ?4
-          `)
-          .bind(String(existing.employeeId), leaveId, endDate, startDate)
-          .first();
-
-        if (overlappingExisting) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'Ya existe otra incapacidad/licencia registrada para ' +
-                'este empleado que se solapa con estas fechas.',
-            },
-            400
-          );
-        }
-
-        // Sólo aplica (y sólo se persiste) para incapacidad general —
-        // en el resto de tipos siempre es 0.
-        const accumulatedDaysBefore =
-          leaveType === 'GENERAL_INCAPACITY'
-            ? Math.max(0, Number(body.accumulatedDaysBefore) || 0)
-            : 0;
-
-        const businessDays = vacationBusinessDays(leaveType, body, startDate, endDate);
+        const checked = await validateLeaveInput(env, String(existing.employeeId), body, leaveId);
+        if ('error' in checked) return checked.error;
+        const { totalDays, accumulatedDaysBefore, businessDays } = checked;
 
         await env.DB
           .prepare(`
@@ -1460,6 +1406,25 @@ export default {
             businessDays
           )
           .run();
+
+        // Vacaciones que vinieron de una solicitud del portal: el empleado
+        // ve las fechas nuevas; si dejan de ser vacaciones, se cancela.
+        if (leaveType === 'VACATION') {
+          await env.DB
+            .prepare(`UPDATE employee_requests SET startDate = ?1, endDate = ?2, businessDays = ?3 WHERE leaveId = ?4`)
+            .bind(startDate, endDate, businessDays, leaveId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              UPDATE employee_requests
+              SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                  decisionNotes = 'El administrador cambió la novedad: ya no son vacaciones.'
+              WHERE leaveId = ?3
+            `)
+            .bind(user.email, new Date().toISOString(), leaveId)
+            .run();
+        }
 
         await audit(
           env,
@@ -3770,6 +3735,45 @@ export default {
           },
           201
         );
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS - ANULAR LIQUIDACIÓN
+       *
+       * Permite rehacer una liquidación mal hecha (el cálculo rechaza
+       * un tramo ya liquidado). El documento DIAN generado no se ha
+       * transmitido (la transmisión aún no existe); queda el registro
+       * en la actividad.
+       * ============================================================
+       */
+
+      const hourlySettlementMatch = url.pathname.match(/^\/api\/hourly\/settlements\/([^/]+)$/);
+
+      if (hourlySettlementMatch && request.method === 'DELETE') {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const settlementId = decodeURIComponent(hourlySettlementMatch[1]);
+        const row = await env.DB
+          .prepare(`
+            SELECT s.id, g.companyId
+            FROM settlements s
+            JOIN engagements g ON g.id = s.engagementId
+            WHERE s.id = ?1
+          `)
+          .bind(settlementId)
+          .first();
+
+        if (!row) {
+          return sendJson({ success: false, error: 'Liquidación no encontrada.' }, 404);
+        }
+
+        requireCompanyAccess(user, String(row.companyId));
+
+        await env.DB.prepare(`DELETE FROM settlements WHERE id = ?1`).bind(settlementId).run();
+        await audit(env, user, 'DELETE', 'settlement', settlementId, String(row.companyId));
+
+        return sendJson({ success: true, message: 'Liquidación anulada.' });
       }
 
       /*

@@ -162,15 +162,22 @@ export async function reviewPeriodClose(env: RouteEnv, period: any): Promise<Clo
         // resultJson ilegible: no hay con qué comparar.
       }
 
+      // El motor guarda las fechas recortadas al periodo; se recorta igual
+      // lo registrado para que una novedad que cruza el borde coincida.
+      const clip = (l: any) => ({
+        ...l,
+        startDate: l.startDate < period.periodStart ? period.periodStart : l.startDate,
+        endDate: l.endDate > period.periodEnd ? period.periodEnd : l.endDate,
+      });
       const includedKeys = new Set(included.map(leaveKey));
       const current = leaves.filter(l => l.employeeId === row.employeeId);
-      const currentKeys = new Set(current.map(leaveKey));
+      const currentKeys = new Set(current.map(l => leaveKey(clip(l))));
       // Con XML DIAN ya no se puede recalcular (ver payroll-settlements/calculate).
       const fix = row.dianStatus === 'GENERATED'
         ? 'ya tiene XML DIAN: regístralo como ajuste en el próximo periodo'
         : 'recalcula su nómina';
 
-      for (const l of current.filter(l => !includedKeys.has(leaveKey(l)))) {
+      for (const l of current.filter(l => !includedKeys.has(leaveKey(clip(l))))) {
         warnings.push({
           code: 'LEAVE_NOT_IN_SETTLEMENT',
           employeeId: row.employeeId,

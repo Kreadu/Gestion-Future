@@ -151,6 +151,30 @@ describe('Aprobación por el administrador', () => {
     expect(mine.decisionNotes).toMatch(/eliminada/);
   });
 
+  test('no se puede pedir sobre una novedad ya registrada', async () => {
+    const { ana } = await scenario();
+    await call(SUPER, 'POST', '/api/employee-leaves', {
+      employeeId: ana.id, leaveType: 'WORK_INCAPACITY', startDate: '2099-03-04', endDate: '2099-03-10',
+    });
+    const res = await call(ANA, 'POST', '/api/portal/requests', VACATION);
+    expect(res.status).toBe(400);
+    expect(res.json.error).toMatch(/2099-03-04 al 2099-03-10/);
+  });
+
+  test('editar la novedad actualiza la solicitud; cambiarla de tipo la cancela', async () => {
+    await scenario();
+    const created = await call(ANA, 'POST', '/api/portal/requests', VACATION);
+    const approve = await call(TENANT_A, 'POST', `/api/employee-requests/${created.json.data.id}/approve`);
+    const leaveId = approve.json.data.leaveId;
+
+    const moved = await call(TENANT_A, 'PUT', `/api/employee-leaves/${leaveId}`, { leaveType: 'VACATION', startDate: '2099-03-09', endDate: '2099-03-13' });
+    expect(moved.status).toBe(200);
+    expect((await call(ANA, 'GET', '/api/portal/requests')).json.data[0]).toMatchObject({ status: 'APPROVED', startDate: '2099-03-09', endDate: '2099-03-13' });
+
+    await call(TENANT_A, 'PUT', `/api/employee-leaves/${leaveId}`, { leaveType: 'GENERAL_INCAPACITY', startDate: '2099-03-09', endDate: '2099-03-13' });
+    expect((await call(ANA, 'GET', '/api/portal/requests')).json.data[0]).toMatchObject({ status: 'CANCELLED', leaveId: null });
+  });
+
   test('si la novedad no se puede registrar, la solicitud sigue pendiente', async () => {
     const { ana } = await scenario();
     const created = await call(ANA, 'POST', '/api/portal/requests', VACATION);

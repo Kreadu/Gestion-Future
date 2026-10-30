@@ -22,7 +22,7 @@
 import { sendJson } from '../http';
 import { HttpError, requireRole, requireCompanyAccess, audit, type AuthUser } from '../auth/authz';
 import { businessDaysBetween } from '../services/colombiaHolidays';
-import { vacationBalance } from './benefits';
+import { days360, vacationDaysAccrued } from '../engine/countries/colombiaBenefits';
 import { createEmployeeLeave } from './leaves';
 import { employeeName } from './periodEmployees';
 
@@ -74,29 +74,58 @@ function publicRequest(row: any) {
 }
 
 /**
- * Días de vacaciones disponibles hoy: saldo causado a la fecha menos
- * las vacaciones ya registradas que empiezan después de hoy (las que
- * empezaron antes ya están en el saldo) y las otras solicitudes de
- * vacaciones pendientes (excludeRequestId = la que se está evaluando).
+ * Días de vacaciones disponibles hoy de cada empleado: saldo causado a
+ * la fecha (misma fórmula que vacationBalance en benefits.ts) menos las
+ * vacaciones registradas que empiezan después de hoy y las solicitudes
+ * de vacaciones pendientes, salvo la que se está evaluando.
+ *
+ * Dos consultas por empresa, sin importar cuántos empleados se evalúen.
  */
-async function availableVacationDays(env: RouteEnv, employee: any, excludeRequestId = ''): Promise<number | null> {
-  if (!employee.hireDate) return null;
-
-  const [{ pendingDays }, committed] = await Promise.all([
-    vacationBalance(env, employee, today()),
+async function availableVacationDaysFor(
+  env: RouteEnv,
+  companyId: string,
+  employees: { employee: any; excludeRequestId: string }[]
+): Promise<Map<string, number | null>> {
+  const [leaves, pending] = await Promise.all([
     env.DB
-      .prepare(`
-        SELECT
-          (SELECT COALESCE(SUM(businessDays), 0) FROM employee_leaves
-            WHERE employeeId = ?1 AND leaveType = 'VACATION' AND startDate > ?2) +
-          (SELECT COALESCE(SUM(businessDays), 0) FROM employee_requests
-            WHERE employeeId = ?1 AND requestType = 'VACATION' AND status = 'PENDING' AND id != ?3) AS days
-      `)
-      .bind(employee.id, today(), excludeRequestId)
-      .first<{ days: number }>(),
+      .prepare(`SELECT employeeId, startDate, businessDays FROM employee_leaves WHERE companyId = ?1 AND leaveType = 'VACATION'`)
+      .bind(companyId)
+      .all<any>(),
+    env.DB
+      .prepare(`SELECT id, employeeId, businessDays FROM employee_requests WHERE companyId = ?1 AND requestType = 'VACATION' AND status = 'PENDING'`)
+      .bind(companyId)
+      .all<any>(),
   ]);
 
-  return Math.round((pendingDays - Number(committed?.days || 0)) * 100) / 100;
+  const now = today();
+  const result = new Map<string, number | null>();
+
+  for (const { employee, excludeRequestId } of employees) {
+    const key = `${employee.id}|${excludeRequestId}`;
+    if (!employee.hireDate) {
+      result.set(key, null);
+      continue;
+    }
+
+    const end = employee.terminationDate && employee.terminationDate < now ? employee.terminationDate : now;
+    const accrued = vacationDaysAccrued(days360(employee.hireDate, end));
+    const own = (leaves.results || []).filter(l => l.employeeId === employee.id);
+    const taken = own.filter(l => l.startDate <= end).reduce((t, l) => t + Number(l.businessDays || 0), 0)
+      + Number(employee.vacationDaysTakenBefore || 0);
+    const scheduled = own.filter(l => l.startDate > now).reduce((t, l) => t + Number(l.businessDays || 0), 0);
+    const requested = (pending.results || [])
+      .filter(r => r.employeeId === employee.id && r.id !== excludeRequestId)
+      .reduce((t, r) => t + Number(r.businessDays || 0), 0);
+
+    result.set(key, Math.round((accrued - taken - scheduled - requested) * 100) / 100);
+  }
+
+  return result;
+}
+
+async function availableVacationDays(env: RouteEnv, employee: any, excludeRequestId = ''): Promise<number | null> {
+  const map = await availableVacationDaysFor(env, String(employee.companyId), [{ employee, excludeRequestId }]);
+  return map.get(`${employee.id}|${excludeRequestId}`) ?? null;
 }
 
 async function ownEmployee(env: RouteEnv, user: AuthUser) {
@@ -163,6 +192,17 @@ async function createRequest(env: RouteEnv, user: AuthUser, employee: any, body:
 
   if (overlap) {
     return sendJson({ success: false, error: 'Ya tienes una solicitud pendiente o aprobada que se cruza con esas fechas.' }, 400);
+  }
+
+  // Lo que el administrador ya registró (incapacidades, licencias,
+  // vacaciones): aprobar algo que se cruza fallaría.
+  const leaveOverlap = await env.DB
+    .prepare(`SELECT startDate, endDate FROM employee_leaves WHERE employeeId = ?1 AND startDate <= ?3 AND endDate >= ?2 LIMIT 1`)
+    .bind(employee.id, startDate, endDate)
+    .first<any>();
+
+  if (leaveOverlap) {
+    return sendJson({ success: false, error: `Ya tienes una novedad registrada del ${leaveOverlap.startDate} al ${leaveOverlap.endDate} que se cruza con esas fechas.` }, 400);
   }
 
   const businessDays = requestType === 'VACATION' ? businessDaysBetween(startDate, endDate) : null;
@@ -261,10 +301,18 @@ async function decide(env: RouteEnv, user: AuthUser, id: string, action: 'approv
     }
 
     const created = await leave.json() as any;
-    await env.DB
+    const linked = await env.DB
       .prepare(`UPDATE employee_requests SET leaveId = ?1 WHERE id = ?2`)
       .bind(created.data.id, id)
       .run();
+
+    // Sin el enlace, borrar la novedad no cancelaría la solicitud: se
+    // deshace la novedad y la solicitud vuelve a pendiente.
+    if (!linked.meta?.changes) {
+      await env.DB.prepare(`DELETE FROM employee_leaves WHERE id = ?1`).bind(created.data.id).run();
+      await backToPending();
+      return sendJson({ success: false, error: 'No se pudo completar la aprobación; inténtalo de nuevo.' }, 500);
+    }
   }
 
   await audit(env as any, user, action === 'approve' ? 'APPROVE' : 'REJECT', 'employee_request', id, String(row.companyId));
@@ -355,10 +403,13 @@ export async function handleRequestRoutes(
       .all<any>();
 
     // El saldo sólo importa para decidir vacaciones pendientes.
-    const data = await Promise.all((rows.results || []).map(async row => {
-      const pendingDays = row.status === 'PENDING' && row.requestType === 'VACATION'
-        ? await availableVacationDays(env, { ...row, id: row.employeeId }, row.id)
-        : null;
+    const toEvaluate = (rows.results || [])
+      .filter(row => row.status === 'PENDING' && row.requestType === 'VACATION')
+      .map(row => ({ employee: { ...row, id: row.employeeId }, excludeRequestId: String(row.id) }));
+    const balances = await availableVacationDaysFor(env, companyId, toEvaluate);
+
+    const data = (rows.results || []).map(row => {
+      const pendingDays = balances.get(`${row.employeeId}|${row.id}`) ?? null;
       return {
         ...publicRequest(row),
         employeeName: employeeName(row),
@@ -366,7 +417,7 @@ export async function handleRequestRoutes(
         pendingDays,
         exceedsBalance: pendingDays !== null && row.businessDays !== null && Number(row.businessDays) > pendingDays,
       };
-    }));
+    });
 
     return sendJson({ success: true, data });
   }

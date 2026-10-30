@@ -148,6 +148,19 @@ describe('GET /api/payroll-periods/:id/close-review', () => {
     expect(codes((await review(periodId)).json.data.warnings)).toEqual(['LEAVE_REMOVED_AFTER_SETTLEMENT']);
   });
 
+  test('una novedad que cruza el borde del periodo no da aviso falso', async () => {
+    const { emp, periodId } = await periodWith();
+    const leave = await call(SUPER, 'POST', '/api/employee-leaves', {
+      employeeId: emp.id, leaveType: 'GENERAL_INCAPACITY', startDate: '2026-09-25', endDate: '2026-10-05',
+    });
+    expect(leave.status).toBe(201);
+    const settlement = await call(SUPER, 'POST', '/api/payroll-settlements/calculate', { periodId, employeeId: emp.id, daysWorked: 25 });
+    expect(settlement.status).toBe(201);
+    await generateXml(settlement.json.data.id);
+
+    expect((await review(periodId)).json.data.warnings).toEqual([]);
+  });
+
   test('periodo cerrado: bloquea con PERIOD_CLOSED', async () => {
     const { emp, periodId } = await periodWith();
     const settlement = await calculate(periodId, emp.id);

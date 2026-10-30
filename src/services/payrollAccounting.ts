@@ -124,6 +124,15 @@ export function buildPayrollJournal(input: JournalInput) {
       });
     };
 
+    const missingEntities = [
+      !employee.epsCode && 'EPS',
+      !employee.afpCode && 'fondo de pensiones',
+      !employee.ccfCode && 'caja de compensación',
+    ].filter(Boolean);
+    if (missingEntities.length > 0) {
+      warnings.push(`${who}: sin código de ${missingEntities.join(', ')}; esos aportes quedan con el empleado como tercero. Corrígelo antes de importar.`);
+    }
+
     const ded = result.employeeDeductions || {};
     const emp = result.employerContributions || {};
     const prov = result.provisions || {};

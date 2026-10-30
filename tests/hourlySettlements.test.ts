@@ -1,6 +1,6 @@
 import { describe, test, expect, jest, beforeEach } from '@jest/globals';
 import { verifyFirebaseIdToken } from '../src/auth/firebaseToken';
-import { SUPER, resetDb, db, call, createCompany } from './helpers/api';
+import { SUPER, resetDb, db, call, createCompany, insertUser } from './helpers/api';
 
 jest.mock('../src/auth/firebaseToken');
 
@@ -44,5 +44,16 @@ describe('POST /api/hourly/settlements/calculate · una liquidación por periodo
 
     expect(consecutives()).toBe(before);
     expect((db.prepare(`SELECT COUNT(*) AS n FROM settlements`).get() as any).n).toBe(1);
+  });
+
+  test('anular una liquidación permite rehacerla; otra empresa no puede anularla', async () => {
+    await partTimeEngagement();
+    const first = await liquidate('2026-10-01', '2026-10-31');
+
+    insertUser('admin@otra.co', 'TENANT_ADMIN', (await createCompany({ name: 'Otra', nit: '900555444' })).id);
+    expect((await call('admin@otra.co', 'DELETE', `/api/hourly/settlements/${first.json.data.id}`)).status).toBe(403);
+
+    expect((await call(SUPER, 'DELETE', `/api/hourly/settlements/${first.json.data.id}`)).status).toBe(200);
+    expect((await liquidate('2026-10-01', '2026-10-31')).status).toBe(201);
   });
 });

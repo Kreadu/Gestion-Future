@@ -55,6 +55,7 @@ const DESCRIPTIONS: Record<string, string> = {
   'CREATE time_entry': 'Registró horas',
   'CREATE pila_verification': 'Verificó la PILA de un contratista',
   'CREATE settlement': 'Liquidó personal por horas',
+  'DELETE settlement': 'Anuló una liquidación de personal por horas',
   'CREATE user': 'Dio acceso a un usuario',
   'DELETE user': 'Quitó el acceso a un usuario',
   'CREATE employee_request': 'Un empleado hizo una solicitud desde el portal',

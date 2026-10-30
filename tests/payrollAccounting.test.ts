@@ -264,8 +264,10 @@ describe('GET /api/payroll-periods/:id/accounting', () => {
     const contractor = (gross: number) => ({ calculation: { grossAmount: gross, retentionConcept: 'HONORARIOS', retentionAmount: gross / 10, netAmount: gross * 0.9 } });
     insertSettlement('SET-1', '1061000999', contractor(1_000_000), '2026-10-31T10:00:00Z');
     insertSettlement('SET-2', '1061000999', contractor(2_000_000), '2026-10-31T11:00:00Z');
-    // Fuera del periodo: no entra.
-    insertSettlement('SET-3', '1061000999', contractor(9_000_000), '2026-11-30T10:00:00Z', '2026-11-01', '2026-11-30');
+    // Termina en noviembre: no entra.
+    insertSettlement('SET-3', '1061000999', contractor(9_000_000), '2026-11-30T10:00:00Z', '2026-10-20', '2026-11-19');
+    // Empieza en septiembre y termina en octubre: entra en octubre.
+    insertSettlement('SET-5', '1061000999', contractor(3_000_000), '2026-10-19T10:00:00Z', '2026-09-20', '2026-10-19');
 
     insertHourly('PART_TIME_EMPLOYEE', '1061000888', 'Marta');
     insertSettlement('SET-4', '1061000888', { calculation: { ...RESULT } }, '2026-10-31T10:00:00Z');
@@ -277,6 +279,9 @@ describe('GET /api/payroll-periods/:id/accounting', () => {
     expect(csv).toContain('"511095","Honorarios - otros","1061000999","Carlos Ruiz"');
     expect(csv).toContain(',2000000.00,0.00');
     expect(csv).not.toContain('9000000.00');
+    expect(csv).toContain(',3000000.00,0.00');
+    // Marta (jornada parcial) no tiene códigos de administradora.
+    expect(res.json.data.warnings.join(' ')).toMatch(/Marta Ruiz.*sin código de EPS/);
     expect(csv).toMatch(/"250505","Salarios por pagar","1061000888","Marta Ruiz"/);
     expect(res.json.data.warnings.join(' ')).toMatch(/Carlos Ruiz.*2 liquidaciones.*más reciente/);
     expect(res.json.data.totals.debit).toBe(res.json.data.totals.credit);

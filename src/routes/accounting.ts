@@ -4,7 +4,7 @@
  *   GET /api/payroll-periods/:id/accounting → { fileName, content, totals, lines, warnings }
  *
  * Incluye la nómina del periodo y las liquidaciones del personal por
- * horas (jornada parcial y contratistas) cuyo periodo cae dentro de él.
+ * horas (jornada parcial y contratistas) cuyo tramo termina dentro de él.
  * El asiento lo arma src/services/payrollAccounting.ts.
  */
 
@@ -58,7 +58,8 @@ export async function handleAccountingRoutes(
       `)
       .bind(period.id)
       .all<any>(),
-    // Personal por horas cuyo periodo liquidado cae dentro del periodo.
+    // Personal por horas: cada liquidación va al periodo donde termina
+    // su tramo (así una que cruza el borde entra una sola vez).
     env.DB
       .prepare(`
         SELECT s.engagementId, s.periodStart, s.periodEnd, s.resultJson,
@@ -66,7 +67,7 @@ export async function handleAccountingRoutes(
         FROM settlements s
         JOIN engagements g ON g.id = s.engagementId
         JOIN professionals p ON p.id = g.professionalId
-        WHERE g.companyId = ?1 AND s.periodStart >= ?2 AND s.periodEnd <= ?3
+        WHERE g.companyId = ?1 AND s.periodEnd >= ?2 AND s.periodEnd <= ?3
         ORDER BY s.createdAt
       `)
       .bind(period.companyId, period.periodStart, period.periodEnd)
