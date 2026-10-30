@@ -39,9 +39,12 @@ const { code } = await transform(source, {
 const safe = code.replace(/<\/script/gi, '<\\/script');
 
 const outputPath = join(dir, 'app.generated.ts');
+const xlsxPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js');
+const xlsx = readFileSync(xlsxPath, 'utf8').replace(/<\/script/gi, '<\\/script');
 const output =
   '// Generado por scripts/build-dashboard.mjs desde app.jsx. No editar.\n' +
-  `export const DASHBOARD_APP_JS = ${JSON.stringify(safe)};\n`;
+  `export const DASHBOARD_APP_JS = ${JSON.stringify(safe)};\n` +
+  `export const DASHBOARD_XLSX_JS = ${JSON.stringify(xlsx)};\n`;
 
 // Wrangler vigila `src` durante `wrangler dev`. Si reescribimos este archivo
 // generado aunque el contenido sea idéntico, cada build dispara otro build.

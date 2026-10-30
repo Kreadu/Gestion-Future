@@ -220,3 +220,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - `tests/e2e/run.mjs` ahora calcula fechas con zona `America/Bogota`, genera periodos del mes actual/siguiente y usa el año actual en prestaciones, certificados y nombres de descarga.
 - Verificación: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25.
+
+## SheetJS local (2026-10-30)
+
+- `xlsx@0.18.5` se agrega como dependencia de producción y `scripts/build-dashboard.mjs` lo incorpora al HTML del dashboard; se retiró la carga desde cdnjs.
+- Verificación: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25, incluida la importación de Excel.

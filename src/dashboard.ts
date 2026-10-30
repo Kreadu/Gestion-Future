@@ -1,4 +1,4 @@
-import { DASHBOARD_APP_JS } from './dashboard/app.generated';
+import { DASHBOARD_APP_JS, DASHBOARD_XLSX_JS } from './dashboard/app.generated';
 
 export interface DashboardFirebaseConfig {
   apiKey: string;
@@ -19,7 +19,7 @@ export function getDashboardHtml(
 
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>${DASHBOARD_XLSX_JS}</script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script>
