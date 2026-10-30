@@ -14,7 +14,7 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false --forceExit   # hoy: 26 suites, 258 pruebas
+npx jest --runInBand --watchman=false --forceExit   # hoy: 27 suites, 264 pruebas
 npm run e2e                                         # Firefox, hoy 25/25 pasos
 ```
 
@@ -30,16 +30,14 @@ Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspond
 
 ## Lo que sólo puede hacer el dueño
 
-Está en el issue #17: pago de GitHub Actions (el CI queda en cola), Firebase de producción (#6), certificado digital y habilitación DIAN, y validación del contador (#9).
+GitHub Actions y despliegue ya funcionan (run 88). El dueño aún debe confirmar el acceso real con Firebase y revisar el dominio autorizado; facilitar certificado DIAN, Software ID/PIN y TestSetId para pruebas; coordinar con su contador la revisión del issue #9; y completar datos faltantes de empleados para PILA. Ver issue #17.
 
-Estado para la siguiente IA (2026-10-30): tareas #1–#4 ya están fusionadas en `main`. PR #22 está fusionado y desplegado; CI de `main` (run 88) quedó verde, incluyendo migración D1 0015 y despliegue Cloudflare. Issue #15 cerrado. En issue #16 quedan corregidos 4 de 5 puntos; sólo falta investigar el aviso local de worker/handles abiertos de Jest (no apareció en CI). Siguiente tarea: revisar `wip/dian-firma-envio` por partes, completar/verificar CUNE, XAdES y SOAP (#10), y probar el ambiente DIAN cuando el dueño entregue certificado, Software ID/PIN y test set (#17).
+Estado al 30-oct-2026: tareas #1–#4 fusionadas y desplegadas en `main`; PR #22/run 88 pasó CI, incluida migración D1 0015 y Cloudflare Worker. Los commits de documentación también pasaron CI/deploy (run 90). Issue #15 cerrado. Issue #16 conserva únicamente la investigación del aviso local de Jest sobre handles abiertos; no aparece en CI.
 
 
-## Actualización CI PR #22 (2026-10-30)
+## Resultado PR #22
 
-- Primer CI: typecheck, nómina Python, Jest y descarga de Firefox pasaron; falló el último paso del E2E por `404 GET /api/pila-verifications?engagementId=...` (los otros 24 pasos pasaron).
-- Corregido en el commit `ee23501`: añadido GET autenticado, valida rol, vinculación activa y acceso a empresa, y devuelve los periodos verificados.
-- **No fusionar PR #22 hasta que el CI de este último commit quede verde.** Revisar el E2E completo y después seguir con DIAN, issue #10/#17.
+El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la ruta GET protegida por rol, vinculación activa y acceso a empresa. La corrida final pasó 25/25 pasos. PR #22 se fusionó y la migración D1 y el despliegue de Cloudflare pasaron en run 88.
 
 
 ## Continuación prioritaria para la siguiente IA
