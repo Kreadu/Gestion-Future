@@ -33,3 +33,10 @@ Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspond
 Está en el issue #17: pago de GitHub Actions (el CI queda en cola), Firebase de producción (#6), certificado digital y habilitación DIAN, y validación del contador (#9).
 
 Estado para la siguiente IA (2026-10-30): #1–#4 implementados localmente/en PRs hasta el #3 fusionado; #4 está en el PR siguiente, pendiente de CI y merge. Issue #16: aviso PILA, pie móvil, toast y validación empresa/empleado corregidos; queda revisar el aviso de worker de Jest (no apareció en CI; local con --forceExit sólo mostró el aviso estándar de handles abiertos).
+
+
+## Actualización CI PR #22 (2026-10-30)
+
+- Primer CI: typecheck, nómina Python, Jest y descarga de Firefox pasaron; falló el último paso del E2E por `404 GET /api/pila-verifications?engagementId=...` (los otros 24 pasos pasaron).
+- Corregido en el commit `ee23501`: añadido GET autenticado, valida rol, vinculación activa y acceso a empresa, y devuelve los periodos verificados.
+- **No fusionar PR #22 hasta que el CI de este último commit quede verde.** Revisar el E2E completo y después seguir con DIAN, issue #10/#17.
