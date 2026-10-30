@@ -63,7 +63,16 @@ Se revisó la rama actual `feat/employee-leaves` en el commit `8e052cb`, su bit�
 - Se intentó Chrome/Chromium con Playwright. La revisión encontró Chromium en caché, pero Playwright 1.56.1 esperaba otra revisión; al indicar el ejecutable disponible, Chromium terminó con `SIGTRAP` y un error de socket restringido (`setsockopt: Operation not permitted`). Por tanto tampoco hubo una sesión de interfaz en Chrome.
 - `git diff --check`: pasó con la bitácora actualizada.
 
-La aplicación no pudo probarse interactivamente en Firefox ni Chrome en este entorno. Las pruebas de API/unidad y las comprobaciones de compilación no sustituyen esa prueba de navegador. No se verificó producción ni una base de datos real.
+En esta sesión aislada la aplicación no pudo probarse interactivamente en Firefox ni Chrome por restricciones del entorno. Después se recibió una ejecución parcial de Firefox realizada en el equipo del usuario, documentada a continuación. No se verificó producción ni una base de datos real.
+
+### Ejecución de Firefox en el equipo del usuario
+
+Después de lo anterior, el usuario ejecutó `npm run e2e` en su equipo. Esta ejecución sí abrió Firefox y avanzó por el flujo visual:
+
+- Pasaron 16 pasos: carga del dashboard, empresa/empleado/periodo, incapacidad y cálculo, desprendible, generación XML, archivo bancario, resumen, archivo PILA, cierre, personal por horas, prima, vacaciones y liquidación definitiva.
+- Falló el paso `Certificados del retirado: ingresos y retenciones (220) y laboral`, en `page.getByLabel('Ver retirados').check()`, con `locator.check: Timeout 30000ms exceeded`.
+- La captura está en `tests/e2e/e2e-fallo.png`. En ella el retiro sí quedó guardado; la lista muestra `0 activo(s)` y el texto “Ver retirados”, pero no se aprecia el checkbox. La regla CSS general en `src/dashboard.ts` aplica `width: 100%`, padding, borde y fondo a todos los `input`, incluidos los de tipo checkbox. Esto es una causa probable del control que no se puede accionar/visualizar correctamente; requiere corregir estilo y repetir el E2E para confirmarlo.
+- Por el fallo temprano no se ejecutaron los pasos posteriores de portal del empleado e importación XLSX. No se deben considerar aprobados en Firefox.
 
 ### Hallazgos nuevos
 
@@ -93,13 +102,13 @@ Fuentes de proveedor consultadas el 2026-10-29:
 ### Comparación con la bitácora previa
 
 - **Resueltos/confirmados ahora:** la rama local y `origin/feat/employee-leaves` apuntan a `8e052cb`; el árbol estaba limpio al iniciar la revisión. Typecheck, build, 208 pruebas Jest y 4 pruebas Python pasan.
-- **Sigue pendiente:** ejecución E2E real en Firefox (y ahora también Chrome); confirmar estado de GitHub Actions de `e753b20`; revisar el contenido vigente de issues #18 y #11; decidir qué hacer con ramas `wip/dian-firma-envio` y `wip/logos-accesibilidad`; corregir el README.
+- **Sigue pendiente:** completar el E2E en Firefox (la corrida del usuario pasó 16 pasos y falló en el checkbox “Ver retirados”; portal e importación no se ejecutaron); probar Chrome; confirmar estado de GitHub Actions de `e753b20`; revisar el contenido vigente de issues #18 y #11; decidir qué hacer con ramas `wip/dian-firma-envio` y `wip/logos-accesibilidad`; corregir el README.
 - **Añadido por esta evaluación:** aclarar si la transmisión DIAN de `Dashboard.tsx` y la importación de `BulkEmployeeImportExport.tsx` son interfaces activas; la revisión estática encontró que esos manejadores son alertas, no acciones de servidor. Confirmar montaje antes de asignarles prioridad de usuario.
 - **Mejora de producto sugerida por comparación:** evaluar autoservicio de solicitudes y experiencia móvil observados en el portal público de Buk. Esto es una oportunidad, no un compromiso aprobado ni un cambio iniciado.
 
 ### Orden sugerido para continuar
 
-1. Desbloquear una prueba visual ejecutable en Firefox o Chromium (permitir servidor local y navegador, o usar un entorno E2E con CI) y ejecutar todos los escenarios, especialmente importación XLSX y portal.
+1. Ajustar/verificar estilo y activación del checkbox “Ver retirados”, repetir Firefox y ejecutar los escenarios restantes, especialmente certificados, portal e importación XLSX; luego probar Chrome.
 2. Verificar/ajustar las dos acciones que parecen simuladas (transmisión DIAN e importación del componente alterno), después de confirmar que forman parte de la UI en uso.
 3. Corregir la documentación del rol EMPLOYEE.
 4. Revisar los issues y estado de CI, y sólo entonces decidir cuáles ramas WIP son pendientes vigentes.
