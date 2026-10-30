@@ -20,7 +20,7 @@ npm run e2e                                         # Firefox, hoy 25/25 pasos
 
 ## Pendientes, en este orden
 
-1. **`src/dashboard/components/requests.jsx`**: agregar una guarda de respuestas fuera de orden en `RequestsSection.load`, igual a `loadSeq` de `activity.jsx`.
+1. [x] **`src/dashboard/components/requests.jsx`**: guarda de respuestas fuera de orden en `RequestsSection.load`, igual a `loadSeq` de `activity.jsx`.
 2. **E2E con fechas relativas a hoy** (`tests/e2e/run.mjs`). Hoy las fechas están fijas en 2026, y los pasos del panel de empresas y de solicitudes fallan desde noviembre de 2026.
 3. **SheetJS empaquetado** en el proyecto en vez de cargarlo desde cdnjs; la importación de Excel no debe depender de un CDN.
 4. **Rama `wip/logos-accesibilidad`** (`4dcaec0`): logos fuera del listado de empresas (migración 0012), etiquetas de formulario accesibles (issue #15) y detalles de interfaz (issue #16). Revisar el diff archivo por archivo y no fusionarlo a ciegas: la rama es vieja.
