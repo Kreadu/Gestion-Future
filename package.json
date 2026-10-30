@@ -15,7 +15,8 @@
     "e2e": "npm run build:dashboard && node tests/e2e/run.mjs"
   },
   "dependencies": {
-    "jose": "^5.10.0"
+    "jose": "^5.10.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240108.0",

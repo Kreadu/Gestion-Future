@@ -22,7 +22,7 @@ npm run e2e                                         # Firefox, hoy 25/25 pasos
 
 1. [x] **`src/dashboard/components/requests.jsx`**: guarda de respuestas fuera de orden en `RequestsSection.load`, igual a `loadSeq` de `activity.jsx`.
 2. [x] **E2E con fechas relativas a hoy** (`tests/e2e/run.mjs`): calendario de Colombia, mes actual/siguiente y año actual sin fechas de 2026 fijas.
-3. **SheetJS empaquetado** en el proyecto en vez de cargarlo desde cdnjs; la importación de Excel no debe depender de un CDN.
+3. [x] **SheetJS empaquetado** en el proyecto en vez de cargarlo desde cdnjs; la importación de Excel no debe depender de un CDN.
 4. **Rama `wip/logos-accesibilidad`** (`4dcaec0`): logos fuera del listado de empresas (migración 0012), etiquetas de formulario accesibles (issue #15) y detalles de interfaz (issue #16). Revisar el diff archivo por archivo y no fusionarlo a ciegas: la rama es vieja.
 5. **Rama `wip/dian-firma-envio`** (`53f61bd`): CUNE según el anexo técnico, firma XAdES y envío SOAP (issue #10). El envío real necesita el certificado digital del dueño (issue #17). Dejarlo probado con un certificado de prueba.
 
