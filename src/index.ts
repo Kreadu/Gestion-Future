@@ -3290,6 +3290,32 @@ export default {
 
       if (
         url.pathname === '/api/pila-verifications' &&
+        request.method === 'GET'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+        const engagementId = String(url.searchParams.get('engagementId') || '').trim();
+        if (!engagementId) {
+          return sendJson({ success: false, error: 'engagementId es obligatorio.' }, 400);
+        }
+
+        const engagement = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+        if (!engagement) {
+          return sendJson({ success: false, error: 'Vinculación no encontrada o inactiva.' }, 404);
+        }
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const rows = await env.DB
+          .prepare(`SELECT period FROM pila_verifications WHERE engagementId = ?1 AND verified = 1 ORDER BY period DESC`)
+          .bind(engagementId)
+          .all();
+        return sendJson({ success: true, data: rows.results || [] });
+      }
+
+      if (
+        url.pathname === '/api/pila-verifications' &&
         request.method === 'POST'
       ) {
         const body = await request.json() as any;
