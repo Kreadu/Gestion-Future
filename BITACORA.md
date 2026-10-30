@@ -215,3 +215,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - `RequestsSection.load` ahora descarta respuestas y errores obsoletos si cambió la empresa o el filtro; al quitar la empresa también invalida la carga pendiente.
 - Verificación local: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25.
+
+## Fechas relativas en E2E (2026-10-30)
+
+- `tests/e2e/run.mjs` ahora calcula fechas con zona `America/Bogota`, genera periodos del mes actual/siguiente y usa el año actual en prestaciones, certificados y nombres de descarga.
+- Verificación: TypeScript pasó, Jest 26/26 suites (258 pruebas) y E2E Firefox 25/25.
