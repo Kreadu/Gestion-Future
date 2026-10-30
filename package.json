@@ -4,14 +4,18 @@
   "description": "Sistema de gestión de nóminas Multi-tenant para outsourcing de RRHH",
   "main": "src/index.ts",
   "scripts": {
+    "build:dashboard": "node scripts/build-dashboard.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc",
+    "build": "npm run build:dashboard && tsc",
+    "pretypecheck": "npm run build:dashboard",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "pretest": "npm run build:dashboard",
+    "test": "jest",
+    "e2e": "npm run build:dashboard && node tests/e2e/run.mjs"
   },
   "dependencies": {
-    "firebase-admin": "^12.0.0"
+    "jose": "^5.10.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240108.0",
@@ -19,6 +23,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "jest": "^30.5.2",
+    "playwright": "^1.56.1",
     "ts-jest": "^29.4.12",
     "typescript": "^5.3.3",
     "wrangler": "^3.22.0"

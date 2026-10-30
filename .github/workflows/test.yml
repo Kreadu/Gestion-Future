@@ -2,9 +2,9 @@ name: CI/CD Pipeline - Gestion-Future
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/employee-leaves" ]
+  # Todos los PR, también los que apuntan a otra rama (PR apilados).
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -12,7 +12,7 @@ permissions:
 jobs:
   test-and-deploy:
     name: Pruebas Automatizadas y Despliegue
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clonar Repositorio
@@ -29,7 +29,7 @@ jobs:
           python-version: '3.12'
 
       - name: Instalar Dependencias de Node.js
-        run: npm install
+        run: npm ci
 
       - name: Instalar Dependencias de Python
         run: |
@@ -42,8 +42,22 @@ jobs:
       - name: Ejecutar Pruebas Automatizadas de Nómina (Python)
         run: python3 tests/test_colombia_payroll_and_dian.py
 
-      - name: Ejecutar Pruebas Automatizadas de Nómina y CUNE DIAN (TypeScript)
-        run: npx ts-node tests/payrollAndDian.test.ts
+      - name: Ejecutar Pruebas Automatizadas (Jest)
+        run: npm test
+
+      - name: Instalar Firefox para la prueba end-to-end
+        run: npx playwright install --with-deps firefox
+
+      - name: Prueba end-to-end del dashboard (Firefox)
+        run: npm run e2e
+
+      - name: Aplicar Migraciones D1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply gestion_future_db --remote
 
       - name: Desplegar a Cloudflare Workers
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

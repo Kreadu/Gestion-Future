@@ -1,7 +1,12 @@
-import ColombiaPayrollEngine from './engine/countries/colombiaEngine';
+import ColombiaPayrollEngine, {
+  ColombiaPayrollEngineError,
+} from './engine/countries/colombiaEngine';
+import { RiskClass } from './types/payroll';
 import type {
   ColombiaPayrollInput,
   ColombiaPayrollResult,
+  EmployeeLeaveInput,
+  EmployeeLeaveType,
 } from './types/payroll';
 
 import { DianNominaXmlService } from './services/dianNominaXmlService';
@@ -24,9 +29,70 @@ interface DianEmployeeExtraInfo {
 }
 
 import { BankDisbursementService } from './services/bankDisbursement';
+import { sendJson } from './http';
+import { handleBenefitRoutes } from './routes/benefits';
+import { handleCertificateRoutes } from './routes/certificates';
+import { handleImportRoutes } from './routes/imports';
+import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
+import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
+import { handleAccountingRoutes } from './routes/accounting';
+import { handleAuditLogRoutes } from './routes/auditLog';
+import { handleOverviewRoutes } from './routes/overview';
+import { handlePortalRoutes } from './routes/portal';
+import { handleRequestRoutes } from './routes/requests';
+import { getDashboardHtml } from './dashboard';
+import { getLegalHtml, LEGAL_VERSION } from './legal';
+import {
+  authenticate,
+  requireRole,
+  requireCompanyAccess,
+  canAccessCompany,
+  audit,
+  HttpError,
+  type AuthUser,
+  type UserRole,
+} from './auth/authz';
+
+import {
+  PartTimeEmployeeEngine,
+  PartTimeEmployeeEngineError,
+  MIN_HOURLY_WAGE,
+} from './engine/hourly/partTimeEmployeeEngine';
+
+import {
+  IndependentContractorEngine,
+  IndependentContractorEngineError,
+} from './engine/hourly/independentContractorEngine';
+
+import { DocumentoSoporteService } from './services/documentoSoporteService';
+import { getNextDianConsecutive } from './services/dianCounters';
+import { intersectDateRanges } from './services/dateRanges';
+import { createEmployeeLeave, EMPLOYEE_LEAVE_TYPES, validateLeaveInput } from './routes/leaves';
+import { CONSTANTS_2026 } from './engine/countries/constants2026';
+
+import type {
+  Professional,
+  Engagement,
+  VinculationType,
+  RetentionConcept,
+  PartTimeEmployeeInput,
+  IndependentContractorInput,
+  DocumentoSoportePayerInfo,
+  DocumentoSoporteBeneficiaryInfo,
+} from './types/hourly';
+
+import type {
+  PayrollPeriod,
+  PayrollSettlement,
+} from './types/payrollPeriods';
 
 interface Env {
   DB: D1Database;
+  FIREBASE_PROJECT_ID: string;
+  FIREBASE_API_KEY: string;
+  FIREBASE_AUTH_DOMAIN: string;
+  DIAN_SOFTWARE_ID?: string;
+  DIAN_SOFTWARE_PIN?: string;
 }
 
 interface Company {
@@ -46,6 +112,7 @@ interface Company {
   legalRepresentative?: string | null;
   taxRegime?: string | null;
   economicActivity?: string | null;
+  isExempt114_1: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
@@ -67,18 +134,32 @@ interface Employee {
   phone?: string | null;
   whatsapp?: string | null;
   hireDate?: string | null;
+  bankName?: string | null;
+  bankAccountType?: string | null;
+  bankAccountNumber?: string | null;
+  arlRiskClass: number;
+  contractEndDate?: string | null;
+  terminationDate?: string | null;
+  vacationDaysTakenBefore: number;
+  isIntegralSalary: boolean;
   active: boolean | number;
   createdAt?: string | null;
 }
 
-function sendJson(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-  });
+interface EmployeeLeave {
+  id: string;
+  employeeId: string;
+  companyId: string;
+  leaveType: EmployeeLeaveType;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  accumulatedDaysBefore: number;
+  businessDays?: number | null;
+  notes?: string | null;
+  createdAt?: string | null;
 }
+
 
 function normalizeCompany(row: any): Company {
   return {
@@ -97,6 +178,8 @@ function normalizeCompany(row: any): Company {
     legalRepresentative: row.legalRepresentative ?? null,
     taxRegime: row.taxRegime ?? null,
     economicActivity: row.economicActivity ?? null,
+    isExempt114_1: !!row.isExempt114_1,
+    ...pilaAffiliationOf(row, 'company'),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
@@ -120,2680 +203,150 @@ function normalizeEmployee(row: any): Employee {
     phone: row.phone ?? null,
     whatsapp: row.whatsapp ?? null,
     hireDate: row.hireDate ?? null,
+    bankName: row.bankName ?? null,
+    bankAccountType: row.bankAccountType ?? null,
+    bankAccountNumber: row.bankAccountNumber ?? null,
+    arlRiskClass: normalizeArlRiskClass(row.arlRiskClass),
+    contractEndDate: row.contractEndDate ?? null,
+    terminationDate: row.terminationDate ?? null,
+    vacationDaysTakenBefore: Number(row.vacationDaysTakenBefore ?? 0),
+    isIntegralSalary: !!row.isIntegralSalary,
+    ...pilaAffiliationOf(row, 'employee'),
     active: !!row.active,
     createdAt: row.createdAt ?? null,
   };
 }
 
-function getEmployeeFullName(employee: Employee): string {
-  return [
-    employee.firstName,
-    employee.firstName2,
-    employee.lastName,
-    employee.lastName2,
-  ]
-    .filter(Boolean)
-    .join(' ');
+/** Clase de riesgo ARL 1-5; cualquier otro valor cae a 1 (riesgo mínimo). */
+function normalizeArlRiskClass(value: unknown): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? n : 1;
 }
 
-function getDashboardHtml(): string {
-  return `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kreadu Gestión-Future | Dashboard Nómina</title>
-
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #07111f;
-      color: #e5edf7;
-    }
-
-    button,
-    input,
-    select {
-      font: inherit;
-    }
-
-    button {
-      cursor: pointer;
-    }
-
-    .app {
-      min-height: 100vh;
-      background:
-        radial-gradient(circle at top left, rgba(30, 64, 175, .18), transparent 30%),
-        radial-gradient(circle at bottom right, rgba(6, 182, 212, .10), transparent 28%),
-        #07111f;
-    }
-
-    .header {
-      min-height: 76px;
-      padding: 14px 24px;
-      border-bottom: 1px solid #1d3047;
-      background: rgba(7, 17, 31, .96);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 18px;
-      position: sticky;
-      top: 0;
-      z-index: 20;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 13px;
-      min-width: 250px;
-    }
-
-    .brand-logo {
-      width: 42px;
-      height: 42px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #2563eb, #06b6d4);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 900;
-      color: white;
-    }
-
-    .brand h1 {
-      margin: 0;
-      font-size: 18px;
-    }
-
-    .brand p {
-      margin: 3px 0 0;
-      color: #8193aa;
-      font-size: 12px;
-    }
-
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .badge {
-      padding: 7px 11px;
-      border: 1px solid #245174;
-      background: rgba(8, 47, 73, .55);
-      border-radius: 999px;
-      color: #67e8f9;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .company-selector {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-    }
-
-    .company-selector select {
-      min-width: 220px;
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: 310px minmax(420px, 1fr) 390px;
-      min-height: calc(100vh - 76px);
-    }
-
-    .panel {
-      border-right: 1px solid #1d3047;
-      min-width: 0;
-    }
-
-    .panel:last-child {
-      border-right: none;
-    }
-
-    .panel-header {
-      padding: 18px 18px 14px;
-      border-bottom: 1px solid #1d3047;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .panel-header h2 {
-      font-size: 14px;
-      margin: 0;
-    }
-
-    .panel-header span {
-      color: #6f839b;
-      font-size: 12px;
-    }
-
-    .panel-body {
-      padding: 18px;
-    }
-
-    .employee-list {
-      padding: 10px;
-    }
-
-    .employee-card {
-      padding: 13px;
-      margin-bottom: 8px;
-      border: 1px solid #1c3047;
-      border-radius: 11px;
-      background: #0b1829;
-      transition: .15s ease;
-      cursor: pointer;
-    }
-
-    .employee-card:hover,
-    .employee-card.selected {
-      border-color: #2563eb;
-      background: #0e2036;
-    }
-
-    .employee-name {
-      font-weight: 700;
-      font-size: 13px;
-    }
-
-    .employee-meta {
-      color: #7890a9;
-      font-size: 11px;
-      margin-top: 5px;
-      line-height: 1.5;
-    }
-
-    .employee-salary {
-      color: #67e8f9;
-      font-size: 12px;
-      font-weight: 700;
-      margin-top: 8px;
-    }
-
-    .empty {
-      color: #6f839b;
-      text-align: center;
-      padding: 40px 20px;
-      font-size: 13px;
-    }
-
-    .form-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 13px;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .form-group.full {
-      grid-column: 1 / -1;
-    }
-
-    label {
-      font-size: 11px;
-      color: #8fa2b8;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .03em;
-    }
-
-    input,
-    select {
-      width: 100%;
-      padding: 10px 11px;
-      border: 1px solid #253a53;
-      border-radius: 8px;
-      background: #091625;
-      color: #e5edf7;
-      outline: none;
-    }
-
-    input:focus,
-    select:focus {
-      border-color: #2563eb;
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
-    }
-
-    input:disabled,
-    select:disabled {
-      opacity: .65;
-    }
-
-    .button-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 17px;
-    }
-
-    .btn {
-      border: 1px solid #29415d;
-      background: #102238;
-      color: #dbeafe;
-      border-radius: 8px;
-      padding: 9px 13px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .btn:hover {
-      border-color: #3b82f6;
-    }
-
-    .btn-primary {
-      background: #2563eb;
-      border-color: #2563eb;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #1d4ed8;
-    }
-
-    .btn-success {
-      background: #047857;
-      border-color: #059669;
-      color: white;
-    }
-
-    .btn-danger {
-      background: rgba(127, 29, 29, .35);
-      border-color: #7f1d1d;
-      color: #fecaca;
-    }
-
-    .section {
-      margin-bottom: 20px;
-    }
-
-    .section-title {
-      font-size: 12px;
-      font-weight: 800;
-      color: #c5d5e8;
-      margin-bottom: 11px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .info-box {
-      border: 1px solid #203750;
-      background: #0a1727;
-      padding: 12px;
-      border-radius: 9px;
-      font-size: 12px;
-      color: #94a9c0;
-    }
-
-    .selected-employee {
-      border: 1px solid #164e63;
-      background: rgba(8, 47, 73, .30);
-      padding: 12px;
-      border-radius: 9px;
-      margin-bottom: 18px;
-    }
-
-    .selected-employee strong {
-      color: #67e8f9;
-    }
-
-    .result-summary {
-      padding: 18px;
-      border-bottom: 1px solid #1d3047;
-      background: linear-gradient(180deg, rgba(13, 39, 66, .55), rgba(7, 17, 31, 0));
-    }
-
-    .result-label {
-      color: #7890a9;
-      font-size: 11px;
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-
-    .net-pay {
-      font-size: 29px;
-      font-weight: 900;
-      color: #67e8f9;
-      margin-top: 4px;
-    }
-
-    .summary-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 9px;
-      margin-top: 14px;
-    }
-
-    .summary-card {
-      border: 1px solid #203750;
-      border-radius: 9px;
-      padding: 11px;
-      background: #0a1727;
-    }
-
-    .summary-card span {
-      display: block;
-      color: #70869e;
-      font-size: 10px;
-      margin-bottom: 5px;
-    }
-
-    .summary-card strong {
-      font-size: 13px;
-    }
-
-    .result-body {
-      padding: 18px;
-      overflow-y: auto;
-      max-height: calc(100vh - 260px);
-    }
-
-    .result-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 15px;
-      padding: 8px 0;
-      border-bottom: 1px solid #15263a;
-      font-size: 12px;
-    }
-
-    .result-row span:first-child {
-      color: #8ca0b5;
-    }
-
-    .result-row strong {
-      color: #dbeafe;
-    }
-
-    .result-section {
-      margin-bottom: 18px;
-    }
-
-    .result-section h3 {
-      margin: 0 0 8px;
-      font-size: 12px;
-      color: #c7d8ea;
-    }
-
-    pre {
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 280px;
-      overflow: auto;
-      background: #050d17;
-      border: 1px solid #1c3047;
-      border-radius: 8px;
-      padding: 10px;
-      font-size: 10px;
-      color: #9fb3c8;
-    }
-
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, .68);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-      padding: 20px;
-    }
-
-    .modal {
-      width: min(720px, 100%);
-      max-height: 90vh;
-      overflow-y: auto;
-      border: 1px solid #29415d;
-      border-radius: 14px;
-      background: #091625;
-      box-shadow: 0 25px 70px rgba(0, 0, 0, .45);
-    }
-
-    .modal-header {
-      padding: 17px 19px;
-      border-bottom: 1px solid #1d3047;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .modal-header h3 {
-      margin: 0;
-      font-size: 15px;
-    }
-
-    .modal-body {
-      padding: 19px;
-    }
-
-    .modal-footer {
-      padding: 14px 19px;
-      border-top: 1px solid #1d3047;
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }
-
-    .alert {
-      margin: 14px 18px;
-      padding: 11px 13px;
-      border-radius: 8px;
-      border: 1px solid #7f1d1d;
-      background: rgba(127, 29, 29, .2);
-      color: #fecaca;
-      font-size: 12px;
-    }
-
-    .success {
-      border-color: #065f46;
-      background: rgba(6, 95, 70, .18);
-      color: #a7f3d0;
-    }
-
-    @media (max-width: 1250px) {
-      .layout {
-        grid-template-columns: 280px minmax(400px, 1fr);
-      }
-
-      .layout > .panel:nth-child(3) {
-        grid-column: 1 / -1;
-        border-top: 1px solid #1d3047;
-      }
-
-      .result-body {
-        max-height: none;
-      }
-    }
-
-    @media (max-width: 850px) {
-      .header {
-        align-items: flex-start;
-        flex-direction: column;
-      }
-
-      .header-right {
-        width: 100%;
-        justify-content: flex-start;
-      }
-
-      .layout {
-        display: block;
-      }
-
-      .panel {
-        border-right: none;
-        border-bottom: 1px solid #1d3047;
-      }
-
-      .form-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .form-group.full {
-        grid-column: auto;
-      }
-    }
-  </style>
-</head>
-
-<body>
-<div id="root"></div>
-
-<script type="text/babel">
-const { useEffect, useState } = React;
-
-function formatCOP(value) {
-  return new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0
-  }).format(Number(value || 0));
+const ARL_RISK_CLASS_RATES: Record<number, RiskClass> = {
+  1: RiskClass.CLASS_I,
+  2: RiskClass.CLASS_II,
+  3: RiskClass.CLASS_III,
+  4: RiskClass.CLASS_IV,
+  5: RiskClass.CLASS_V,
+};
+
+function normalizeEmployeeLeave(row: any): EmployeeLeave {
+  return {
+    id: String(row.id),
+    employeeId: String(row.employeeId),
+    companyId: String(row.companyId),
+    leaveType: row.leaveType as EmployeeLeaveType,
+    startDate: String(row.startDate ?? ''),
+    endDate: String(row.endDate ?? ''),
+    totalDays: Number(row.totalDays ?? 0),
+    accumulatedDaysBefore: Number(row.accumulatedDaysBefore ?? 0),
+    businessDays: row.businessDays == null ? null : Number(row.businessDays),
+    notes: row.notes ?? null,
+    createdAt: row.createdAt ?? null,
+  };
 }
 
-function formatNumber(value) {
-  return new Intl.NumberFormat('es-CO', {
-    maximumFractionDigits: 0
-  }).format(Number(value || 0));
+function normalizeProfessional(row: any): Professional {
+  return {
+    id: String(row.id),
+    firstName: String(row.firstName ?? ''),
+    firstName2: row.firstName2 ?? null,
+    lastName: String(row.lastName ?? ''),
+    lastName2: row.lastName2 ?? null,
+    taxId: String(row.taxId ?? ''),
+    documentType: (row.documentType || '13') as Professional['documentType'],
+    dv: row.dv ?? null,
+    profession: String(row.profession ?? ''),
+    email: row.email ?? null,
+    phone: row.phone ?? null,
+    city: row.city ?? null,
+    bankName: row.bankName ?? null,
+    bankAccountType: row.bankAccountType ?? null,
+    bankAccountNumber: row.bankAccountNumber ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
+    active: !!row.active,
+    createdAt: row.createdAt ?? null,
+  };
 }
 
-async function api(url, options) {
-  const response = await fetch(url, options);
-  let data = {};
-
-  try {
-    data = await response.json();
-  } catch (_) {
-    data = {};
-  }
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Error en la solicitud');
-  }
-
-  return data;
+function normalizePublicProfessional(row: any) {
+  return {
+    id: String(row.id),
+    firstName: String(row.firstName ?? ''),
+    lastName: String(row.lastName ?? ''),
+    profession: String(row.profession ?? ''),
+    city: row.city ?? null,
+    defaultHourlyRate:
+      row.defaultHourlyRate === null || row.defaultHourlyRate === undefined
+        ? null
+        : Number(row.defaultHourlyRate),
+  };
 }
 
-function App() {
-  const [companies, setCompanies] = useState([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
-  const [employees, setEmployees] = useState([]);
-  const [selectedEmp, setSelectedEmp] = useState(null);
-
-  const [companyModal, setCompanyModal] = useState(false);
-  const [employeeModal, setEmployeeModal] = useState(false);
-
-  const [editingCompany, setEditingCompany] = useState(null);
-  const [editingEmployee, setEditingEmployee] = useState(null);
-
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const [companyForm, setCompanyForm] = useState({
-    logo: '',
-    name: '',
-    nit: '',
-    dv: '',
-    address: '',
-    city: 'Popayán',
-    department: 'Cauca',
-    postalCode: '190001',
-    phone: '',
-    whatsapp: '',
-    email: '',
-    contactName: '',
-    legalRepresentative: '',
-    taxRegime: 'ORDINARIO',
-    economicActivity: ''
-  });
-
-  const [employeeForm, setEmployeeForm] = useState({
-    firstName: '',
-    firstName2: '',
-    lastName: '',
-    lastName2: '',
-    taxId: '',
-    position: '',
-    contractType: '1',
-    salary: '',
-    address: '',
-    city: 'Popayán',
-    country: 'Colombia',
-    phone: '',
-    whatsapp: '',
-    hireDate: ''
-  });
-
-  const [payrollForm, setPayrollForm] = useState({
-    employeeId: '',
-    baseSalary: '',
-    daysWorked: 30,
-    extraDiurna: 0,
-    extraNocturna: 0,
-    recargoNocturno: 0
-  });
-
-  const [payrollResult, setPayrollResult] = useState(null);
-  const [dianXmlResult, setDianXmlResult] = useState(null);
-  const [showPayrollPreview, setShowPayrollPreview] = useState(false);
-  const [disbursementResult, setDisbursementResult] = useState(null);
-
-  const selectedCompany = companies.find(function(c) {
-    return c.id === selectedCompanyId;
-  });
-
-  useEffect(function() {
-    loadCompanies();
-  }, []);
-
-  useEffect(function() {
-    if (selectedCompanyId) {
-      loadEmployees(selectedCompanyId);
-    } else {
-      setEmployees([]);
-      setSelectedEmp(null);
-      clearPayrollForm();
-    }
-  }, [selectedCompanyId]);
-
-  async function loadCompanies() {
-    try {
-      setError('');
-      const result = await api('/api/companies');
-      const list = Array.isArray(result.data) ? result.data : [];
-
-      setCompanies(list);
-
-      if (list.length > 0) {
-        setSelectedCompanyId(function(current) {
-          return current && list.some(function(c) { return c.id === current; })
-            ? current
-            : list[0].id;
-        });
-      }
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function loadEmployees(companyId) {
-    try {
-      setError('');
-      const result = await api(
-        '/api/employees?companyId=' + encodeURIComponent(companyId)
-      );
-
-      setEmployees(Array.isArray(result.data) ? result.data : []);
-    } catch (err) {
-      setError(err.message);
-      setEmployees([]);
-    }
-  }
-
-  function clearMessages() {
-    setError('');
-    setSuccess('');
-  }
-
-  function clearPayrollForm() {
-    setSelectedEmp(null);
-
-    setPayrollForm({
-      employeeId: '',
-      baseSalary: '',
-      daysWorked: 30,
-      extraDiurna: 0,
-      extraNocturna: 0,
-      recargoNocturno: 0
-    });
-
-    setPayrollResult(null);
-    setDianXmlResult(null);
-    setDisbursementResult(null);
-  }
-
-  function selectEmployeeForPayroll(employee) {
-    clearMessages();
-
-    setSelectedEmp(employee);
-
-    setPayrollForm({
-      employeeId: employee.id,
-      baseSalary: employee.salary,
-      daysWorked: 30,
-      extraDiurna: 0,
-      extraNocturna: 0,
-      recargoNocturno: 0
-    });
-
-    setPayrollResult(null);
-    setDianXmlResult(null);
-    setDisbursementResult(null);
-  }
-
-  function openNewCompany() {
-    clearMessages();
-
-    setEditingCompany(null);
-
-    setCompanyForm({
-      name: '',
-      nit: '',
-      dv: '',
-      address: '',
-      city: 'Popayán',
-      department: 'Cauca',
-      postalCode: '190001',
-      phone: '',
-      whatsapp: '',
-      email: '',
-      contactName: '',
-      legalRepresentative: '',
-      taxRegime: 'ORDINARIO',
-      economicActivity: ''
-    });
-
-    setCompanyModal(true);
-  }
-
-  function openEditCompany() {
-    if (!selectedCompany) return;
-
-    clearMessages();
-    setEditingCompany(selectedCompany);
-
-    setCompanyForm({
-      name: selectedCompany.name || '',
-      nit: selectedCompany.nit || '',
-      dv: selectedCompany.dv || '',
-      address: selectedCompany.address || '',
-      city: selectedCompany.city || '',
-      department: selectedCompany.department || '',
-      postalCode: selectedCompany.postalCode || '',
-      phone: selectedCompany.phone || '',
-      whatsapp: selectedCompany.whatsapp || '',
-      email: selectedCompany.email || '',
-      contactName: selectedCompany.contactName || '',
-      legalRepresentative: selectedCompany.legalRepresentative || '',
-      taxRegime: selectedCompany.taxRegime || 'ORDINARIO',
-      economicActivity: selectedCompany.economicActivity || ''
-    });
-
-    setCompanyModal(true);
-  }
-
-  async function saveCompany() {
-    try {
-      clearMessages();
-
-      if (!companyForm.name.trim()) {
-        throw new Error('El nombre de la empresa es obligatorio.');
-      }
-
-      if (!companyForm.nit.trim()) {
-        throw new Error('El NIT de la empresa es obligatorio.');
-      }
-
-      setLoading(true);
-
-      const payload = {
-        ...companyForm
-      };
-
-      if (editingCompany) {
-        await api('/api/companies/' + encodeURIComponent(editingCompany.id), {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        setSuccess('Empresa actualizada correctamente.');
-      } else {
-        const result = await api('/api/companies', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        setSuccess('Empresa creada correctamente.');
-
-        if (result.data && result.data.id) {
-          setSelectedCompanyId(result.data.id);
-        }
-      }
-
-      setCompanyModal(false);
-      await loadCompanies();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deleteCompany() {
-    if (!selectedCompany) return;
-
-    const confirmed = window.confirm(
-      '¿Deseas eliminar la empresa "' +
-      selectedCompany.name +
-      '"?'
-    );
-
-    if (!confirmed) return;
-
-    try {
-      clearMessages();
-      setLoading(true);
-
-      await api('/api/companies/' + encodeURIComponent(selectedCompany.id), {
-        method: 'DELETE'
-      });
-
-      setSuccess('Empresa eliminada correctamente.');
-      setSelectedCompanyId('');
-      await loadCompanies();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function openNewEmployee() {
-    if (!selectedCompany) {
-      setError('Primero debes crear o seleccionar una empresa.');
-      return;
-    }
-
-    clearMessages();
-    setEditingEmployee(null);
-
-    setEmployeeForm({
-      firstName: '',
-      firstName2: '',
-      lastName: '',
-      lastName2: '',
-      taxId: '',
-      position: '',
-      contractType: '1',
-      salary: '',
-      address: '',
-      city: selectedCompany.city || 'Popayán',
-      country: 'Colombia',
-      phone: '',
-      whatsapp: '',
-      hireDate: ''
-    });
-
-    setEmployeeModal(true);
-  }
-
-  function openEditEmployee(employee) {
-    clearMessages();
-
-    setEditingEmployee(employee);
-
-    setEmployeeForm({
-      firstName: employee.firstName || '',
-      firstName2: employee.firstName2 || '',
-      lastName: employee.lastName || '',
-      lastName2: employee.lastName2 || '',
-      taxId: employee.taxId || '',
-      position: employee.position || '',
-      contractType: employee.contractType || '1',
-      salary: employee.salary || '',
-      address: employee.address || '',
-      city: employee.city || '',
-      country: employee.country || 'Colombia',
-      phone: employee.phone || '',
-      whatsapp: employee.whatsapp || '',
-      hireDate: employee.hireDate || ''
-    });
-
-    setEmployeeModal(true);
-  }
-
-  async function saveEmployee() {
-    try {
-      clearMessages();
-
-      if (!selectedCompany) {
-        throw new Error('No hay una empresa seleccionada.');
-      }
-
-      if (!employeeForm.firstName.trim()) {
-        throw new Error('El primer nombre es obligatorio.');
-      }
-
-      if (!employeeForm.lastName.trim()) {
-        throw new Error('El primer apellido es obligatorio.');
-      }
-
-      if (!employeeForm.taxId.trim()) {
-        throw new Error('El documento del empleado es obligatorio.');
-      }
-
-      const salary = Number(employeeForm.salary);
-
-      if (!Number.isFinite(salary) || salary <= 0) {
-        throw new Error('El salario debe ser mayor que cero.');
-      }
-
-      setLoading(true);
-
-      const payload = {
-        ...employeeForm,
-        salary,
-        companyId: selectedCompany.id
-      };
-
-      if (editingEmployee) {
-        await api('/api/employees/' + encodeURIComponent(editingEmployee.id), {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        setSuccess('Empleado actualizado correctamente.');
-      } else {
-        await api('/api/employees', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        setSuccess('Empleado creado correctamente.');
-      }
-
-      setEmployeeModal(false);
-      await loadEmployees(selectedCompany.id);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deleteEmployee(employee) {
-    const confirmed = window.confirm(
-      '¿Deseas eliminar a "' +
-      employee.firstName +
-      ' ' +
-      employee.lastName +
-      '"?'
-    );
-
-    if (!confirmed) return;
-
-    try {
-      clearMessages();
-      setLoading(true);
-
-      await api('/api/employees/' + encodeURIComponent(employee.id), {
-        method: 'DELETE'
-      });
-
-      setSuccess('Empleado eliminado correctamente.');
-
-      if (selectedEmp && selectedEmp.id === employee.id) {
-        clearPayrollForm();
-      }
-
-      await loadEmployees(selectedCompanyId);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function calculatePayroll() {
-    try {
-      clearMessages();
-
-      if (!payrollForm.employeeId) {
-        throw new Error('Selecciona un empleado.');
-      }
-
-      const daysWorked = Number(payrollForm.daysWorked);
-
-      if (!Number.isFinite(daysWorked) || daysWorked < 1 || daysWorked > 30) {
-        throw new Error('Los días trabajados deben estar entre 1 y 30.');
-      }
-
-      setLoading(true);
-
-      const result = await api('/api/colombia/payroll/calculate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeInput: {
-            employeeId: payrollForm.employeeId,
-            daysWorked,
-            overtimeHours: {
-              extraDiurna: Number(payrollForm.extraDiurna) || 0,
-              extraNocturna: Number(payrollForm.extraNocturna) || 0,
-              recargoNocturno: Number(payrollForm.recargoNocturno) || 0
-            }
-          }
-        })
-      });
-
-      setPayrollResult(result.data);
-      setDianXmlResult(null);
-      setDisbursementResult(null);
-      setSuccess('Nómina calculada correctamente.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function generateDianXml() {
-    try {
-      clearMessages();
-
-      if (!payrollResult) {
-        throw new Error('Primero debes calcular la nómina.');
-      }
-
-      if (!selectedCompany) {
-        throw new Error('No hay una empresa seleccionada.');
-      }
-
-      setLoading(true);
-
-      const result = await api('/api/colombia/dian/xml', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          payrollData: payrollResult,
-
-          employerInfo: {
-            nit: selectedCompany.nit,
-            dv: selectedCompany.dv || '0',
-            companyName: selectedCompany.name,
-            softwareId: 'SOFT-KREADU-2026',
-            pinSoftware: '12345'
-          },
-
-          employeeExtra: {
-            typeDocument: '13',
-            typeContract: '1',
-            paymentMethod: '42'
-          },
-
-          consecutiveNumber: 1
-        })
-      });
-
-      setDianXmlResult(result.data);
-      setSuccess('XML de nómina generado.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function generateBankFile() {
-    try {
-      clearMessages();
-
-      if (!payrollResult) {
-        throw new Error('Primero debes calcular la nómina.');
-      }
-
-      if (!selectedCompany) {
-        throw new Error('No hay una empresa seleccionada.');
-      }
-
-      setLoading(true);
-
-      const employee = selectedEmp;
-
-      const result = await api('/api/colombia/bank-disbursement', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          companyInfo: {
-            nit: selectedCompany.nit,
-            name: selectedCompany.name
-          },
-
-          records: [
-            {
-              employeeId: payrollResult.employeeId,
-              employeeName: payrollResult.employeeName,
-              taxId: payrollResult.taxId,
-              amount: payrollResult.netPay,
-              bankName: '',
-              accountNumber: '',
-              accountType: 'AHORROS',
-              phone: employee ? employee.phone || '' : ''
-            }
-          ]
-        })
-      });
-
-      setDisbursementResult(result.data);
-      setSuccess('Archivo bancario generado.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function renderPayrollResult() {
-    if (!payrollResult) {
-      return (
-        <div className="empty">
-          <div style={{fontSize: '30px', marginBottom: '10px'}}>📊</div>
-          Selecciona un empleado y calcula la nómina para ver los resultados.
-        </div>
-      );
-    }
-
-    const deductions = payrollResult.employeeDeductions || {};
-    const employer = payrollResult.employerContributions || {};
-    const provisions = payrollResult.provisions || {};
-
-    return (
-      <>
-        <div className="result-summary">
-          <div className="result-label">Neto a pagar</div>
-          <div className="net-pay">
-            {formatCOP(payrollResult.netPay)}
-          </div>
-
-          <div className="summary-grid">
-            <div className="summary-card">
-              <span>TOTAL DEVENGADO</span>
-              <strong>{formatCOP(payrollResult.grossEarnings)}</strong>
-            </div>
-
-            <div className="summary-card">
-              <span>DEDUCCIONES</span>
-              <strong>{formatCOP(deductions.totalDeductions)}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div className="result-body">
-          <div className="result-section">
-            <h3>👤 Empleado</h3>
-
-            <div className="result-row">
-              <span>Nombre</span>
-              <strong>{payrollResult.employeeName}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Documento</span>
-              <strong>{payrollResult.taxId}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Días trabajados</span>
-              <strong>{payrollResult.daysWorked}</strong>
-            </div>
-          </div>
-
-          <div className="result-section">
-            <h3>💰 Devengados</h3>
-
-            <div className="result-row">
-              <span>Salario</span>
-              <strong>{formatCOP(payrollResult.baseSalaryEarned)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Auxilio transporte</span>
-              <strong>{formatCOP(payrollResult.earnedAuxTransporte)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Extra diurna</span>
-              <strong>{formatCOP(payrollResult.extraDiurnaValue)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Extra nocturna</span>
-              <strong>{formatCOP(payrollResult.extraNocturnaValue)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Recargo nocturno</span>
-              <strong>{formatCOP(payrollResult.recargoNocturnoValue)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Total devengado</span>
-              <strong>{formatCOP(payrollResult.grossEarnings)}</strong>
-            </div>
-          </div>
-
-          <div className="result-section">
-            <h3>📉 Deducciones empleado</h3>
-
-            <div className="result-row">
-              <span>Salud 4%</span>
-              <strong>{formatCOP(deductions.health4pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Pensión 4%</span>
-              <strong>{formatCOP(deductions.pension4pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Fondo solidaridad</span>
-              <strong>{formatCOP(deductions.fspValue)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Total deducciones</span>
-              <strong>{formatCOP(deductions.totalDeductions)}</strong>
-            </div>
-          </div>
-
-          <div className="result-section">
-            <h3>🏢 Aportes empleador</h3>
-
-            <div className="result-row">
-              <span>Salud 8.5%</span>
-              <strong>{formatCOP(employer.health8_5pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Pensión 12%</span>
-              <strong>{formatCOP(employer.pension12pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>ARL</span>
-              <strong>{formatCOP(employer.arlValue)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>SENA 2%</span>
-              <strong>{formatCOP(employer.sena2pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>ICBF 3%</span>
-              <strong>{formatCOP(employer.icbf3pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Caja compensación 4%</span>
-              <strong>{formatCOP(employer.ccf4pct)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Total aportes</span>
-              <strong>{formatCOP(employer.totalContributions)}</strong>
-            </div>
-          </div>
-
-          <div className="result-section">
-            <h3>📦 Provisiones</h3>
-
-            <div className="result-row">
-              <span>Cesantías</span>
-              <strong>{formatCOP(provisions.cesantias)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Intereses cesantías</span>
-              <strong>{formatCOP(provisions.interesesCesantias)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Prima</span>
-              <strong>{formatCOP(provisions.primaServicios)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Vacaciones</span>
-              <strong>{formatCOP(provisions.vacaciones)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Total provisiones</span>
-              <strong>{formatCOP(provisions.totalProvisions)}</strong>
-            </div>
-          </div>
-
-          <div className="result-section">
-            <h3>📊 Seguridad social</h3>
-
-            <div className="result-row">
-              <span>IBC</span>
-              <strong>{formatCOP(payrollResult.ibcSecuritySocial)}</strong>
-            </div>
-
-            <div className="result-row">
-              <span>Valor hora</span>
-              <strong>{formatCOP(payrollResult.hourlyRate)}</strong>
-            </div>
-          </div>
-
-          <div className="button-row">
-            <button
-              className="btn"
-              onClick={() => setShowPayrollPreview(true)}
-            >
-              📄 Ver hoja de nómina
-            </button>
-
-            <button
-              className="btn btn-success"
-              onClick={generateDianXml}
-              disabled={loading}
-            >
-              🧾 Generar XML DIAN
-            </button>
-
-            <button
-              className="btn"
-              onClick={generateBankFile}
-              disabled={loading}
-            >
-              🏦 Archivo bancario
-            </button>
-          </div>
-
-          {dianXmlResult && (
-            <div className="result-section" style={{marginTop: '18px'}}>
-              <h3>🧾 XML DIAN generado</h3>
-
-              <div className="result-row">
-                <span>CUNE</span>
-                <strong>{dianXmlResult.cune}</strong>
-              </div>
-
-              <div className="result-row">
-                <span>Consecutivo</span>
-                <strong>{dianXmlResult.consecutive}</strong>
-              </div>
-
-              <pre>{dianXmlResult.xmlContent}</pre>
-            </div>
-          )}
-
-          {disbursementResult && (
-            <div className="result-section" style={{marginTop: '18px'}}>
-              <h3>🏦 Archivo bancario</h3>
-              <pre>
-                {JSON.stringify(disbursementResult, null, 2)}
-              </pre>
-            </div>
-          )}
-
-
-          {showPayrollPreview && (
-            <div
-              style={{
-                position: 'fixed',
-                inset: 0,
-                background: 'rgba(0,0,0,0.82)',
-                zIndex: 9999,
-                overflowY: 'auto',
-                padding: '30px 15px'
-              }}
-            >
-              <div
-                style={{
-                  maxWidth: '950px',
-                  margin: '0 auto',
-                  background: '#ffffff',
-                  color: '#111827',
-                  borderRadius: '10px',
-                  overflow: 'hidden',
-                  boxShadow: '0 25px 70px rgba(0,0,0,0.5)'
-                }}
-              >
-                <div
-                  style={{
-                    padding: '22px 28px',
-                    borderBottom: '1px solid #e5e7eb',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: '15px'
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        color: '#64748b',
-                        letterSpacing: '1px'
-                      }}
-                    >
-                      KREADU GESTIÓN-FUTURE
-                    </div>
-
-                    <h2 style={{margin: '5px 0', fontSize: '22px'}}>
-                      Nómina Individual
-                    </h2>
-
-                    <div style={{fontSize: '13px', color: '#64748b'}}>
-                      Liquidación de nómina · Colombia
-                    </div>
-                  </div>
-
-                  <button
-                    className="btn"
-                    onClick={() => setShowPayrollPreview(false)}
-                  >
-                    ✕ Cerrar
-                  </button>
-                </div>
-
-                <div style={{padding: '28px'}}>
-
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '20px',
-                      marginBottom: '25px'
-                    }}
-                  >
-                    <div
-                      style={{
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        padding: '16px'
-                      }}
-                    >
-                      <div style={{
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        color: '#64748b',
-                        marginBottom: '10px'
-                      }}>
-                        TRABAJADOR
-                      </div>
-
-                      <strong style={{fontSize: '17px'}}>
-                        {payrollResult.employeeName}
-                      </strong>
-
-                      <div style={{marginTop: '7px', fontSize: '13px'}}>
-                        Documento: {payrollResult.taxId}
-                      </div>
-
-                      <div style={{marginTop: '5px', fontSize: '13px'}}>
-                        ID empleado: {payrollResult.employeeId}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        padding: '16px'
-                      }}
-                    >
-                      <div style={{
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        color: '#64748b',
-                        marginBottom: '10px'
-                      }}>
-                        PERÍODO
-                      </div>
-
-                      <strong style={{fontSize: '17px'}}>
-                        Nómina mensual
-                      </strong>
-
-                      <div style={{marginTop: '7px', fontSize: '13px'}}>
-                        Días trabajados: {payrollResult.daysWorked}
-                      </div>
-
-                      <div style={{marginTop: '5px', fontSize: '13px'}}>
-                        Moneda: COP
-                      </div>
-                    </div>
-                  </div>
-
-                  <h3 style={{
-                    fontSize: '15px',
-                    borderBottom: '2px solid #111827',
-                    paddingBottom: '8px',
-                    marginBottom: '10px'
-                  }}>
-                    Devengados
-                  </h3>
-
-                  <table style={{
-                    width: '100%',
-                    borderCollapse: 'collapse',
-                    fontSize: '13px',
-                    marginBottom: '25px'
-                  }}>
-                    <tbody>
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Salario básico
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(payrollResult.baseSalaryEarned)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Auxilio de transporte
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(payrollResult.earnedAuxTransporte)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Horas extras diurnas
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(payrollResult.extraDiurnaValue)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Horas extras nocturnas
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(payrollResult.extraNocturnaValue)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Recargo nocturno
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(payrollResult.recargoNocturnoValue)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{
-                          padding: '12px 5px',
-                          fontWeight: '800'
-                        }}>
-                          TOTAL DEVENGADO
-                        </td>
-                        <td style={{
-                          padding: '12px 5px',
-                          textAlign: 'right',
-                          fontWeight: '800'
-                        }}>
-                          {formatCOP(payrollResult.grossEarnings)}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <h3 style={{
-                    fontSize: '15px',
-                    borderBottom: '2px solid #111827',
-                    paddingBottom: '8px',
-                    marginBottom: '10px'
-                  }}>
-                    Deducciones
-                  </h3>
-
-                  <table style={{
-                    width: '100%',
-                    borderCollapse: 'collapse',
-                    fontSize: '13px',
-                    marginBottom: '25px'
-                  }}>
-                    <tbody>
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Salud · 4%
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(deductions.health4pct)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Pensión · 4%
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(deductions.pension4pct)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{padding: '9px 5px', borderBottom: '1px solid #e5e7eb'}}>
-                          Fondo de solidaridad
-                        </td>
-                        <td style={{
-                          padding: '9px 5px',
-                          borderBottom: '1px solid #e5e7eb',
-                          textAlign: 'right'
-                        }}>
-                          {formatCOP(deductions.fspValue)}
-                        </td>
-                      </tr>
-
-                      <tr>
-                        <td style={{
-                          padding: '12px 5px',
-                          fontWeight: '800'
-                        }}>
-                          TOTAL DEDUCCIONES
-                        </td>
-                        <td style={{
-                          padding: '12px 5px',
-                          textAlign: 'right',
-                          fontWeight: '800'
-                        }}>
-                          {formatCOP(deductions.totalDeductions)}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  <div
-                    style={{
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      padding: '20px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <div>
-                      <div style={{
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        color: '#64748b'
-                      }}>
-                        NETO A PAGAR
-                      </div>
-
-                      <div style={{
-                        fontSize: '28px',
-                        fontWeight: '900',
-                        marginTop: '5px'
-                      }}>
-                        {formatCOP(payrollResult.netPay)}
-                      </div>
-                    </div>
-
-                    <div style={{
-                      textAlign: 'right',
-                      fontSize: '12px',
-                      color: '#64748b'
-                    }}>
-                      <div>IBC Seguridad Social</div>
-                      <strong style={{color: '#111827'}}>
-                        {formatCOP(payrollResult.ibcSecuritySocial)}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    marginTop: '25px',
-                    paddingTop: '15px',
-                    borderTop: '1px solid #e5e7eb',
-                    fontSize: '11px',
-                    color: '#64748b'
-                  }}>
-                    Documento generado por Kreadu Gestión-Future.
-                    Esta vista es una representación visual de la liquidación.
-                    El documento técnico para nómina electrónica se encuentra
-                    en el XML DIAN.
-                  </div>
-
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </>
-    );
-  }
-
-  return (
-    <div className="app">
-      <header className="header">
-        <div className="brand">
-          <div className="brand-logo">K</div>
-
-          <div>
-            <h1>Kreadu Gestión-Future</h1>
-            <p>Sistema de gestión de nómina multiempresa</p>
-          </div>
-        </div>
-
-        <div className="header-right">
-          <span className="badge">Motor Colombia 2026</span>
-
-          <div className="company-selector">
-            <select
-              value={selectedCompanyId}
-              onChange={function(e) {
-                setSelectedCompanyId(e.target.value);
-              }}
-            >
-              {companies.length === 0 && (
-                <option value="">Sin empresas creadas</option>
-              )}
-
-              {companies.map(function(company) {
-                return (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                );
-              })}
-            </select>
-
-            <button
-              className="btn"
-              onClick={openEditCompany}
-              disabled={!selectedCompany}
-            >
-              ✏️
-            </button>
-
-            <button
-              className="btn btn-primary"
-              onClick={openNewCompany}
-            >
-              🏢 + Crear Empresa
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {error && (
-        <div className="alert">
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="alert success">
-          {success}
-        </div>
-      )}
-
-      <main className="layout">
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <h2>👥 Empleados</h2>
-              <span>
-                {employees.length} registrado(s)
-              </span>
-            </div>
-
-            <button
-              className="btn btn-primary"
-              onClick={openNewEmployee}
-              disabled={!selectedCompany}
-            >
-              + Empleado
-            </button>
-          </div>
-
-          <div className="employee-list">
-            {employees.length === 0 ? (
-              <div className="empty">
-                No hay empleados registrados para esta empresa.
-              </div>
-            ) : (
-              employees.map(function(employee) {
-                const isSelected =
-                  selectedEmp &&
-                  selectedEmp.id === employee.id;
-
-                return (
-                  <div
-                    key={employee.id}
-                    className={
-                      'employee-card' +
-                      (isSelected ? ' selected' : '')
-                    }
-                    onClick={function() {
-                      selectEmployeeForPayroll(employee);
-                    }}
-                  >
-                    <div className="employee-name">
-                      {getEmployeeName(employee)}
-                    </div>
-
-                    <div className="employee-meta">
-                      CC/NIT: {employee.taxId}
-                      <br />
-                      {employee.position || 'Sin cargo'}
-                      <br />
-                      {employee.city || 'Sin ciudad'}
-                    </div>
-
-                    <div className="employee-salary">
-                      {formatCOP(employee.salary)}
-                    </div>
-
-                    <div
-                      className="button-row"
-                      style={{marginTop: '9px'}}
-                    >
-                      <button
-                        className="btn"
-                        onClick={function(e) {
-                          e.stopPropagation();
-                          openEditEmployee(employee);
-                        }}
-                      >
-                        Editar
-                      </button>
-
-                      <button
-                        className="btn btn-danger"
-                        onClick={function(e) {
-                          e.stopPropagation();
-                          deleteEmployee(employee);
-                        }}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <h2>🧮 Datos para la liquidación de nómina</h2>
-              <span>Colombia 2026</span>
-            </div>
-          </div>
-
-          <div className="panel-body">
-            {!selectedEmp ? (
-              <div className="info-box">
-                Selecciona un empleado de la izquierda. Sus datos de
-                identificación y salario se cargarán automáticamente.
-              </div>
-            ) : (
-              <>
-                <div className="selected-employee">
-                  Empleado seleccionado:
-                  <br />
-                  <strong>
-                    {getEmployeeName(selectedEmp)}
-                  </strong>
-                  <br />
-                  <span>
-                    Documento: {selectedEmp.taxId}
-                  </span>
-                </div>
-
-                <div className="section">
-                  <div className="section-title">
-                    💼 Información salarial
-                  </div>
-
-                  <div className="form-grid">
-                    <div className="form-group">
-                      <label>Empleado</label>
-                      <input
-                        value={getEmployeeName(selectedEmp)}
-                        disabled
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Salario mensual</label>
-                      <input
-                        value={formatCOP(payrollForm.baseSalary)}
-                        disabled
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Días trabajados</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="30"
-                        value={payrollForm.daysWorked}
-                        onChange={function(e) {
-                          setPayrollForm({
-                            ...payrollForm,
-                            daysWorked: e.target.value
-                          });
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="section">
-                  <div className="section-title">
-                    ⏱️ Horas extras y recargos
-                  </div>
-
-                  <div className="form-grid">
-                    <div className="form-group">
-                      <label>Extra diurna</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={payrollForm.extraDiurna}
-                        onChange={function(e) {
-                          setPayrollForm({
-                            ...payrollForm,
-                            extraDiurna: e.target.value
-                          });
-                        }}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Extra nocturna</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={payrollForm.extraNocturna}
-                        onChange={function(e) {
-                          setPayrollForm({
-                            ...payrollForm,
-                            extraNocturna: e.target.value
-                          });
-                        }}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>Recargo nocturno</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={payrollForm.recargoNocturno}
-                        onChange={function(e) {
-                          setPayrollForm({
-                            ...payrollForm,
-                            recargoNocturno: e.target.value
-                          });
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="button-row">
-                  <button
-                    className="btn btn-primary"
-                    onClick={calculatePayroll}
-                    disabled={loading}
-                  >
-                    {loading ? 'Calculando...' : '🧮 Calcular Nómina'}
-                  </button>
-
-                  <button
-                    className="btn"
-                    onClick={clearPayrollForm}
-                    disabled={loading}
-                  >
-                    🧹 Limpiar formulario
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <h2>📊 Resultado de la liquidación</h2>
-              <span>Detalle completo</span>
-            </div>
-          </div>
-
-          {renderPayrollResult()}
-        </section>
-      </main>
-
-      {companyModal && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <div className="modal-header">
-              <h3>
-                {editingCompany
-                  ? 'Editar empresa'
-                  : 'Crear empresa'}
-              </h3>
-
-              <button
-                className="btn"
-                onClick={function() {
-                  setCompanyModal(false);
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="form-grid">
-                <div className="form-group full">
-                  <label>Razón social</label>
-                  <div style={{
-                    marginBottom: '18px',
-                    padding: '16px',
-                    border: '1px solid #334155',
-                    borderRadius: '10px',
-                    background: '#020617'
-                  }}>
-                    <label style={{
-                      display: 'block',
-                      marginBottom: '8px',
-                      fontWeight: '700'
-                    }}>
-                      🖼️ Logo de la empresa
-                    </label>
-
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '15px',
-                      flexWrap: 'wrap'
-                    }}>
-                      {companyForm.logo ? (
-                        <img
-                          src={companyForm.logo}
-                          alt="Logo de la empresa"
-                          style={{
-                            width: '90px',
-                            height: '90px',
-                            objectFit: 'contain',
-                            background: '#ffffff',
-                            borderRadius: '8px',
-                            padding: '6px'
-                          }}
-                        />
-                      ) : (
-                        <div style={{
-                          width: '90px',
-                          height: '90px',
-                          borderRadius: '8px',
-                          border: '1px dashed #64748b',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#64748b',
-                          fontSize: '12px',
-                          textAlign: 'center'
-                        }}>
-                          Sin logo
-                        </div>
-                      )}
-
-                      <div>
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                          style={{fontSize: '12px'}}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-
-                            if (file.size > 2 * 1024 * 1024) {
-                              alert('El logo no puede superar 2 MB.');
-                              return;
-                            }
-
-                            const reader = new FileReader();
-
-                            reader.onload = () => {
-                              setCompanyForm({
-                                ...companyForm,
-                                logo: String(reader.result || '')
-                              });
-                            };
-
-                            reader.readAsDataURL(file);
-                          }}
-                        />
-
-                        <div style={{
-                          marginTop: '7px',
-                          fontSize: '11px',
-                          color: '#94a3b8'
-                        }}>
-                          PNG, JPG, WEBP o SVG · máximo 2 MB
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <label>Nombre de la empresa</label>
-
-                  <input
-                    value={companyForm.name}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        name: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>NIT</label>
-                  <input
-                    value={companyForm.nit}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        nit: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Dígito verificación</label>
-                  <input
-                    value={companyForm.dv}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        dv: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
-                    value={companyForm.address}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        address: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
-                    value={companyForm.city}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        city: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Departamento</label>
-                  <input
-                    value={companyForm.department}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        department: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Código postal</label>
-                  <input
-                    value={companyForm.postalCode}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        postalCode: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
-                    value={companyForm.phone}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        phone: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
-                    value={companyForm.whatsapp}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        whatsapp: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Correo</label>
-                  <input
-                    type="email"
-                    value={companyForm.email}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        email: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Contacto</label>
-                  <input
-                    value={companyForm.contactName}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        contactName: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Representante legal</label>
-                  <input
-                    value={companyForm.legalRepresentative}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        legalRepresentative: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Régimen tributario</label>
-                  <select
-                    value={companyForm.taxRegime}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        taxRegime: e.target.value
-                      });
-                    }}
-                  >
-                    <option value="ORDINARIO">Ordinario</option>
-                    <option value="SIMPLE">SIMPLE</option>
-                  </select>
-                </div>
-
-                <div className="form-group full">
-                  <label>Actividad económica</label>
-                  <input
-                    value={companyForm.economicActivity}
-                    onChange={function(e) {
-                      setCompanyForm({
-                        ...companyForm,
-                        economicActivity: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              {editingCompany && (
-                <button
-                  className="btn btn-danger"
-                  onClick={deleteCompany}
-                  disabled={loading}
-                >
-                  Eliminar
-                </button>
-              )}
-
-              <button
-                className="btn"
-                onClick={function() {
-                  setCompanyModal(false);
-                }}
-              >
-                Cancelar
-              </button>
-
-              <button
-                className="btn btn-primary"
-                onClick={saveCompany}
-                disabled={loading}
-              >
-                {loading ? 'Guardando...' : 'Guardar empresa'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {employeeModal && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <div className="modal-header">
-              <h3>
-                {editingEmployee
-                  ? 'Editar empleado'
-                  : 'Crear empleado'}
-              </h3>
-
-              <button
-                className="btn"
-                onClick={function() {
-                  setEmployeeModal(false);
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="form-grid">
-                <div className="form-group">
-                  <label>Primer nombre</label>
-                  <input
-                    value={employeeForm.firstName}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        firstName: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Segundo nombre</label>
-                  <input
-                    value={employeeForm.firstName2}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        firstName2: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Primer apellido</label>
-                  <input
-                    value={employeeForm.lastName}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        lastName: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Segundo apellido</label>
-                  <input
-                    value={employeeForm.lastName2}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        lastName2: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Documento</label>
-                  <input
-                    value={employeeForm.taxId}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        taxId: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Cargo</label>
-                  <input
-                    value={employeeForm.position}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        position: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Tipo contrato DIAN</label>
-                  <select
-                    value={employeeForm.contractType}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        contractType: e.target.value
-                      });
-                    }}
-                  >
-                    <option value="1">Término indefinido</option>
-                    <option value="2">Término fijo</option>
-                    <option value="3">Obra o labor</option>
-                    <option value="4">Aprendizaje</option>
-                    <option value="5">Otro</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Salario mensual</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={employeeForm.salary}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        salary: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group full">
-                  <label>Dirección</label>
-                  <input
-                    value={employeeForm.address}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        address: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Ciudad</label>
-                  <input
-                    value={employeeForm.city}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        city: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>País</label>
-                  <input
-                    value={employeeForm.country}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        country: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Teléfono</label>
-                  <input
-                    value={employeeForm.phone}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        phone: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>WhatsApp</label>
-                  <input
-                    value={employeeForm.whatsapp}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        whatsapp: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Fecha ingreso</label>
-                  <input
-                    type="date"
-                    value={employeeForm.hireDate}
-                    onChange={function(e) {
-                      setEmployeeForm({
-                        ...employeeForm,
-                        hireDate: e.target.value
-                      });
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button
-                className="btn"
-                onClick={function() {
-                  setEmployeeModal(false);
-                }}
-              >
-                Cancelar
-              </button>
-
-              <button
-                className="btn btn-primary"
-                onClick={saveEmployee}
-                disabled={loading}
-              >
-                {loading ? 'Guardando...' : 'Guardar empleado'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function normalizeEngagement(row: any): Engagement {
+  return {
+    id: String(row.id),
+    professionalId: String(row.professionalId),
+    companyId: String(row.companyId),
+    vinculationType: row.vinculationType as VinculationType,
+    hourlyRate: Number(row.hourlyRate ?? 0),
+    startDate: String(row.startDate ?? ''),
+    endDate: row.endDate ?? null,
+    active: !!row.active,
+    retentionConcept: (row.retentionConcept as RetentionConcept) ?? null,
+    isIncomeTaxFiler:
+      row.isIncomeTaxFiler === null || row.isIncomeTaxFiler === undefined
+        ? null
+        : !!row.isIncomeTaxFiler,
+    deliverableDescription: row.deliverableDescription ?? null,
+    weeklyHours:
+      row.weeklyHours === null || row.weeklyHours === undefined
+        ? null
+        : Number(row.weeklyHours),
+    contractType: row.contractType ?? null,
+    createdAt: row.createdAt ?? null,
+  };
 }
 
-function getEmployeeName(employee) {
-  return [
-    employee.firstName,
-    employee.firstName2,
-    employee.lastName,
-    employee.lastName2
-  ]
-    .filter(Boolean)
-    .join(' ');
+function normalizePayrollPeriod(row: any): PayrollPeriod {
+  return {
+    id: String(row.id),
+    companyId: String(row.companyId),
+    periodStart: String(row.periodStart ?? ''),
+    periodEnd: String(row.periodEnd ?? ''),
+    status: row.status === 'CLOSED' ? 'CLOSED' : 'DRAFT',
+    createdAt: row.createdAt ?? null,
+    closedAt: row.closedAt ?? null,
+  };
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
-</body>
-</html>`;
+function normalizePayrollSettlement(row: any): PayrollSettlement {
+  return {
+    id: String(row.id),
+    periodId: String(row.periodId),
+    employeeId: String(row.employeeId),
+    companyId: String(row.companyId),
+    daysWorked: Number(row.daysWorked ?? 0),
+    extraDiurna: Number(row.extraDiurna ?? 0),
+    extraNocturna: Number(row.extraNocturna ?? 0),
+    recargoNocturno: Number(row.recargoNocturno ?? 0),
+    grossEarnings: Number(row.grossEarnings ?? 0),
+    totalDeductions: Number(row.totalDeductions ?? 0),
+    netPay: Number(row.netPay ?? 0),
+    dianStatus: row.dianStatus === 'GENERATED' ? 'GENERATED' : 'PENDING',
+    dianConsecutive:
+      row.dianConsecutive === null || row.dianConsecutive === undefined
+        ? null
+        : Number(row.dianConsecutive),
+    dianCune: row.dianCune ?? null,
+    dianGeneratedAt: row.dianGeneratedAt ?? null,
+    createdAt: row.createdAt ?? null,
+    updatedAt: row.updatedAt ?? null,
+  };
 }
 
 export default {
@@ -2814,12 +367,56 @@ export default {
         url.pathname === '/' ||
         url.pathname === '/dashboard'
       ) {
-        return new Response(getDashboardHtml(), {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-          },
+        return new Response(
+          getDashboardHtml({
+            apiKey: env.FIREBASE_API_KEY,
+            authDomain: env.FIREBASE_AUTH_DOMAIN,
+            projectId: env.FIREBASE_PROJECT_ID,
+          }, LEGAL_VERSION),
+          {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+            },
+          }
+        );
+      }
+
+      // Términos y política de datos: pública, sin autenticación,
+      // para que cualquier titular pueda consultarla (Ley 1581/2012).
+      if (url.pathname === '/legal') {
+        return new Response(getLegalHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
+
+      /*
+       * ============================================================
+       * AUTENTICACIÓN
+       *
+       * Todo lo que sigue es /api/*: exige un ID token de Firebase
+       * válido y resuelve el usuario (rol + empresa) desde D1.
+       * ============================================================
+       */
+
+      const user: AuthUser = await authenticate(request, env);
+
+      if (
+        url.pathname === '/api/me' &&
+        request.method === 'GET'
+      ) {
+        return sendJson({
+          success: true,
+          data: user,
+        });
+      }
+
+      // Solicitudes de vacaciones/permisos (empleado y administrador).
+      const requestsResponse = await handleRequestRoutes(request, url, env, user);
+      if (requestsResponse) return requestsResponse;
+
+      // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
+      const portalResponse = await handlePortalRoutes(request, url, env, user);
+      if (portalResponse) return portalResponse;
 
       /*
        * ============================================================
@@ -2831,6 +428,10 @@ export default {
         url.pathname === '/api/companies' &&
         request.method === 'GET'
       ) {
+        // Un EMPLOYEE no tiene acceso a la administración de empresas.
+        requireRole(user, ['TENANT_ADMIN']);
+
+        // SUPER_ADMIN ve todas las empresas; TENANT_ADMIN sólo la suya.
         const result = await env.DB
           .prepare(`
             SELECT
@@ -2850,12 +451,19 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
+              arlCode,
+              pilaContributorType,
+              divipolaCode,
+              arlActivityCode,
               active,
               createdAt
             FROM companies
             WHERE active = 1
+              AND (?1 IS NULL OR id = ?1)
             ORDER BY name ASC
           `)
+          .bind(user.role === 'SUPER_ADMIN' ? null : user.companyId)
           .all();
 
         const companies = (result.results || []).map(
@@ -2878,10 +486,25 @@ export default {
         url.pathname === '/api/companies' &&
         request.method === 'POST'
       ) {
+        // Sólo Kreadu (SUPER_ADMIN) da de alta nuevos clientes.
+        requireRole(user, []);
+
         const body = await request.json() as any;
 
         const name = String(body.name || '').trim();
         const nit = String(body.nit || '').trim();
+
+        if (body.acceptedTermsVersion !== LEGAL_VERSION) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Debes aceptar los Términos de uso y la Política de ' +
+                'tratamiento de datos para crear la empresa.',
+            },
+            400
+          );
+        }
 
         if (!name) {
           return sendJson(
@@ -2904,6 +527,7 @@ export default {
         }
 
         const id = `COMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'company');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -2925,12 +549,18 @@ export default {
               taxRegime,
               economicActivity,
               logo,
+              isExempt114_1,
+              termsVersion,
+              termsAcceptedAt,
+              termsAcceptedBy,
+              termsAcceptedIp,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?18,
+              ?19, ?17, ?20, ?21, 1, ?17
             )
           `)
           .bind(
@@ -2950,9 +580,14 @@ export default {
             body.taxRegime || null,
             body.economicActivity || null,
             body.logo || null,
-            createdAt
+            createdAt,
+            body.isExempt114_1 ? 1 : 0,
+            LEGAL_VERSION,
+            user.email,
+            request.headers.get('CF-Connecting-IP')
           )
           .run();
+        await savePilaAffiliation(env, 'company', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -2962,6 +597,8 @@ export default {
           `)
           .bind(id)
           .first();
+
+        await audit(env, user, 'CREATE', 'company', id, id);
 
         return sendJson(
           {
@@ -2986,6 +623,11 @@ export default {
         request.method === 'PUT'
       ) {
         const companyId = decodeURIComponent(companyMatch[1]);
+
+        // SUPER_ADMIN o el TENANT_ADMIN de esa misma empresa.
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
         const body = await request.json() as any;
 
         const existing = await env.DB
@@ -3025,6 +667,8 @@ export default {
           );
         }
 
+        const companyPila = parsePilaAffiliation(body, 'company');
+
         await env.DB
           .prepare(`
             UPDATE companies
@@ -3043,7 +687,8 @@ export default {
               legalRepresentative = ?12,
               taxRegime = ?13,
               economicActivity = ?14,
-              logo = ?15
+              logo = ?15,
+              isExempt114_1 = ?17
             WHERE id = ?16
           `)
           .bind(
@@ -3062,9 +707,11 @@ export default {
             body.taxRegime ?? null,
             body.economicActivity ?? null,
             body.logo ?? existing.logo ?? null,
-            companyId
+            companyId,
+            (body.isExempt114_1 ?? existing.isExempt114_1) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'company', companyId, companyPila);
 
         const row = await env.DB
           .prepare(`
@@ -3074,6 +721,8 @@ export default {
           `)
           .bind(companyId)
           .first();
+
+        await audit(env, user, 'UPDATE', 'company', companyId, companyId);
 
         return sendJson({
           success: true,
@@ -3092,6 +741,9 @@ export default {
         request.method === 'DELETE'
       ) {
         const companyId = decodeURIComponent(companyMatch[1]);
+
+        // Sólo Kreadu (SUPER_ADMIN) puede dar de baja a un cliente.
+        requireRole(user, []);
 
         const existing = await env.DB
           .prepare(`
@@ -3130,6 +782,8 @@ export default {
           .bind(companyId)
           .run();
 
+        await audit(env, user, 'DELETE', 'company', companyId, companyId);
+
         return sendJson({
           success: true,
           message: 'Empresa eliminada correctamente.',
@@ -3158,6 +812,9 @@ export default {
           );
         }
 
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
         const result = await env.DB
           .prepare(`
             SELECT
@@ -3177,14 +834,29 @@ export default {
               phone,
               whatsapp,
               hireDate,
+              bankName,
+              bankAccountType,
+              bankAccountNumber,
+              arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
+              documentType,
+              pilaContributorType,
+              pilaContributorSubtype,
+              epsCode,
+              afpCode,
+              ccfCode,
+              divipolaCode,
               active,
+              terminationDate,
               createdAt
             FROM employees
             WHERE companyId = ?1
-              AND active = 1
-            ORDER BY firstName ASC, lastName ASC
+              AND (active = 1 OR (?2 = 1 AND terminationDate IS NOT NULL))
+            ORDER BY active DESC, firstName ASC, lastName ASC
           `)
-          .bind(companyId)
+          .bind(companyId, url.searchParams.get('includeRetired') === '1' ? 1 : 0)
           .all();
 
         const employees = (result.results || []).map(
@@ -3222,6 +894,9 @@ export default {
             400
           );
         }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
 
         const company = await env.DB
           .prepare(`
@@ -3279,6 +954,7 @@ export default {
         }
 
         const id = `EMP-${crypto.randomUUID()}`;
+        const pila = parsePilaAffiliation(body, 'employee');
         const createdAt = new Date().toISOString();
 
         await env.DB
@@ -3300,12 +976,19 @@ export default {
               phone,
               whatsapp,
               hireDate,
+              bankName,
+              bankAccountType,
+              bankAccountNumber,
+              arlRiskClass,
+              contractEndDate,
+              vacationDaysTakenBefore,
+              isIntegralSalary,
               active,
               createdAt
             )
             VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-              ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17
+              ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?21, ?22, ?23, ?24, 1, ?20
             )
           `)
           .bind(
@@ -3317,7 +1000,9 @@ export default {
             body.lastName2 || null,
             taxId,
             body.position || null,
-            body.contractType || '1',
+            // Sin plazo escrito, la ley presume término indefinido
+            // (art. 47 CST): código DIAN 2.
+            body.contractType || '2',
             salary,
             body.address || null,
             body.city || null,
@@ -3325,9 +1010,17 @@ export default {
             body.phone || null,
             body.whatsapp || null,
             body.hireDate || null,
-            createdAt
+            body.bankName || null,
+            body.bankAccountType || null,
+            body.bankAccountNumber || null,
+            createdAt,
+            normalizeArlRiskClass(body.arlRiskClass),
+            body.contractEndDate || null,
+            Math.max(0, Number(body.vacationDaysTakenBefore) || 0),
+            body.isIntegralSalary ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', id, pila);
 
         const row = await env.DB
           .prepare(`
@@ -3337,6 +1030,8 @@ export default {
           `)
           .bind(id)
           .first();
+
+        await audit(env, user, 'CREATE', 'employee', id, companyId);
 
         return sendJson(
           {
@@ -3384,6 +1079,11 @@ export default {
           );
         }
 
+        // El acceso se valida con la empresa REAL del empleado (en D1),
+        // nunca con un companyId que llegara en el body.
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
         const salary = Number(
           body.salary ?? existing.salary
         );
@@ -3397,6 +1097,8 @@ export default {
             400
           );
         }
+
+        const employeePila = parsePilaAffiliation(body, 'employee');
 
         await env.DB
           .prepare(`
@@ -3415,8 +1117,15 @@ export default {
               country = ?11,
               phone = ?12,
               whatsapp = ?13,
-              hireDate = ?14
-            WHERE id = ?15
+              hireDate = ?14,
+              bankName = ?15,
+              bankAccountType = ?16,
+              bankAccountNumber = ?17,
+              arlRiskClass = ?19,
+              contractEndDate = ?20,
+              vacationDaysTakenBefore = ?21,
+              isIntegralSalary = ?22
+            WHERE id = ?18
           `)
           .bind(
             String(
@@ -3442,7 +1151,7 @@ export default {
             ).trim(),
 
             body.position ?? null,
-            body.contractType ?? '1',
+            body.contractType ?? existing.contractType ?? '2',
             salary,
             body.address ?? null,
             body.city ?? null,
@@ -3450,9 +1159,24 @@ export default {
             body.phone ?? null,
             body.whatsapp ?? null,
             body.hireDate ?? null,
-            employeeId
+            body.bankName ?? existing.bankName ?? null,
+            body.bankAccountType ?? existing.bankAccountType ?? null,
+            body.bankAccountNumber ?? existing.bankAccountNumber ?? null,
+            employeeId,
+            normalizeArlRiskClass(
+              body.arlRiskClass ?? existing.arlRiskClass
+            ),
+            body.contractEndDate !== undefined
+              ? body.contractEndDate || null
+              : existing.contractEndDate ?? null,
+            Math.max(
+              0,
+              Number(body.vacationDaysTakenBefore ?? existing.vacationDaysTakenBefore) || 0
+            ),
+            (body.isIntegralSalary ?? existing.isIntegralSalary) ? 1 : 0
           )
           .run();
+        await savePilaAffiliation(env, 'employee', employeeId, employeePila);
 
         const row = await env.DB
           .prepare(`
@@ -3462,6 +1186,15 @@ export default {
           `)
           .bind(employeeId)
           .first();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'employee',
+          employeeId,
+          String(existing.companyId)
+        );
 
         return sendJson({
           success: true,
@@ -3484,7 +1217,7 @@ export default {
 
         const existing = await env.DB
           .prepare(`
-            SELECT id
+            SELECT id, companyId
             FROM employees
             WHERE id = ?1
               AND active = 1
@@ -3502,6 +1235,9 @@ export default {
           );
         }
 
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
         await env.DB
           .prepare(`
             UPDATE employees
@@ -3511,6 +1247,15 @@ export default {
           .bind(employeeId)
           .run();
 
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'employee',
+          employeeId,
+          String(existing.companyId)
+        );
+
         return sendJson({
           success: true,
           message: 'Empleado eliminado correctamente.',
@@ -3519,42 +1264,567 @@ export default {
 
       /*
        * ============================================================
-       * NÓMINA COLOMBIA 2026
+       * INCAPACIDADES Y LICENCIAS DE MATERNIDAD/PATERNIDAD
        *
-       * IMPORTANTE:
-       * El cálculo NO se hace aquí.
-       * Se delega completamente al motor ColombiaPayrollEngine.
+       * No se rastrea automáticamente la continuidad entre
+       * incapacidades: quien registra una incapacidad general indica
+       * manualmente `accumulatedDaysBefore` (ver migrations/0005).
+       * ============================================================
+       */
+
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'GET'
+      ) {
+        const employeeId = url.searchParams.get('employeeId');
+
+        if (!employeeId) {
+          return sendJson(
+            { success: false, error: 'employeeId es obligatorio.' },
+            400
+          );
+        }
+
+        const employeeRow = await env.DB
+          .prepare(`SELECT id, companyId FROM employees WHERE id = ?1`)
+          .bind(employeeId)
+          .first();
+
+        if (!employeeRow) {
+          return sendJson(
+            { success: false, error: 'Empleado no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(employeeRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+            ORDER BY startDate DESC
+          `)
+          .bind(employeeId)
+          .all();
+
+        const leaves = (result.results || []).map(normalizeEmployeeLeave);
+
+        return sendJson({ success: true, data: leaves });
+      }
+
+      if (
+        url.pathname === '/api/employee-leaves' &&
+        request.method === 'POST'
+      ) {
+        return createEmployeeLeave(env, user, await request.json() as any);
+      }
+
+      const employeeLeaveMatch =
+        url.pathname.match(/^\/api\/employee-leaves\/([^/]+)$/);
+
+      if (
+        employeeLeaveMatch &&
+        request.method === 'PUT'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        const body = await request.json() as any;
+
+        const leaveType = String(body.leaveType || '').trim();
+        const startDate = String(body.startDate || '').trim();
+        const endDate = String(body.endDate || '').trim();
+
+        if (!leaveType || !startDate || !endDate) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType, startDate y endDate son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (
+          !EMPLOYEE_LEAVE_TYPES.includes(leaveType as EmployeeLeaveType)
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'leaveType debe ser GENERAL_INCAPACITY, WORK_INCAPACITY, ' +
+                'MATERNITY_LEAVE, PATERNITY_LEAVE o VACATION.',
+            },
+            400
+          );
+        }
+
+        const checked = await validateLeaveInput(env, String(existing.employeeId), body, leaveId);
+        if ('error' in checked) return checked.error;
+        const { totalDays, accumulatedDaysBefore, businessDays } = checked;
+
+        await env.DB
+          .prepare(`
+            UPDATE employee_leaves
+            SET
+              leaveType = ?1,
+              startDate = ?2,
+              endDate = ?3,
+              totalDays = ?4,
+              accumulatedDaysBefore = ?5,
+              notes = ?6,
+              businessDays = ?8
+            WHERE id = ?7
+          `)
+          .bind(
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            body.notes || null,
+            leaveId,
+            businessDays
+          )
+          .run();
+
+        // Vacaciones que vinieron de una solicitud del portal: el empleado
+        // ve las fechas nuevas; si dejan de ser vacaciones, se cancela.
+        if (leaveType === 'VACATION') {
+          await env.DB
+            .prepare(`UPDATE employee_requests SET startDate = ?1, endDate = ?2, businessDays = ?3 WHERE leaveId = ?4`)
+            .bind(startDate, endDate, businessDays, leaveId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              UPDATE employee_requests
+              SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                  decisionNotes = 'El administrador cambió la novedad: ya no son vacaciones.'
+              WHERE leaveId = ?3
+            `)
+            .bind(user.email, new Date().toISOString(), leaveId)
+            .run();
+        }
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          data: {
+            id: leaveId,
+            employeeId: String(existing.employeeId),
+            companyId: String(existing.companyId),
+            leaveType,
+            startDate,
+            endDate,
+            totalDays,
+            accumulatedDaysBefore,
+            businessDays,
+            notes: body.notes || null,
+            createdAt: existing.createdAt ?? null,
+          },
+        });
+      }
+
+      if (
+        employeeLeaveMatch &&
+        request.method === 'DELETE'
+      ) {
+        const leaveId = decodeURIComponent(employeeLeaveMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT id, companyId FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Incapacidad/licencia no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        await env.DB
+          .prepare(`DELETE FROM employee_leaves WHERE id = ?1`)
+          .bind(leaveId)
+          .run();
+
+        // Si venía de una solicitud del portal, el empleado debe ver que
+        // ya no está aprobada.
+        await env.DB
+          .prepare(`
+            UPDATE employee_requests
+            SET status = 'CANCELLED', leaveId = NULL, decidedBy = ?1, decidedAt = ?2,
+                decisionNotes = 'La novedad de vacaciones fue eliminada por el administrador.'
+            WHERE leaveId = ?3
+          `)
+          .bind(user.email, new Date().toISOString(), leaveId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'employee_leave',
+          leaveId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Incapacidad/licencia eliminada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * NÓMINA PERSISTENTE — PERIODOS
+       *
+       * Antes de esta fase, calcular una nómina no se guardaba en
+       * ningún lado y el XML de nómina electrónica siempre usaba el
+       * consecutivo 1. Ahora toda liquidación vive dentro de un
+       * periodo, y el consecutivo DIAN se pide con
+       * getNextDianConsecutive (src/services/dianCounters.ts).
        * ============================================================
        */
 
       if (
-        url.pathname === '/api/colombia/payroll/calculate' &&
+        url.pathname === '/api/payroll-periods' &&
         request.method === 'POST'
       ) {
         const body = await request.json() as any;
-        const employeeInput = body?.employeeInput || {};
 
-        const employeeId = String(
-          employeeInput.employeeId || ''
-        ).trim();
+        const companyId = String(body.companyId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
 
-        if (!employeeId) {
+        if (!companyId || !periodStart || !periodEnd) {
           return sendJson(
             {
               success: false,
-              error: 'employeeId es obligatorio.',
+              error: 'companyId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const company = await env.DB
+          .prepare(`SELECT id FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(companyId)
+          .first();
+
+        if (!company) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La empresa no existe o está inactiva.',
+            },
+            404
+          );
+        }
+
+        const id = `PP-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO payroll_periods (
+              id, companyId, periodStart, periodEnd, status, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, 'DRAFT', ?5)
+          `)
+          .bind(id, companyId, periodStart, periodEnd, createdAt)
+          .run();
+
+        await audit(env, user, 'CREATE', 'payroll_period', id, companyId);
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id,
+              companyId,
+              periodStart,
+              periodEnd,
+              status: 'DRAFT',
+              createdAt,
+            },
+          },
+          201
+        );
+      }
+
+      if (
+        url.pathname === '/api/payroll-periods' &&
+        request.method === 'GET'
+      ) {
+        const companyId = url.searchParams.get('companyId');
+
+        if (!companyId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId es obligatorio.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM payroll_periods
+            WHERE companyId = ?1
+            ORDER BY periodStart DESC
+          `)
+          .bind(companyId)
+          .all();
+
+        return sendJson({
+          success: true,
+          data: (result.results || []).map(normalizePayrollPeriod),
+        });
+      }
+
+      const periodCloseMatch = url.pathname.match(
+        /^\/api\/payroll-periods\/([^/]+)\/close$/
+      );
+
+      if (
+        periodCloseMatch &&
+        request.method === 'POST'
+      ) {
+        const periodId = decodeURIComponent(periodCloseMatch[1]);
+
+        const periodRow = await env.DB
+          .prepare(`SELECT * FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        // Mismas reglas que GET .../close-review (src/routes/closeReview.ts).
+        const blockers = await periodCloseBlockers(env, periodRow);
+
+        if (blockers.length > 0) {
+          return sendJson(
+            { success: false, error: blockers[0].message },
+            400
+          );
+        }
+
+        const closedAt = new Date().toISOString();
+
+        const closeResult = await env.DB
+          .prepare(`
+            UPDATE payroll_periods
+            SET status = 'CLOSED', closedAt = ?1
+            WHERE id = ?2
+              AND status = 'DRAFT'
+              AND NOT EXISTS (
+                SELECT 1 FROM payroll_settlements
+                WHERE periodId = ?2 AND dianStatus != 'GENERATED'
+              )
+          `)
+          .bind(closedAt, periodId)
+          .run();
+
+        // Otro usuario cerró el periodo o recalculó una liquidación
+        // entre la revisión y este UPDATE.
+        if (!closeResult.meta?.changes) {
+          return sendJson(
+            { success: false, error: 'El periodo cambió mientras se cerraba; revisa de nuevo antes de cerrar.' },
+            409
+          );
+        }
+
+        await audit(
+          env,
+          user,
+          'CLOSE',
+          'payroll_period',
+          periodId,
+          String(periodRow.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Periodo cerrado correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * NÓMINA PERSISTENTE — LIQUIDACIONES
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/payroll-settlements' &&
+        request.method === 'GET'
+      ) {
+        const periodId = url.searchParams.get('periodId');
+
+        if (!periodId) {
+          return sendJson(
+            { success: false, error: 'periodId es obligatorio.' },
+            400
+          );
+        }
+
+        const periodRow = await env.DB
+          .prepare(`SELECT companyId FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              s.*,
+              e.firstName AS e_firstName,
+              e.firstName2 AS e_firstName2,
+              e.lastName AS e_lastName,
+              e.lastName2 AS e_lastName2,
+              e.taxId AS e_taxId
+            FROM payroll_settlements s
+            JOIN employees e ON e.id = s.employeeId
+            WHERE s.periodId = ?1
+            ORDER BY e.firstName ASC, e.lastName ASC
+          `)
+          .bind(periodId)
+          .all();
+
+        const data = (result.results || []).map((row: any) => {
+          let calculation: ColombiaPayrollResult | null = null;
+
+          try {
+            calculation = JSON.parse(String(row.resultJson));
+          } catch {
+            calculation = null;
+          }
+
+          return {
+            ...normalizePayrollSettlement(row),
+            // El cálculo completo y el XML se incluyen aquí (y no en
+            // el tipo compartido PayrollSettlement) para poder
+            // mostrar el detalle desde el dashboard sin un endpoint
+            // de detalle aparte; el volumen por periodo es pequeño.
+            calculation,
+            dianXmlContent: row.dianXmlContent ?? null,
+            employee: {
+              firstName: row.e_firstName,
+              firstName2: row.e_firstName2,
+              lastName: row.e_lastName,
+              lastName2: row.e_lastName2,
+              taxId: row.e_taxId,
+            },
+          };
+        });
+
+        return sendJson({ success: true, data });
+      }
+
+      if (
+        url.pathname === '/api/payroll-settlements/calculate' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const periodId = String(body.periodId || '').trim();
+        const employeeId = String(body.employeeId || '').trim();
+
+        if (!periodId || !employeeId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'periodId y employeeId son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const periodRow = await env.DB
+          .prepare(`SELECT * FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        if (periodRow.status !== 'DRAFT') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'El periodo está cerrado; no se pueden calcular más liquidaciones.',
             },
             400
           );
         }
 
         const employeeRow = await env.DB
-          .prepare(`
-            SELECT *
-            FROM employees
-            WHERE id = ?1
-              AND active = 1
-          `)
+          .prepare(`SELECT * FROM employees WHERE id = ?1 AND active = 1`)
           .bind(employeeId)
           .first();
 
@@ -3570,9 +1840,44 @@ export default {
 
         const employee = normalizeEmployee(employeeRow);
 
-        const daysWorked = Number(
-          employeeInput.daysWorked ?? 30
-        );
+        const companyExemption = await env.DB
+          .prepare(`SELECT isExempt114_1 FROM companies WHERE id = ?1`)
+          .bind(employee.companyId)
+          .first();
+
+        if (employee.companyId !== String(periodRow.companyId)) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El empleado no pertenece a la empresa del periodo.',
+            },
+            400
+          );
+        }
+
+        const existing = await env.DB
+          .prepare(`
+            SELECT id, dianStatus
+            FROM payroll_settlements
+            WHERE periodId = ?1
+              AND employeeId = ?2
+          `)
+          .bind(periodId, employeeId)
+          .first();
+
+        if (existing && (existing as any).dianStatus === 'GENERATED') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Esta liquidación ya tiene un XML DIAN generado y no se ' +
+                'puede recalcular.',
+            },
+            400
+          );
+        }
+
+        const daysWorked = Number(body.daysWorked ?? 30);
 
         if (
           !Number.isFinite(daysWorked) ||
@@ -3588,28 +1893,94 @@ export default {
           );
         }
 
-        const overtimeHours =
-          employeeInput.overtimeHours || {};
+        // Incapacidades/licencias que se solapen con el periodo: se
+        // detectan aquí (no las elige el frontend), y `daysWorked` del
+        // body son siempre los días NORMALES — el backend nunca los
+        // sobreescribe, sólo valida que quepan junto con la licencia
+        // dentro del mes.
+        const overlappingLeavesResult = await env.DB
+          .prepare(`
+            SELECT *
+            FROM employee_leaves
+            WHERE employeeId = ?1
+              AND startDate <= ?2
+              AND endDate >= ?3
+          `)
+          .bind(employeeId, String(periodRow.periodEnd), String(periodRow.periodStart))
+          .all();
 
-        const extraDiurna = Number(
-          overtimeHours.extraDiurna ?? 0
+        const overlappingLeaves = overlappingLeavesResult.results || [];
+
+        // Un mismo período puede tener más de una incapacidad/licencia
+        // (ej. 3 días a inicios de mes + 5 días más adelante) — se
+        // pasan todas al motor y él las suma. No pueden solaparse
+        // ENTRE SÍ porque eso ya se valida al registrarlas
+        // (POST /api/employee-leaves).
+        const leaves: EmployeeLeaveInput[] = overlappingLeaves.map(
+          (row) => {
+            const leaveRow = normalizeEmployeeLeave(row);
+
+            // Ya sabemos que se solapan con el periodo (la consulta
+            // SQL lo garantiza), así que la intersección nunca es
+            // null aquí.
+            const intersection = intersectDateRanges(
+              leaveRow.startDate,
+              leaveRow.endDate,
+              String(periodRow.periodStart),
+              String(periodRow.periodEnd)
+            )!;
+
+            return {
+              type: leaveRow.leaveType,
+              daysInPeriod: intersection.days,
+              startDate: intersection.start,
+              endDate: intersection.end,
+              accumulatedDaysBefore:
+                leaveRow.leaveType === 'GENERAL_INCAPACITY'
+                  ? leaveRow.accumulatedDaysBefore
+                  : undefined,
+            };
+          }
         );
 
-        const extraNocturna = Number(
-          overtimeHours.extraNocturna ?? 0
+        const totalLeaveDays = leaves.reduce(
+          (sum, l) => sum + l.daysInPeriod,
+          0
         );
 
-        const recargoNocturno = Number(
-          overtimeHours.recargoNocturno ?? 0
+        if (totalLeaveDays > 0 && daysWorked + totalLeaveDays > 30) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Días trabajados + días de incapacidad/licencia no ' +
+                'pueden superar 30.',
+            },
+            400
+          );
+        }
+
+        const overtimeHours = body.overtimeHours || {};
+
+        const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
+        const extraNocturna = Number(overtimeHours.extraNocturna ?? 0);
+        const recargoNocturno = Number(overtimeHours.recargoNocturno ?? 0);
+        const horasDominicalFestivo = Number(body.horasDominicalFestivo ?? 0);
+        const horasExtraDominicalFestivo = Number(
+          body.horasExtraDominicalFestivo ?? 0
         );
 
         if (
           !Number.isFinite(extraDiurna) ||
           !Number.isFinite(extraNocturna) ||
           !Number.isFinite(recargoNocturno) ||
+          !Number.isFinite(horasDominicalFestivo) ||
+          !Number.isFinite(horasExtraDominicalFestivo) ||
           extraDiurna < 0 ||
           extraNocturna < 0 ||
-          recargoNocturno < 0
+          recargoNocturno < 0 ||
+          horasDominicalFestivo < 0 ||
+          horasExtraDominicalFestivo < 0
         ) {
           return sendJson(
             {
@@ -3625,12 +1996,10 @@ export default {
           employeeId: employee.id,
 
           firstName: employee.firstName,
-          firstName2:
-            employee.firstName2 || undefined,
+          firstName2: employee.firstName2 || undefined,
 
           lastName: employee.lastName,
-          lastName2:
-            employee.lastName2 || undefined,
+          lastName2: employee.lastName2 || undefined,
 
           taxId: employee.taxId,
 
@@ -3641,6 +2010,13 @@ export default {
           extraDiurna,
           extraNocturna,
           recargoNocturno,
+          horasDominicalFestivo,
+          horasExtraDominicalFestivo,
+          isIntegralSalary: !!body.isIntegralSalary,
+          riskClass: ARL_RISK_CLASS_RATES[employee.arlRiskClass],
+          isExempt114_1: !!companyExemption?.isExempt114_1,
+
+          leaves,
 
           overtimeHours: {
             extraDiurna,
@@ -3649,194 +2025,2060 @@ export default {
           },
         };
 
-        const payrollResult: ColombiaPayrollResult =
-          ColombiaPayrollEngine.calculate(
-            payrollInput
-          );
+        let payrollResult: ColombiaPayrollResult;
 
-        return sendJson({
-          success: true,
-          data: payrollResult,
-        });
+        try {
+          payrollResult = ColombiaPayrollEngine.calculate(payrollInput);
+        } catch (engineError) {
+          if (engineError instanceof ColombiaPayrollEngineError) {
+            return sendJson(
+              { success: false, error: engineError.message },
+              400
+            );
+          }
+
+          throw engineError;
+        }
+
+        const now = new Date().toISOString();
+        const settlementId = existing
+          ? String((existing as any).id)
+          : `PS-${crypto.randomUUID()}`;
+
+        if (existing) {
+          await env.DB
+            .prepare(`
+              UPDATE payroll_settlements
+              SET
+                daysWorked = ?1,
+                extraDiurna = ?2,
+                extraNocturna = ?3,
+                recargoNocturno = ?4,
+                grossEarnings = ?5,
+                totalDeductions = ?6,
+                netPay = ?7,
+                resultJson = ?8,
+                updatedAt = ?9
+              WHERE id = ?10
+            `)
+            .bind(
+              daysWorked,
+              extraDiurna,
+              extraNocturna,
+              recargoNocturno,
+              payrollResult.grossEarnings,
+              payrollResult.employeeDeductions.totalDeductions,
+              payrollResult.netPay,
+              JSON.stringify(payrollResult),
+              now,
+              settlementId
+            )
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              INSERT INTO payroll_settlements (
+                id, periodId, employeeId, companyId, daysWorked,
+                extraDiurna, extraNocturna, recargoNocturno,
+                grossEarnings, totalDeductions, netPay, resultJson,
+                dianStatus, createdAt, updatedAt
+              )
+              VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                'PENDING', ?13, ?13
+              )
+            `)
+            .bind(
+              settlementId,
+              periodId,
+              employeeId,
+              employee.companyId,
+              daysWorked,
+              extraDiurna,
+              extraNocturna,
+              recargoNocturno,
+              payrollResult.grossEarnings,
+              payrollResult.employeeDeductions.totalDeductions,
+              payrollResult.netPay,
+              JSON.stringify(payrollResult),
+              now
+            )
+            .run();
+        }
+
+        await audit(
+          env,
+          user,
+          existing ? 'RECALCULATE' : 'CREATE',
+          'payroll_settlement',
+          settlementId,
+          employee.companyId
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id: settlementId,
+              periodId,
+              employeeId,
+              dianStatus: 'PENDING',
+              calculation: payrollResult,
+            },
+          },
+          existing ? 200 : 201
+        );
       }
 
-      /*
-       * ============================================================
-       * DIAN - GENERAR XML
-       * ============================================================
-       */
+      const settlementXmlMatch = url.pathname.match(
+        /^\/api\/payroll-settlements\/([^/]+)\/generate-xml$/
+      );
 
       if (
-        url.pathname === '/api/colombia/dian/xml' &&
+        settlementXmlMatch &&
         request.method === 'POST'
       ) {
-        const body = await request.json() as any;
+        const settlementId = decodeURIComponent(settlementXmlMatch[1]);
 
-        const payrollData =
-          body?.payrollData as ColombiaPayrollResult;
+        const settlementRow = await env.DB
+          .prepare(`SELECT * FROM payroll_settlements WHERE id = ?1`)
+          .bind(settlementId)
+          .first();
 
-        if (
-          !payrollData ||
-          !payrollData.employeeId ||
-          !payrollData.taxId
-        ) {
+        if (!settlementRow) {
+          return sendJson(
+            { success: false, error: 'Liquidación no encontrada.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(settlementRow.companyId));
+
+        if ((settlementRow as any).dianStatus === 'GENERATED') {
           return sendJson(
             {
               success: false,
-              error: 'Los datos de nómina son obligatorios.',
+              error: 'Esta liquidación ya tiene un XML DIAN generado.',
             },
             400
           );
         }
 
-        const employerInput =
-          body?.employerInfo || {};
+        // El NIT, la razón social y las credenciales de software NUNCA
+        // se toman del body: se resuelven en el servidor a partir de
+        // la empresa dueña de la liquidación y de la configuración del
+        // Worker, para que no puedan falsificarse desde el navegador.
+        const companyRow = await env.DB
+          .prepare(`
+            SELECT nit, dv, name
+            FROM companies
+            WHERE id = ?1
+              AND active = 1
+          `)
+          .bind(settlementRow.companyId)
+          .first();
 
-        const employeeInput =
-          body?.employeeExtra || {};
+        if (!companyRow) {
+          return sendJson(
+            { success: false, error: 'Empresa no encontrada o inactiva.' },
+            404
+          );
+        }
 
         const employerInfo: DianEmployerInfo = {
-          nit: String(
-            employerInput.nit || ''
-          ).trim(),
-
-          dv: String(
-            employerInput.dv || '0'
-          ).trim(),
-
-          companyName: String(
-            employerInput.companyName || ''
-          ).trim(),
-
-          softwareId: String(
-            employerInput.softwareId ||
-            'SOFT-KREADU-2026'
-          ).trim(),
-
-          pinSoftware: String(
-            employerInput.pinSoftware ||
-            '12345'
-          ).trim(),
-
-          testSetId:
-            employerInput.testSetId ||
-            undefined,
+          nit: String(companyRow.nit || ''),
+          dv: String(companyRow.dv || '0'),
+          companyName: String(companyRow.name || ''),
+          softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+          pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
         };
 
-        if (
-          !employerInfo.nit ||
-          !employerInfo.companyName
-        ) {
+        if (!employerInfo.nit || !employerInfo.companyName) {
           return sendJson(
             {
               success: false,
-              error:
-                'NIT y nombre de empresa son obligatorios para generar el XML.',
+              error: 'La empresa no tiene NIT o razón social configurados.',
             },
             400
           );
         }
 
-        const employeeExtra: DianEmployeeExtraInfo = {
-          typeDocument:
-            employeeInput.typeDocument || '13',
+        const body = await request.json().catch(() => ({})) as any;
+        const employeeExtraInput = body?.employeeExtra || {};
 
-          typeContract:
-            employeeInput.typeContract || '1',
+        // El tipo de contrato y la cuenta salen del empleado guardado,
+        // no del navegador (antes el dashboard mandaba siempre '1').
+        const employeeRow = await env.DB
+          .prepare(`
+            SELECT contractType, bankName, bankAccountType, bankAccountNumber
+            FROM employees
+            WHERE id = ?1
+          `)
+          .bind(settlementRow.employeeId)
+          .first<any>();
+
+        const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
+          ? String(employeeRow.contractType)
+          : '2';
+
+        const employeeExtra: DianEmployeeExtraInfo = {
+          typeDocument: employeeExtraInput.typeDocument || '13',
+          typeContract: contractType as DianEmployeeExtraInfo['typeContract'],
 
           /*
            * 42 = transferencia bancaria.
            * El servicio DIAN preparado acepta 10, 42 o 20.
            */
-          paymentMethod:
-            employeeInput.paymentMethod || '42',
+          paymentMethod: employeeExtraInput.paymentMethod || '42',
 
-          bankName:
-            employeeInput.bankName ||
-            undefined,
-
-          accountNumber:
-            employeeInput.accountNumber ||
-            undefined,
-
-          accountType:
-            employeeInput.accountType ||
-            undefined,
+          bankName: employeeRow?.bankName || undefined,
+          accountNumber: employeeRow?.bankAccountNumber || undefined,
+          accountType: employeeRow?.bankAccountType || undefined,
         };
 
-        const consecutiveNumber = Math.max(
-          1,
-          Number(body?.consecutiveNumber || 1)
+        const payrollResult: ColombiaPayrollResult = JSON.parse(
+          String((settlementRow as any).resultJson)
         );
 
-        const xmlResult =
-          await DianNominaXmlService.generateDSPNE(
-            payrollData,
-            employerInfo,
-            employeeExtra,
-            consecutiveNumber
-          );
+        const consecutiveNumber = await getNextDianConsecutive(
+          env.DB,
+          String(settlementRow.companyId),
+          'NOMINA'
+        );
 
-        return sendJson({
-          success: true,
-          data: xmlResult,
-        });
+        const xmlResult = await DianNominaXmlService.generateDSPNE(
+          payrollResult,
+          employerInfo,
+          employeeExtra,
+          consecutiveNumber
+        );
+
+        const now = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            UPDATE payroll_settlements
+            SET
+              dianStatus = 'GENERATED',
+              dianConsecutive = ?1,
+              dianCune = ?2,
+              dianXmlContent = ?3,
+              dianGeneratedAt = ?4,
+              updatedAt = ?4
+            WHERE id = ?5
+          `)
+          .bind(
+            consecutiveNumber,
+            xmlResult.cune,
+            xmlResult.xmlContent,
+            now,
+            settlementId
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'GENERATE_XML',
+          'payroll_settlement',
+          settlementId,
+          String(settlementRow.companyId)
+        );
+
+        return sendJson({ success: true, data: xmlResult });
       }
 
       /*
        * ============================================================
-       * BANCOS
-       *
-       * Se conserva conectado al servicio existente.
+       * NÓMINA PERSISTENTE — ARCHIVO BANCARIO DEL PERIODO
        * ============================================================
        */
 
+      const periodBankMatch = url.pathname.match(
+        /^\/api\/payroll-periods\/([^/]+)\/bank-disbursement$/
+      );
+
       if (
-        url.pathname === '/api/colombia/bank-disbursement' &&
+        periodBankMatch &&
         request.method === 'POST'
       ) {
-        const body = await request.json() as any;
+        const periodId = decodeURIComponent(periodBankMatch[1]);
 
-        if (
-          !body?.companyInfo ||
-          !Array.isArray(body?.records)
-        ) {
+        const periodRow = await env.DB
+          .prepare(`SELECT companyId FROM payroll_periods WHERE id = ?1`)
+          .bind(periodId)
+          .first();
+
+        if (!periodRow) {
+          return sendJson(
+            { success: false, error: 'Periodo no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(periodRow.companyId));
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              s.resultJson,
+              e.id AS employeeId,
+              e.bankName,
+              e.bankAccountType,
+              e.bankAccountNumber,
+              e.taxId
+            FROM payroll_settlements s
+            JOIN employees e ON e.id = s.employeeId
+            WHERE s.periodId = ?1
+              AND s.dianStatus = 'GENERATED'
+          `)
+          .bind(periodId)
+          .all();
+
+        const rows = result.results || [];
+
+        if (rows.length === 0) {
           return sendJson(
             {
               success: false,
               error:
-                'companyInfo y records son obligatorios.',
+                'El periodo no tiene liquidaciones con XML DIAN generado.',
             },
             400
           );
         }
 
-          const payrolls = Array.isArray(body.records)
-            ? body.records
-            : [];
+        const payrolls: ColombiaPayrollResult[] = [];
+        const employeesMap = new Map<string, any>();
 
-          const employeesMap = new Map<string, any>();
-
-          for (const record of payrolls) {
-            if (!record?.employeeId) continue;
-
-            employeesMap.set(record.employeeId, {
-              bankCode: record.bankCode || record.bankName || 'N/A',
-              bankAccount: record.bankAccount || record.accountNumber || 'N/A',
-              taxId: record.taxId || 'N/A',
-            });
-          }
-
-          const result = BankDisbursementService.generateCSV(
-            payrolls,
-            employeesMap
+        for (const row of rows as any[]) {
+          const payrollResult: ColombiaPayrollResult = JSON.parse(
+            String(row.resultJson)
           );
 
+          payrolls.push(payrollResult);
+
+          employeesMap.set(String(row.employeeId), {
+            bankCode: row.bankName || 'N/A',
+            bankAccountType: row.bankAccountType || 'N/A',
+            bankAccount: row.bankAccountNumber || 'N/A',
+            taxId: row.taxId || 'N/A',
+          });
+        }
+
+        const csv = BankDisbursementService.generateCSV(
+          payrolls,
+          employeesMap
+        );
+
+        await audit(env, user, 'EXPORT', 'bank_file', periodId, String(periodRow.companyId));
+
+        return sendJson({ success: true, data: csv });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — PROFESIONALES (bolsa compartida)
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/professionals' &&
+        request.method === 'GET'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const q = (url.searchParams.get('q') || '').trim();
+        const likeParam = `%${q}%`;
+
+        const result = await env.DB
+          .prepare(`
+            SELECT *
+            FROM professionals
+            WHERE active = 1
+              AND (?1 = '' OR firstName LIKE ?2 OR lastName LIKE ?2 OR profession LIKE ?2)
+            ORDER BY firstName ASC, lastName ASC
+            LIMIT 50
+          `)
+          .bind(q, likeParam)
+          .all();
+
+        const rows = result.results || [];
+
+        if (user.role === 'SUPER_ADMIN') {
           return sendJson({
             success: true,
-            data: result,
+            data: rows.map(normalizeProfessional),
           });
+        }
+
+        // TENANT_ADMIN: sólo se revelan datos de contacto de los
+        // profesionales con los que ya existe un engagement propio.
+        const ids = rows.map((row: any) => String(row.id));
+        const ownIds = new Set<string>();
+
+        if (ids.length > 0) {
+          const placeholders = ids
+            .map((_, index) => `?${index + 2}`)
+            .join(', ');
+
+          const owned = await env.DB
+            .prepare(`
+              SELECT DISTINCT professionalId
+              FROM engagements
+              WHERE companyId = ?1
+                AND professionalId IN (${placeholders})
+            `)
+            .bind(user.companyId, ...ids)
+            .all();
+
+          for (const row of owned.results || []) {
+            ownIds.add(String((row as any).professionalId));
+          }
+        }
+
+        const data = rows.map((row: any) =>
+          ownIds.has(String(row.id))
+            ? normalizeProfessional(row)
+            : normalizePublicProfessional(row)
+        );
+
+        return sendJson({ success: true, data });
       }
+
+      if (
+        url.pathname === '/api/professionals' &&
+        request.method === 'POST'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const body = await request.json() as any;
+
+        const firstName = String(body.firstName || '').trim();
+        const lastName = String(body.lastName || '').trim();
+        const taxId = String(body.taxId || '').trim();
+        const profession = String(body.profession || '').trim();
+
+        if (!firstName || !lastName || !taxId || !profession) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Primer nombre, primer apellido, documento y profesión son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        // El dígito de verificación sólo aplica (y sólo se persiste)
+        // cuando el documento es NIT — mismo patrón que `companies`.
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
+        // Tarifa "sugerida": opcional — precarga el formulario al
+        // crear una vinculación, pero cada empresa la puede cambiar.
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
+        const id = `PRO-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        try {
+          await env.DB
+            .prepare(`
+              INSERT INTO professionals (
+                id, firstName, firstName2, lastName, lastName2, taxId,
+                documentType, dv, profession, email, phone, city,
+                bankName, bankAccountType, bankAccountNumber,
+                defaultHourlyRate, active, createdAt
+              )
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, ?17)
+            `)
+            .bind(
+              id,
+              firstName,
+              body.firstName2 || null,
+              lastName,
+              body.lastName2 || null,
+              taxId,
+              documentType,
+              dv,
+              profession,
+              body.email || null,
+              body.phone || null,
+              body.city || null,
+              body.bankName || null,
+              body.bankAccountType || null,
+              body.bankAccountNumber || null,
+              defaultHourlyRate,
+              createdAt
+            )
+            .run();
+        } catch {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe un profesional con ese documento.',
+            },
+            409
+          );
+        }
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(id)
+          .first();
+
+        await audit(env, user, 'CREATE', 'professional', id, null);
+
+        return sendJson(
+          { success: true, data: normalizeProfessional(row) },
+          201
+        );
+      }
+
+      const professionalMatch =
+        url.pathname.match(/^\/api\/professionals\/([^/]+)$/);
+
+      if (
+        professionalMatch &&
+        request.method === 'PUT'
+      ) {
+        const professionalId = decodeURIComponent(professionalMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            { success: false, error: 'Profesional no encontrado.' },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+
+        // `professionals` es una bolsa compartida entre empresas, no
+        // pertenece a ninguna: sólo puede editarlo quien ya tiene
+        // derecho a ver sus datos completos (SUPER_ADMIN, o una
+        // empresa con una vinculación activa con él) — misma regla
+        // que decide qué normalizador usa GET /api/professionals.
+        if (user.role !== 'SUPER_ADMIN') {
+          const ownEngagement = await env.DB
+            .prepare(`
+              SELECT id
+              FROM engagements
+              WHERE professionalId = ?1
+                AND companyId = ?2
+                AND active = 1
+            `)
+            .bind(professionalId, user.companyId)
+            .first();
+
+          if (!ownEngagement) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Sólo puedes editar profesionales con los que tu ' +
+                  'empresa tenga una vinculación activa.',
+              },
+              403
+            );
+          }
+        }
+
+        const body = await request.json() as any;
+
+        const firstName = String(body.firstName || '').trim();
+        const lastName = String(body.lastName || '').trim();
+        const taxId = String(body.taxId || '').trim();
+        const profession = String(body.profession || '').trim();
+
+        if (!firstName || !lastName || !taxId || !profession) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Primer nombre, primer apellido, documento y profesión son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const documentType = String(body.documentType || '13').trim();
+
+        if (!['13', '31', '22', '41', '42'].includes(documentType)) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'Tipo de documento inválido (13 Cédula, 31 NIT, 22 ' +
+                'Cédula de extranjería, 41 Pasaporte, 42 Documento ' +
+                'extranjero).',
+            },
+            400
+          );
+        }
+
+        const dv =
+          documentType === '31'
+            ? String(body.dv || '').trim() || null
+            : null;
+
+        let defaultHourlyRate: number | null = null;
+
+        if (body.defaultHourlyRate !== undefined && body.defaultHourlyRate !== null && body.defaultHourlyRate !== '') {
+          const rate = Number(body.defaultHourlyRate);
+
+          if (!Number.isFinite(rate) || rate <= 0) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La tarifa por hora debe ser mayor que cero.',
+              },
+              400
+            );
+          }
+
+          defaultHourlyRate = rate;
+        }
+
+        try {
+          await env.DB
+            .prepare(`
+              UPDATE professionals
+              SET
+                firstName = ?1,
+                firstName2 = ?2,
+                lastName = ?3,
+                lastName2 = ?4,
+                taxId = ?5,
+                documentType = ?6,
+                dv = ?7,
+                profession = ?8,
+                email = ?9,
+                phone = ?10,
+                city = ?11,
+                bankName = ?12,
+                bankAccountType = ?13,
+                bankAccountNumber = ?14,
+                defaultHourlyRate = ?15
+              WHERE id = ?16
+            `)
+            .bind(
+              firstName,
+              body.firstName2 || null,
+              lastName,
+              body.lastName2 || null,
+              taxId,
+              documentType,
+              dv,
+              profession,
+              body.email || null,
+              body.phone || null,
+              body.city || null,
+              body.bankName || null,
+              body.bankAccountType || null,
+              body.bankAccountNumber || null,
+              defaultHourlyRate,
+              professionalId
+            )
+            .run();
+        } catch {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe otro profesional con ese documento.',
+            },
+            409
+          );
+        }
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM professionals WHERE id = ?1`)
+          .bind(professionalId)
+          .first();
+
+        await audit(env, user, 'UPDATE', 'professional', professionalId, null);
+
+        return sendJson({ success: true, data: normalizeProfessional(row) });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — VINCULACIONES (engagements)
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/engagements' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const companyId = String(body.companyId || '').trim();
+        const professionalId = String(body.professionalId || '').trim();
+        const vinculationType = body.vinculationType as VinculationType;
+
+        if (!companyId || !professionalId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId y professionalId son obligatorios.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        if (vinculationType === 'EST_MISSION') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'La modalidad de Empresa de Servicios Temporales no está ' +
+                'disponible: requiere autorización del Ministerio del Trabajo.',
+            },
+            400
+          );
+        }
+
+        if (
+          vinculationType !== 'INDEPENDENT_SERVICES' &&
+          vinculationType !== 'PART_TIME_EMPLOYEE'
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error: 'vinculationType no es válido.',
+            },
+            400
+          );
+        }
+
+        const professional = await env.DB
+          .prepare(`SELECT id FROM professionals WHERE id = ?1 AND active = 1`)
+          .bind(professionalId)
+          .first();
+
+        if (!professional) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El profesional no existe o está inactivo.',
+            },
+            404
+          );
+        }
+
+        const company = await env.DB
+          .prepare(`SELECT id FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(companyId)
+          .first();
+
+        if (!company) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La empresa no existe o está inactiva.',
+            },
+            404
+          );
+        }
+
+        const hourlyRate = Number(body.hourlyRate);
+        const startDate = String(body.startDate || '').trim();
+
+        if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La tarifa por hora debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        if (!startDate) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La fecha de inicio es obligatoria.',
+            },
+            400
+          );
+        }
+
+        let retentionConcept: RetentionConcept | null = null;
+        let isIncomeTaxFiler: boolean | null = null;
+        let deliverableDescription: string | null = null;
+        let weeklyHours: number | null = null;
+        let contractType: string | null = null;
+
+        if (vinculationType === 'INDEPENDENT_SERVICES') {
+          retentionConcept = body.retentionConcept as RetentionConcept;
+
+          if (
+            retentionConcept !== 'SERVICIOS' &&
+            retentionConcept !== 'HONORARIOS'
+          ) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  "retentionConcept debe ser 'SERVICIOS' u 'HONORARIOS'.",
+              },
+              400
+            );
+          }
+
+          isIncomeTaxFiler = !!body.isIncomeTaxFiler;
+          deliverableDescription = String(
+            body.deliverableDescription || ''
+          ).trim();
+
+          if (!deliverableDescription) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  'Describe el objeto/entregable del contrato: es lo que ' +
+                  'sustenta la autonomía del contratista frente a un posible ' +
+                  'reclamo de "contrato realidad".',
+              },
+              400
+            );
+          }
+        } else {
+          weeklyHours = Number(body.weeklyHours);
+
+          if (
+            !Number.isFinite(weeklyHours) ||
+            weeklyHours <= 0 ||
+            weeklyHours > CONSTANTS_2026.LEGAL_WEEKLY_HOURS
+          ) {
+            return sendJson(
+              {
+                success: false,
+                error:
+                  `Las horas semanales deben estar entre 1 y ` +
+                  `${CONSTANTS_2026.LEGAL_WEEKLY_HOURS} (jornada máxima legal).`,
+              },
+              400
+            );
+          }
+
+          if (hourlyRate < MIN_HOURLY_WAGE) {
+            return sendJson(
+              {
+                success: false,
+                error: `La tarifa por hora no puede ser menor al salario mínimo legal por hora ($${MIN_HOURLY_WAGE.toFixed(2)}).`,
+              },
+              400
+            );
+          }
+
+          contractType = body.contractType || '1';
+        }
+
+        const id = `ENG-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO engagements (
+              id, professionalId, companyId, vinculationType, hourlyRate,
+              startDate, endDate, active, retentionConcept,
+              isIncomeTaxFiler, deliverableDescription, weeklyHours,
+              contractType, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13)
+          `)
+          .bind(
+            id,
+            professionalId,
+            companyId,
+            vinculationType,
+            hourlyRate,
+            startDate,
+            body.endDate || null,
+            retentionConcept,
+            isIncomeTaxFiler === null ? null : (isIncomeTaxFiler ? 1 : 0),
+            deliverableDescription,
+            weeklyHours,
+            contractType,
+            createdAt
+          )
+          .run();
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(id)
+          .first();
+
+        await audit(env, user, 'CREATE', 'engagement', id, companyId);
+
+        return sendJson(
+          { success: true, data: normalizeEngagement(row) },
+          201
+        );
+      }
+
+      if (
+        url.pathname === '/api/engagements' &&
+        request.method === 'GET'
+      ) {
+        const companyId = url.searchParams.get('companyId');
+
+        if (!companyId) {
+          return sendJson(
+            {
+              success: false,
+              error: 'companyId es obligatorio.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, companyId);
+
+        const result = await env.DB
+          .prepare(`
+            SELECT
+              e.*,
+              p.id AS p_id,
+              p.firstName AS p_firstName,
+              p.firstName2 AS p_firstName2,
+              p.lastName AS p_lastName,
+              p.lastName2 AS p_lastName2,
+              p.profession AS p_profession,
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType,
+              p.dv AS p_dv,
+              p.email AS p_email,
+              p.phone AS p_phone,
+              p.city AS p_city,
+              p.bankName AS p_bankName,
+              p.bankAccountType AS p_bankAccountType,
+              p.bankAccountNumber AS p_bankAccountNumber,
+              p.defaultHourlyRate AS p_defaultHourlyRate
+            FROM engagements e
+            JOIN professionals p ON p.id = e.professionalId
+            WHERE e.companyId = ?1
+              AND e.active = 1
+            ORDER BY p.firstName ASC, p.lastName ASC
+          `)
+          .bind(companyId)
+          .all();
+
+        // Una empresa con vinculación activa ya tiene derecho a ver
+        // los datos completos del profesional (misma regla que
+        // GET /api/professionals), así que aquí se incluyen todos —
+        // es lo que necesita el dashboard para poder editarlo.
+        const data = (result.results || []).map((row: any) => ({
+          ...normalizeEngagement(row),
+          professional: {
+            id: row.p_id,
+            firstName: row.p_firstName,
+            firstName2: row.p_firstName2,
+            lastName: row.p_lastName,
+            lastName2: row.p_lastName2,
+            profession: row.p_profession,
+            taxId: row.p_taxId,
+            documentType: row.p_documentType || '13',
+            dv: row.p_dv ?? null,
+            email: row.p_email ?? null,
+            phone: row.p_phone ?? null,
+            city: row.p_city ?? null,
+            bankName: row.p_bankName ?? null,
+            bankAccountType: row.p_bankAccountType ?? null,
+            bankAccountNumber: row.p_bankAccountNumber ?? null,
+            defaultHourlyRate:
+              row.p_defaultHourlyRate === null || row.p_defaultHourlyRate === undefined
+                ? null
+                : Number(row.p_defaultHourlyRate),
+          },
+        }));
+
+        return sendJson({ success: true, data });
+      }
+
+      const engagementMatch =
+        url.pathname.match(/^\/api\/engagements\/([^/]+)$/);
+
+      if (
+        engagementMatch &&
+        request.method === 'PUT'
+      ) {
+        const engagementId = decodeURIComponent(engagementMatch[1]);
+        const body = await request.json() as any;
+
+        const existing = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(engagementId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        const hourlyRate = Number(body.hourlyRate ?? existing.hourlyRate);
+
+        if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La tarifa por hora debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        // vinculationType, professionalId y companyId son inmutables:
+        // un cambio de modalidad o de empresa debe ser una vinculación
+        // nueva, no una edición, para no perder el rastro legal.
+        await env.DB
+          .prepare(`
+            UPDATE engagements
+            SET
+              hourlyRate = ?1,
+              endDate = ?2,
+              active = ?3,
+              weeklyHours = ?4,
+              deliverableDescription = ?5
+            WHERE id = ?6
+          `)
+          .bind(
+            hourlyRate,
+            body.endDate ?? existing.endDate ?? null,
+            body.active === undefined ? existing.active : (body.active ? 1 : 0),
+            body.weeklyHours ?? existing.weeklyHours ?? null,
+            body.deliverableDescription ?? existing.deliverableDescription ?? null,
+            engagementId
+          )
+          .run();
+
+        const row = await env.DB
+          .prepare(`SELECT * FROM engagements WHERE id = ?1`)
+          .bind(engagementId)
+          .first();
+
+        await audit(
+          env,
+          user,
+          'UPDATE',
+          'engagement',
+          engagementId,
+          String(existing.companyId)
+        );
+
+        return sendJson({ success: true, data: normalizeEngagement(row) });
+      }
+
+      if (
+        engagementMatch &&
+        request.method === 'DELETE'
+      ) {
+        const engagementId = decodeURIComponent(engagementMatch[1]);
+
+        const existing = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(existing.companyId));
+
+        await env.DB
+          .prepare(`UPDATE engagements SET active = 0 WHERE id = ?1`)
+          .bind(engagementId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'engagement',
+          engagementId,
+          String(existing.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Vinculación finalizada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — REGISTRO DE HORAS
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/time-entries' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
+        const hours = Number(body.hours);
+
+        if (!engagementId || !periodStart || !periodEnd) {
+          return sendJson(
+            {
+              success: false,
+              error: 'engagementId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        if (!Number.isFinite(hours) || hours <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Las horas deben ser mayores que cero.',
+            },
+            400
+          );
+        }
+
+        const engagement = await env.DB
+          .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
+          .bind(engagementId)
+          .first();
+
+        if (!engagement) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const id = `TE-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO time_entries (
+              id, engagementId, periodStart, periodEnd, hours, notes, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          `)
+          .bind(
+            id,
+            engagementId,
+            periodStart,
+            periodEnd,
+            hours,
+            body.notes || null,
+            createdAt
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'time_entry',
+          id,
+          String(engagement.companyId)
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id,
+              engagementId,
+              periodStart,
+              periodEnd,
+              hours,
+              notes: body.notes || null,
+              createdAt,
+            },
+          },
+          201
+        );
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — VERIFICACIÓN PILA (contratistas)
+       *
+       * Materializa el deber legal del contratante de verificar el
+       * pago de aportes a seguridad social del independiente antes
+       * de pagarle (Ley 1955/2019 art. 244).
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/pila-verifications' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const period = String(body.period || '').trim();
+        const declaredIbc = Number(body.declaredIbc);
+
+        if (!engagementId || !/^\d{4}-\d{2}$/.test(period)) {
+          return sendJson(
+            {
+              success: false,
+              error: "engagementId y period ('YYYY-MM') son obligatorios.",
+            },
+            400
+          );
+        }
+
+        if (!Number.isFinite(declaredIbc) || declaredIbc <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El IBC declarado debe ser mayor que cero.',
+            },
+            400
+          );
+        }
+
+        const engagement = await env.DB
+          .prepare(`
+            SELECT id, companyId, vinculationType
+            FROM engagements
+            WHERE id = ?1
+              AND active = 1
+          `)
+          .bind(engagementId)
+          .first();
+
+        if (!engagement) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        if (engagement.vinculationType !== 'INDEPENDENT_SERVICES') {
+          return sendJson(
+            {
+              success: false,
+              error:
+                'La verificación de PILA sólo aplica a contratistas independientes.',
+            },
+            400
+          );
+        }
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, String(engagement.companyId));
+
+        const id = `PILA-${crypto.randomUUID()}`;
+        const now = new Date().toISOString();
+
+        await env.DB
+          .prepare(`
+            INSERT INTO pila_verifications (
+              id, engagementId, period, declaredIbc, verified,
+              verifiedBy, verifiedAt, planillaReference, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)
+            ON CONFLICT(engagementId, period) DO UPDATE SET
+              declaredIbc = excluded.declaredIbc,
+              verified = 1,
+              verifiedBy = excluded.verifiedBy,
+              verifiedAt = excluded.verifiedAt,
+              planillaReference = excluded.planillaReference
+          `)
+          .bind(
+            id,
+            engagementId,
+            period,
+            declaredIbc,
+            user.id,
+            now,
+            body.planillaReference || null,
+            now
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'pila_verification',
+          engagementId,
+          String(engagement.companyId)
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Verificación de PILA registrada correctamente.',
+        });
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS — LIQUIDACIÓN
+       *
+       * Enruta automáticamente al motor y al documento DIAN correcto
+       * según la modalidad de la vinculación.
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/hourly/settlements/calculate' &&
+        request.method === 'POST'
+      ) {
+        const body = await request.json() as any;
+
+        const engagementId = String(body.engagementId || '').trim();
+        const periodStart = String(body.periodStart || '').trim();
+        const periodEnd = String(body.periodEnd || '').trim();
+
+        if (!engagementId || !periodStart || !periodEnd) {
+          return sendJson(
+            {
+              success: false,
+              error: 'engagementId, periodStart y periodEnd son obligatorios.',
+            },
+            400
+          );
+        }
+
+        const engagementRow = await env.DB
+          .prepare(`
+            SELECT
+              e.*,
+              p.firstName AS p_firstName,
+              p.firstName2 AS p_firstName2,
+              p.lastName AS p_lastName,
+              p.lastName2 AS p_lastName2,
+              p.taxId AS p_taxId,
+              p.documentType AS p_documentType
+            FROM engagements e
+            JOIN professionals p ON p.id = e.professionalId
+            WHERE e.id = ?1
+              AND e.active = 1
+          `)
+          .bind(engagementId)
+          .first();
+
+        if (!engagementRow) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Vinculación no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        const engagement = normalizeEngagement(engagementRow);
+
+        requireRole(user, ['TENANT_ADMIN']);
+        requireCompanyAccess(user, engagement.companyId);
+
+        // Cada liquidación gasta un consecutivo DIAN (nómina electrónica o
+        // documento soporte): un mismo tramo no se liquida dos veces.
+        const overlapping = await env.DB
+          .prepare(`
+            SELECT periodStart, periodEnd
+            FROM settlements
+            WHERE engagementId = ?1
+              AND periodStart <= ?3
+              AND periodEnd >= ?2
+            LIMIT 1
+          `)
+          .bind(engagementId, periodStart, periodEnd)
+          .first();
+
+        if (overlapping) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                `Esta vinculación ya tiene una liquidación del ${(overlapping as any).periodStart} ` +
+                `al ${(overlapping as any).periodEnd}; no se puede liquidar dos veces el mismo periodo.`,
+            },
+            409
+          );
+        }
+
+        const hoursResult = await env.DB
+          .prepare(`
+            SELECT COALESCE(SUM(hours), 0) AS totalHours
+            FROM time_entries
+            WHERE engagementId = ?1
+              AND periodStart >= ?2
+              AND periodEnd <= ?3
+          `)
+          .bind(engagementId, periodStart, periodEnd)
+          .first();
+
+        const totalHours = Number((hoursResult as any)?.totalHours ?? 0);
+
+        if (totalHours <= 0) {
+          return sendJson(
+            {
+              success: false,
+              error: 'No hay horas registradas para ese periodo.',
+            },
+            400
+          );
+        }
+
+        const companyRow = await env.DB
+          .prepare(`SELECT nit, dv, name FROM companies WHERE id = ?1 AND active = 1`)
+          .bind(engagement.companyId)
+          .first();
+
+        if (!companyRow) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Empresa no encontrada o inactiva.',
+            },
+            404
+          );
+        }
+
+        if (engagement.vinculationType === 'EST_MISSION') {
+          return sendJson(
+            {
+              success: false,
+              error: 'Módulo EST no disponible.',
+            },
+            400
+          );
+        }
+
+        let grossAmount: number;
+        let retentionAmount: number;
+        let netAmount: number;
+        let calculation: unknown;
+        let dianDocument: unknown;
+
+        try {
+          if (engagement.vinculationType === 'PART_TIME_EMPLOYEE') {
+            const input: PartTimeEmployeeInput = {
+              companyId: engagement.companyId,
+              engagementId: engagement.id,
+              professionalId: engagement.professionalId,
+              firstName: String(engagementRow.p_firstName || ''),
+              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+              lastName: String(engagementRow.p_lastName || ''),
+              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+              taxId: String(engagementRow.p_taxId || ''),
+              hourlyRate: engagement.hourlyRate,
+              weeklyHours: Number(engagement.weeklyHours || 0),
+              hoursWorked: totalHours,
+            };
+
+            const payrollResult = PartTimeEmployeeEngine.calculate(input);
+
+            const employerInfo = {
+              nit: String(companyRow.nit || ''),
+              dv: String(companyRow.dv || '0'),
+              companyName: String(companyRow.name || ''),
+              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+            };
+
+            const nominaConsecutive = await getNextDianConsecutive(
+              env.DB,
+              engagement.companyId,
+              'NOMINA'
+            );
+
+            const xmlResult = await DianNominaXmlService.generateDSPNE(
+              payrollResult,
+              employerInfo,
+              {
+                typeDocument: '13',
+                typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
+                  ? String(engagement.contractType)
+                  : '2') as DianEmployeeExtraInfo['typeContract'],
+                paymentMethod: '42',
+              },
+              nominaConsecutive
+            );
+
+            grossAmount = payrollResult.grossEarnings;
+            retentionAmount = payrollResult.employeeDeductions.totalDeductions;
+            netAmount = payrollResult.netPay;
+            calculation = payrollResult;
+            dianDocument = xmlResult;
+
+          } else {
+            // INDEPENDENT_SERVICES
+            const period = periodStart.substring(0, 7);
+
+            const verification = await env.DB
+              .prepare(`
+                SELECT verified
+                FROM pila_verifications
+                WHERE engagementId = ?1
+                  AND period = ?2
+              `)
+              .bind(engagementId, period)
+              .first();
+
+            if (!verification || !(verification as any).verified) {
+              return sendJson(
+                {
+                  success: false,
+                  error:
+                    'Debes verificar el pago de seguridad social del ' +
+                    `contratista para el periodo ${period} antes de liquidar ` +
+                    '(deber legal del contratante, Ley 1955/2019 art. 244).',
+                },
+                400
+              );
+            }
+
+            const input: IndependentContractorInput = {
+              companyId: engagement.companyId,
+              engagementId: engagement.id,
+              professionalId: engagement.professionalId,
+              firstName: String(engagementRow.p_firstName || ''),
+              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+              lastName: String(engagementRow.p_lastName || ''),
+              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+              taxId: String(engagementRow.p_taxId || ''),
+              hourlyRate: engagement.hourlyRate,
+              hoursWorked: totalHours,
+              retentionConcept:
+                (engagement.retentionConcept as RetentionConcept) || 'SERVICIOS',
+              isIncomeTaxFiler: !!engagement.isIncomeTaxFiler,
+              // Sólo aplica (y es obligatoria) para concepto HONORARIOS:
+              // la tabla es progresiva por tramos de UVT, así que la
+              // captura quien liquida en vez de calcularla el sistema.
+              manualRetentionRate:
+                body.retentionRate === undefined || body.retentionRate === null
+                  ? undefined
+                  : Number(body.retentionRate),
+            };
+
+            const settlementResult = IndependentContractorEngine.calculate(input);
+
+            const payerInfo: DocumentoSoportePayerInfo = {
+              nit: String(companyRow.nit || ''),
+              dv: String(companyRow.dv || '0'),
+              companyName: String(companyRow.name || ''),
+              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
+              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+            };
+
+            const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
+              typeDocument:
+                (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
+                '13',
+              concept: settlementResult.retentionConcept,
+            };
+
+            const soporteConsecutive = await getNextDianConsecutive(
+              env.DB,
+              engagement.companyId,
+              'DOCUMENTO_SOPORTE'
+            );
+
+            const documentoSoporte = await DocumentoSoporteService.generate(
+              settlementResult,
+              payerInfo,
+              beneficiaryInfo,
+              soporteConsecutive
+            );
+
+            grossAmount = settlementResult.grossAmount;
+            retentionAmount = settlementResult.retentionAmount;
+            netAmount = settlementResult.netAmount;
+            calculation = settlementResult;
+            dianDocument = documentoSoporte;
+          }
+        } catch (engineError) {
+          if (
+            engineError instanceof PartTimeEmployeeEngineError ||
+            engineError instanceof IndependentContractorEngineError
+          ) {
+            return sendJson(
+              { success: false, error: engineError.message },
+              400
+            );
+          }
+
+          throw engineError;
+        }
+
+        const settlementId = `SET-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        const resultJson = JSON.stringify({ calculation, dianDocument });
+
+        await env.DB
+          .prepare(`
+            INSERT INTO settlements (
+              id, engagementId, periodStart, periodEnd, totalHours,
+              grossAmount, retentionAmount, netAmount, resultJson, createdAt
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          `)
+          .bind(
+            settlementId,
+            engagementId,
+            periodStart,
+            periodEnd,
+            totalHours,
+            grossAmount,
+            retentionAmount,
+            netAmount,
+            resultJson,
+            createdAt
+          )
+          .run();
+
+        await audit(
+          env,
+          user,
+          'CREATE',
+          'settlement',
+          settlementId,
+          engagement.companyId
+        );
+
+        return sendJson(
+          {
+            success: true,
+            data: {
+              id: settlementId,
+              engagementId,
+              periodStart,
+              periodEnd,
+              totalHours,
+              grossAmount,
+              retentionAmount,
+              netAmount,
+              calculation,
+              dianDocument,
+            },
+          },
+          201
+        );
+      }
+
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS - ANULAR LIQUIDACIÓN
+       *
+       * Permite rehacer una liquidación mal hecha (el cálculo rechaza
+       * un tramo ya liquidado). El documento DIAN generado no se ha
+       * transmitido (la transmisión aún no existe); queda el registro
+       * en la actividad.
+       * ============================================================
+       */
+
+      const hourlySettlementMatch = url.pathname.match(/^\/api\/hourly\/settlements\/([^/]+)$/);
+
+      if (hourlySettlementMatch && request.method === 'DELETE') {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const settlementId = decodeURIComponent(hourlySettlementMatch[1]);
+        const row = await env.DB
+          .prepare(`
+            SELECT s.id, g.companyId
+            FROM settlements s
+            JOIN engagements g ON g.id = s.engagementId
+            WHERE s.id = ?1
+          `)
+          .bind(settlementId)
+          .first();
+
+        if (!row) {
+          return sendJson({ success: false, error: 'Liquidación no encontrada.' }, 404);
+        }
+
+        requireCompanyAccess(user, String(row.companyId));
+
+        await env.DB.prepare(`DELETE FROM settlements WHERE id = ?1`).bind(settlementId).run();
+        await audit(env, user, 'DELETE', 'settlement', settlementId, String(row.companyId));
+
+        return sendJson({ success: true, message: 'Liquidación anulada.' });
+      }
+
+      /*
+       * ============================================================
+       * USUARIOS - LISTAR
+       *
+       * SUPER_ADMIN ve todos los usuarios; TENANT_ADMIN sólo los de
+       * su propia empresa.
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/users' &&
+        request.method === 'GET'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const result = await env.DB
+          .prepare(`
+            SELECT id, email, role, companyId, employeeId, active, createdAt
+            FROM users
+            WHERE active = 1
+              AND (?1 IS NULL OR companyId = ?1)
+            ORDER BY email ASC
+          `)
+          .bind(
+            user.role === 'SUPER_ADMIN'
+              ? url.searchParams.get('companyId') || null
+              : user.companyId
+          )
+          .all();
+
+        return sendJson({
+          success: true,
+          data: result.results || [],
+        });
+      }
+
+      /*
+       * ============================================================
+       * USUARIOS - CREAR
+       *
+       * Da de alta el acceso de un administrador de empresa (o de
+       * otro SUPER_ADMIN). El enlace con la cuenta de Firebase se
+       * completa solo, en el primer login, por email.
+       * ============================================================
+       */
+
+      if (
+        url.pathname === '/api/users' &&
+        request.method === 'POST'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const body = await request.json() as any;
+
+        const email = String(body.email || '').trim().toLowerCase();
+        const role = body.role as UserRole;
+
+        if (!email) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El correo es obligatorio.',
+            },
+            400
+          );
+        }
+
+        if (
+          role !== 'SUPER_ADMIN' &&
+          role !== 'TENANT_ADMIN' &&
+          role !== 'EMPLOYEE'
+        ) {
+          return sendJson(
+            {
+              success: false,
+              error: 'El rol indicado no es válido.',
+            },
+            400
+          );
+        }
+
+        if (role === 'SUPER_ADMIN') {
+          // Sólo un SUPER_ADMIN puede crear a otro.
+          requireRole(user, []);
+        }
+
+        const requiresCompany =
+          role === 'TENANT_ADMIN' || role === 'EMPLOYEE';
+
+        const companyId = body.companyId
+          ? String(body.companyId).trim()
+          : null;
+
+        if (requiresCompany && !companyId) {
+          return sendJson(
+            {
+              success: false,
+              error: `El rol ${role} requiere una empresa (companyId).`,
+            },
+            400
+          );
+        }
+
+        if (requiresCompany) {
+          // Un TENANT_ADMIN sólo puede dar de alta usuarios de su
+          // propia empresa; SUPER_ADMIN puede para cualquiera.
+          requireCompanyAccess(user, companyId);
+
+          const company = await env.DB
+            .prepare(`
+              SELECT id
+              FROM companies
+              WHERE id = ?1
+                AND active = 1
+            `)
+            .bind(companyId)
+            .first();
+
+          if (!company) {
+            return sendJson(
+              {
+                success: false,
+                error: 'La empresa indicada no existe o está inactiva.',
+              },
+              404
+            );
+          }
+        }
+
+        // Un EMPLOYEE entra al portal del empleado: debe quedar enlazado
+        // a un empleado de su misma empresa, o vería datos ajenos.
+        const employeeId =
+          role === 'EMPLOYEE' ? String(body.employeeId || '').trim() : null;
+
+        if (role === 'EMPLOYEE') {
+          const employee = employeeId
+            ? await env.DB
+                .prepare(`SELECT id FROM employees WHERE id = ?1 AND companyId = ?2`)
+                .bind(employeeId, companyId)
+                .first()
+            : null;
+
+          if (!employee) {
+            return sendJson(
+              {
+                success: false,
+                error: 'Selecciona un empleado de esta empresa para el usuario.',
+              },
+              400
+            );
+          }
+        }
+
+        const existingUser = await env.DB
+          .prepare(`SELECT id, active FROM users WHERE email = ?1`)
+          .bind(email)
+          .first<{ id: string; active: number }>();
+
+        if (existingUser && existingUser.active) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Ya existe un usuario con ese correo.',
+            },
+            409
+          );
+        }
+
+        // Un correo desactivado antes se reactiva con el nuevo rol y
+        // empresa (el correo es único en la tabla).
+        const id = existingUser ? existingUser.id : `USR-${crypto.randomUUID()}`;
+        const createdAt = new Date().toISOString();
+
+        if (existingUser) {
+          await env.DB
+            .prepare(`
+              UPDATE users
+              SET role = ?2, companyId = ?3, employeeId = ?4, active = 1
+              WHERE id = ?1
+            `)
+            .bind(id, role, companyId, employeeId)
+            .run();
+        } else {
+          await env.DB
+            .prepare(`
+              INSERT INTO users (
+                id, email, role, companyId, employeeId, active, createdAt
+              )
+              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+            `)
+            .bind(id, email, role, companyId, employeeId, createdAt)
+            .run();
+        }
+
+        await audit(env, user, 'CREATE', 'user', id, companyId);
+
+        return sendJson(
+          {
+            success: true,
+            data: { id, email, role, companyId },
+          },
+          201
+        );
+      }
+
+      /*
+       * ============================================================
+       * USUARIOS - ELIMINAR (deshabilitar acceso)
+       * ============================================================
+       */
+
+      const userMatch =
+        url.pathname.match(/^\/api\/users\/([^/]+)$/);
+
+      if (
+        userMatch &&
+        request.method === 'DELETE'
+      ) {
+        requireRole(user, ['TENANT_ADMIN']);
+
+        const targetUserId = decodeURIComponent(userMatch[1]);
+
+        if (targetUserId === user.id) {
+          return sendJson(
+            {
+              success: false,
+              error: 'No puedes quitarte el acceso a ti mismo.',
+            },
+            400
+          );
+        }
+
+        const existing = await env.DB
+          .prepare(`
+            SELECT id, companyId
+            FROM users
+            WHERE id = ?1
+              AND active = 1
+          `)
+          .bind(targetUserId)
+          .first();
+
+        if (!existing) {
+          return sendJson(
+            {
+              success: false,
+              error: 'Usuario no encontrado.',
+            },
+            404
+          );
+        }
+
+        // Un TENANT_ADMIN sólo puede deshabilitar usuarios de su
+        // propia empresa (y nunca a un SUPER_ADMIN, que no tiene
+        // companyId).
+        requireCompanyAccess(user, existing.companyId as string | null);
+
+        await env.DB
+          .prepare(`
+            UPDATE users
+            SET active = 0
+            WHERE id = ?1
+          `)
+          .bind(targetUserId)
+          .run();
+
+        await audit(
+          env,
+          user,
+          'DELETE',
+          'user',
+          targetUserId,
+          existing.companyId as string | null
+        );
+
+        return sendJson({
+          success: true,
+          message: 'Usuario deshabilitado correctamente.',
+        });
+      }
+
+      const benefitsResponse = await handleBenefitRoutes(request, url, env, user);
+      if (benefitsResponse) return benefitsResponse;
+      const certificatesResponse = await handleCertificateRoutes(request, url, env, user);
+      if (certificatesResponse) return certificatesResponse;
+
+      const importsResponse = await handleImportRoutes(request, url, env, user);
+      if (importsResponse) return importsResponse;
+
+      const pilaResponse = await handlePilaRoutes(request, url, env, user);
+      if (pilaResponse) return pilaResponse;
+
+      const closeReviewResponse = await handleCloseReviewRoutes(request, url, env, user);
+      if (closeReviewResponse) return closeReviewResponse;
+
+      const accountingResponse = await handleAccountingRoutes(request, url, env, user);
+      if (accountingResponse) return accountingResponse;
+
+      const auditLogResponse = await handleAuditLogRoutes(request, url, env, user);
+      if (auditLogResponse) return auditLogResponse;
+
+      const overviewResponse = await handleOverviewRoutes(request, url, env, user);
+      if (overviewResponse) return overviewResponse;
 
       /*
        * ============================================================
@@ -3853,15 +4095,22 @@ export default {
       );
 
     } catch (error) {
+      if (error instanceof HttpError) {
+        return sendJson(
+          {
+            success: false,
+            error: error.message,
+          },
+          error.status
+        );
+      }
+
       console.error('Worker error:', error);
 
       return sendJson(
         {
           success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : 'Error interno del servidor.',
+          error: 'Error interno del servidor.',
         },
         500
       );
