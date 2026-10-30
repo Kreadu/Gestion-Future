@@ -250,3 +250,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - CUNE = SHA-384(... + TipoXML 102 + PIN + TipAmb); SoftwareSC = SHA-384(SoftwareID + PIN + número); sin CUNE simulado; hora de Colombia, periodo real (antes día 30 fijo), fecha de ingreso, ambiente por `DIAN_AMBIENTE` (2 = habilitación por defecto) y nodo `ext:UBLExtensions` para la firma. Se portó `xmlC14n.ts` de `wip/dian-firma-envio`.
 - Verificación: `tests/dianCune.test.ts`; Jest 28 suites / 269 pruebas.
+
+## DIAN 2/4: firma XAdES-EPES (2026-10-30)
+
+- `src/services/dianSigner.ts`: abre el `.p12` (node-forge), firma con WebCrypto RSA-SHA256, C14N inclusivo, tres referencias (documento enveloped, KeyInfo, SignedProperties) y política de firma DIAN v2 con su hash.
+- Verificación: `tests/dianSigner.test.ts` comprueba la firma con `xml-crypto` (verificador independiente) y que una alteración la invalida; certificado autofirmado de prueba en `tests/fixtures`.
