@@ -56,16 +56,19 @@ describe('GET /api/audit-log', () => {
     const entries = res.json.data.entries;
     const actions = entries.map((e: any) => `${e.action} ${e.entity}`);
 
-    expect(actions.slice(0, 5)).toEqual([
-      'EXPORT accounting',
-      'EXPORT pila',
-      'EXPORT bank_file',
+    // Acciones del mismo milisegundo pueden salir en cualquier orden
+    // entre sí: se comparan las cinco últimas como conjunto.
+    expect([...actions.slice(0, 5)].sort()).toEqual([
       'CLOSE payroll_period',
+      'EXPORT accounting',
+      'EXPORT bank_file',
+      'EXPORT pila',
       'GENERATE_XML payroll_settlement',
     ]);
     expect(actions).toContain('CREATE payroll_period');
-    expect(entries[0]).toMatchObject({ email: TENANT_A, entityId: periodId, companyId: a.id });
-    expect(entries[0].description).toBe('Descargó el comprobante contable');
+    const accounting = entries.find((e: any) => e.entity === 'accounting');
+    expect(accounting).toMatchObject({ email: TENANT_A, entityId: periodId, companyId: a.id });
+    expect(accounting.description).toBe('Descargó el comprobante contable');
     expect(entries.every((e: any, i: number) => i === 0 || e.at <= entries[i - 1].at)).toBe(true);
   });
 
