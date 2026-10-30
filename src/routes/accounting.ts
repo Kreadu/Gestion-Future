@@ -9,7 +9,7 @@
  */
 
 import { sendJson } from '../http';
-import { requireRole, requireCompanyAccess, type AuthUser } from '../auth/authz';
+import { requireRole, requireCompanyAccess, audit, type AuthUser } from '../auth/authz';
 import { buildPayrollJournal } from '../services/payrollAccounting';
 import { employeeName } from './periodEmployees';
 
@@ -156,6 +156,11 @@ export async function handleAccountingRoutes(
 
   warnings.push(...journal.warnings);
   warnings.push('Cuentas PUC de uso general y administradoras por su código PILA: confírmalas con tu contador antes de importar.');
+
+  // La vista previa también usa esta ruta: sólo la descarga (?download=1) queda registrada.
+  if (url.searchParams.get('download') === '1') {
+    await audit(env as any, user, 'EXPORT', 'accounting', String(period.id), String(period.companyId));
+  }
 
   return sendJson({
     success: true,

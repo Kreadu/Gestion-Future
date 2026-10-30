@@ -1,6 +1,6 @@
 // Dashboard (React). Se compila a JS con scripts/build-dashboard.mjs;
 // React, ReactDOM y firebase llegan como globales desde el HTML de src/dashboard.ts.
-const { useEffect, useState } = React;
+const { useEffect, useRef, useState } = React;
 
 firebase.initializeApp(window.__FIREBASE_CONFIG__);
 
@@ -3054,6 +3054,13 @@ function App({ me, onSignOut }) {
         >
           📨 Solicitudes
         </button>
+
+        <button
+          className={'btn' + (activeSection === 'activity' ? ' btn-primary' : '')}
+          onClick={function() { setActiveSection('activity'); }}
+        >
+          🗂️ Actividad
+        </button>
       </div>
 
       {error && (
@@ -3076,6 +3083,10 @@ function App({ me, onSignOut }) {
           onError={setError}
           onSuccess={setSuccess}
         />
+      )}
+
+      {activeSection === 'activity' && (
+        <ActivitySection company={selectedCompany} onError={setError} />
       )}
 
       {activeSection === 'requests' && (

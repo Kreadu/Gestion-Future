@@ -267,7 +267,7 @@ async function decide(env: RouteEnv, user: AuthUser, id: string, action: 'approv
       .run();
   }
 
-  await audit(env as any, user, 'UPDATE', 'employee_request', id, String(row.companyId));
+  await audit(env as any, user, action === 'approve' ? 'APPROVE' : 'REJECT', 'employee_request', id, String(row.companyId));
 
   const updated = await env.DB.prepare(`SELECT * FROM employee_requests WHERE id = ?1`).bind(id).first<any>();
   return sendJson({ success: true, data: publicRequest(updated) });
@@ -323,7 +323,7 @@ export async function handleRequestRoutes(
       return sendJson({ success: false, error: 'Sólo se puede cancelar una solicitud pendiente.' }, 409);
     }
 
-    await audit(env as any, user, 'UPDATE', 'employee_request', id, String(row.companyId));
+    await audit(env as any, user, 'CANCEL', 'employee_request', id, String(row.companyId));
     return sendJson({ success: true, message: 'Solicitud cancelada.' });
   }
 

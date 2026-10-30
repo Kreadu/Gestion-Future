@@ -17,6 +17,17 @@ function AccountingModal({ period, onClose }) {
     return function() { cancelled = true; };
   }, [period.id]);
 
+  // Se vuelve a pedir con download=1 para que la descarga (y no la
+  // vista previa) quede en el registro de actividad.
+  async function download() {
+    try {
+      const r = await api('/api/payroll-periods/' + encodeURIComponent(period.id) + '/accounting?download=1');
+      downloadText(r.data.fileName, '\ufeff' + r.data.content, 'text/csv;charset=utf-8');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   return (
     <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-label="Comprobante contable" style={{ width: 'min(640px, 100%)' }}>
@@ -65,7 +76,7 @@ function AccountingModal({ period, onClose }) {
           {data && (
             <button
               className="btn btn-primary"
-              onClick={function() { downloadText(data.fileName, '﻿' + data.content, 'text/csv;charset=utf-8'); }}
+              onClick={download}
             >
               ⬇️ Descargar comprobante (CSV)
             </button>

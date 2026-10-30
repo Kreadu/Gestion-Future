@@ -36,6 +36,7 @@ import { handleImportRoutes } from './routes/imports';
 import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
 import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
 import { handleAccountingRoutes } from './routes/accounting';
+import { handleAuditLogRoutes } from './routes/auditLog';
 import { handlePortalRoutes } from './routes/portal';
 import { handleRequestRoutes } from './routes/requests';
 import { getDashboardHtml } from './dashboard';
@@ -1718,7 +1719,7 @@ export default {
         await audit(
           env,
           user,
-          'UPDATE',
+          'CLOSE',
           'payroll_period',
           periodId,
           String(periodRow.companyId)
@@ -2142,7 +2143,7 @@ export default {
         await audit(
           env,
           user,
-          existing ? 'UPDATE' : 'CREATE',
+          existing ? 'RECALCULATE' : 'CREATE',
           'payroll_settlement',
           settlementId,
           employee.companyId
@@ -2313,7 +2314,7 @@ export default {
         await audit(
           env,
           user,
-          'UPDATE',
+          'GENERATE_XML',
           'payroll_settlement',
           settlementId,
           String(settlementRow.companyId)
@@ -2405,6 +2406,8 @@ export default {
           payrolls,
           employeesMap
         );
+
+        await audit(env, user, 'EXPORT', 'bank_file', periodId, String(periodRow.companyId));
 
         return sendJson({ success: true, data: csv });
       }
@@ -4065,6 +4068,9 @@ export default {
 
       const accountingResponse = await handleAccountingRoutes(request, url, env, user);
       if (accountingResponse) return accountingResponse;
+
+      const auditLogResponse = await handleAuditLogRoutes(request, url, env, user);
+      if (auditLogResponse) return auditLogResponse;
 
       /*
        * ============================================================

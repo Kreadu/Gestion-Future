@@ -193,3 +193,15 @@ Tercera brecha del issue #11 (Buk y Factorial tienen autoservicio con aprobació
 - Revisión de código aplicada: FK de `leaveId` que impedía borrar la novedad, rollback si `createEmployeeLeave` lanza excepción, fechas imposibles, hora de Colombia, solicitudes que pasan del retiro, rango sin tope, saldo que ignoraba otras pendientes, consultas en serie en la bandeja y verificación de rol antes de buscar la solicitud. Pendiente: `PUT /api/employee-leaves/:id` mantiene su propia copia de validaciones (anterior a este cambio).
 - El paso E2E del permiso usa la fecha de hoy y Ana se retira el 2026-12-31 en el recorrido: a partir de 2027 hay que actualizar las fechas fijas del E2E.
 - Verificación: `tests/employeeRequests.test.ts` (11 pruebas, escritas antes del código); Jest 24 suites / 243 pruebas; E2E Firefox 23/23 con la solicitud en el portal y la aprobación del administrador.
+
+## Registro de actividad consultable (2026-10-30)
+
+Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había dónde verla y faltaban acciones clave.
+
+- `GET /api/audit-log?companyId=&action=&entity=&from=&to=&limit=&before=` (`src/routes/auditLog.ts`): la más reciente primero, con descripción en español de cada acción, paginación por cursor `at|id` (`nextBefore`) y filtros. El administrador de empresa sólo ve la suya; el SUPER_ADMIN puede omitir `companyId` y ver toda la plataforma (con el nombre de cada empresa). `from`/`to` son días de Colombia (UTC-5).
+- Acciones nuevas o con nombre propio: `CLOSE` (cierre de periodo, antes `UPDATE`), `GENERATE_XML` (antes `UPDATE`), `RECALCULATE` (recálculo, antes `UPDATE`), `EXPORT` de archivo bancario, PILA y comprobante contable, `APPROVE`/`REJECT`/`CANCEL` de solicitudes.
+  - PILA y comprobante: la vista previa no se registra; sólo la descarga (`?download=1`, que el botón "Descargar" vuelve a pedir).
+- Migración `0014_audit_log_actions.sql`: convierte los cierres viejos (`UPDATE payroll_period`, la única acción UPDATE sobre periodos) a `CLOSE` e indexa `(companyId, at, id)` y `(at, id)`. Los `UPDATE payroll_settlement` antiguos no se pueden separar entre recálculo y XML: se describen como "Recalculó una liquidación o generó su XML DIAN".
+- Interfaz: sección "🗂️ Actividad" (`src/dashboard/components/activity.jsx`) con filtros por acción y fechas, "Cargar más" y descarga CSV protegida contra fórmulas de Excel.
+- Revisión de código aplicada: descargas registradas al abrir la vista previa, fechas en UTC, nombres viejos mal descritos, respuestas que llegaban fuera de orden en la pantalla, datos de otra empresa tras un error, consulta sin índice, opciones y descripciones faltantes, CSV sin protección. Se descartó un contador para ordenar registros del mismo milisegundo (no servía entre servidores y el reloj sí avanza tras cada escritura).
+- Verificación: `tests/auditLog.test.ts` (5 pruebas); Jest 25 suites / 248 pruebas; E2E Firefox 24/24 con el paso "Actividad: cierre y descargas quedan registrados".

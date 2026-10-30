@@ -14,6 +14,7 @@ import {
   requireRole,
   requireCompanyAccess,
   HttpError,
+  audit,
   type AuthUser,
 } from '../auth/authz';
 import { buildPilaFile, type PilaEmployeeInput } from '../services/pilaFile';
@@ -253,6 +254,11 @@ export async function handlePilaRoutes(
     periodEnd,
     employees,
   });
+
+  // La vista previa también usa esta ruta: sólo la descarga (?download=1) queda registrada.
+  if (url.searchParams.get('download') === '1') {
+    await audit(env as any, user, 'EXPORT', 'pila', String(period.id), String(period.companyId));
+  }
 
   return sendJson({
     success: true,

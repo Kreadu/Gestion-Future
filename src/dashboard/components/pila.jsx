@@ -145,6 +145,17 @@ function PilaModal({ period, onClose }) {
     return function() { window.removeEventListener('keydown', onKey); };
   }, []);
 
+  // Se vuelve a pedir con download=1 para que la descarga (y no la
+  // vista previa) quede en el registro de actividad.
+  async function download() {
+    try {
+      const r = await api('/api/payroll-periods/' + encodeURIComponent(period.id) + '/pila?download=1');
+      downloadText(r.data.fileName, r.data.content, 'text/plain;charset=us-ascii');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   const rows = data ? [
     ['Pensión', data.totals.pension],
     ['Fondo de Solidaridad Pensional', data.totals.fsp],
@@ -209,7 +220,7 @@ function PilaModal({ period, onClose }) {
           {data && (
             <button
               className="btn btn-primary"
-              onClick={function() { downloadText(data.fileName, data.content, 'text/plain;charset=us-ascii'); }}
+              onClick={download}
             >
               ⬇️ Descargar archivo PILA
             </button>

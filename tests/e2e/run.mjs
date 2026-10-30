@@ -337,6 +337,15 @@ try {
     await page.locator('td', { hasText: 'Aprobada' }).waitFor();
   });
 
+  await step('Actividad: cierre y descargas quedan registrados', async () => {
+    await page.getByRole('button', { name: /Actividad/ }).click();
+    await expectText(page, 'Cerró el periodo de nómina');
+    await page.locator('#activity-action').selectOption('EXPORT');
+    await expectText(page, 'Descargó el comprobante contable');
+    await expectText(page, 'Descargó el archivo PILA');
+    await page.locator('#activity-action').selectOption('');
+  });
+
   await step('Importar un empleado desde Excel y validar la vista previa', async () => {
     await page.getByRole('button', { name: /Nómina mensual/ }).click();
     await page.getByRole('button', { name: /Importar desde Excel/ }).click();
