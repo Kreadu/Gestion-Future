@@ -50,6 +50,61 @@ Este archivo resume el estado comprobable del repositorio para que una persona u
    - `wip/logos-accesibilidad` en `4dcaec0`: avance parcial en logos/accesibilidad, con cambios de API, migración `0012_company_logos.sql` y pruebas; marcado como incompleto y sin probar.
 5. **Actualizar README**: `README.md` todavía dice que el rol `EMPLOYEE` y el portal están pendientes (alrededor de la línea 89), lo cual contradice el portal que ya está en `6041e1d`.
 
+## Revisión funcional y comparación de producto (2026-10-29)
+
+### Alcance y evidencia
+
+Se revisó la rama actual `feat/employee-leaves` en el commit `8e052cb`, su bitácora previa, README, pantallas del dashboard y las pruebas existentes. Se ejecutaron las comprobaciones locales disponibles:
+
+- `npx tsc --noEmit` y `npm run build:dashboard`: pasaron.
+- `npx jest --runInBand --roots tests --watchman=false --forceExit`: 20 suites, 208 pruebas pasaron.
+- `python3 tests/test_colombia_payroll_and_dian.py`: 4 pruebas pasaron.
+- `npm run e2e`: no alcanzó a iniciar Firefox. El servidor de prueba falló en `listen` con `EPERM` al enlazar `0.0.0.0:8859`, antes de abrir el navegador.
+- Se intentó Chrome/Chromium con Playwright. La revisión encontró Chromium en caché, pero Playwright 1.56.1 esperaba otra revisión; al indicar el ejecutable disponible, Chromium terminó con `SIGTRAP` y un error de socket restringido (`setsockopt: Operation not permitted`). Por tanto tampoco hubo una sesión de interfaz en Chrome.
+- `git diff --check`: pasó con la bitácora actualizada.
+
+La aplicación no pudo probarse interactivamente en Firefox ni Chrome en este entorno. Las pruebas de API/unidad y las comprobaciones de compilación no sustituyen esa prueba de navegador. No se verificó producción ni una base de datos real.
+
+### Hallazgos nuevos
+
+1. **Transmisión a DIAN: acción que aparenta estar completa.** En `src/components/Dashboard.tsx`, el botón “Transmitir a DIAN (XML)” únicamente muestra un `alert()` con el texto “Documento Soporte preparado para transmisión a la DIAN”. No se evidencia una llamada de red en ese manejador. Hay que confirmar si esta pantalla/component está montada en el flujo entregado y, si sí, cambiar el texto/acción o implementar y probar el envío real antes de ofrecerlo como transmisión.
+2. **README desactualizado.** En la sección Modelo de acceso todavía se lee que `EMPLOYEE` está “pendiente de implementar”, aunque el portal está implementado en esta rama. Actualizar la descripción y los pasos de acceso.
+3. **Hay dos piezas de importación con distinto estado aparente.** El flujo de importación conectado desde `src/dashboard/app.jsx` y su endpoint son los cubiertos por la implementación descrita arriba. `src/components/BulkEmployeeImportExport.tsx` conserva un botón que sólo presenta un `alert()` (“Importar N empleados válidos”). Confirmar si el componente está en uso; si lo está, conectarlo a la API o retirarlo para evitar mostrar una importación que no se ejecuta.
+4. **Prueba de aceptación del navegador sigue sin evidencia.** La cobertura E2E ya incluye importación desde XLSX y portal del empleado, pero no se pudo ejecutar ningún paso visual por las restricciones de este entorno. El Excel generado sí tiene comprobación estructural ZIP/XML anotada previamente; eso no confirma que SheetJS lo abra en Firefox/Chrome.
+
+### Comparación funcional, limitada a documentación pública
+
+La comparación es de funciones anunciadas por los proveedores y capacidades demostradas por el repositorio/pruebas; no se accedió a cuentas demo ni se midió usabilidad, precio, soporte o cumplimiento integral.
+
+| Área | Gestión-Future (evidencia local) | Buk Colombia (documentación pública) | Siigo Nómina (documentación pública) | Oportunidad para Gestión-Future |
+|---|---|---|---|---|
+| Nómina Colombia | Motor de nómina, periodos, novedades y pruebas de cálculo; salida DIAN existe en el flujo de generación, pero el envío real no está confirmado por la interfaz revisada. | Anuncia nómina, liquidaciones y automatización del proceso de remuneraciones. | Anuncia liquidación de nómina y envío de documentos electrónicos. | Distinguir generación XML de transmisión/acuse DIAN y cubrir el ciclo completo con evidencia de sandbox/producción. |
+| PILA / pagos | Genera archivo PILA y archivo bancario según pruebas E2E definidas; el recorrido visual no pudo ejecutarse aquí. | La página consultada promociona módulos de nómina y gestión de personas; no se usa aquí como afirmación de formato PILA concreto. | Documenta cálculo/aplanado para operador PILA y archivos planos bancarios. | Mantener pruebas con archivos de salida reales y operadores/formato objetivo; la bitácora no certifica aceptación externa. |
+| Prestaciones y retiro | Hay funciones y pruebas para prima, vacaciones, cesantías/beneficios y liquidación, más certificaciones según módulos y pruebas del repositorio. | Documenta vacaciones en modalidades disfrutadas, compensadas y definitivas, además de liquidaciones. | Anuncia prima, cesantías, liquidación de contratos y libro de vacaciones. | Revisar cálculos y reportes con casos legales de borde y datos históricos antes de operación real. |
+| Portal del empleado | Portal con ficha, desprendibles, certificados y acceso limitado a los datos del empleado; existe suite E2E, aún sin ejecución Firefox/Chrome en esta máquina. | El portal describe solicitudes/workflows (vacaciones, permisos, documentos), ficha, liquidaciones y app móvil. | La página de nómina menciona envío de desprendibles y certificado laboral; no se toma como portal integral. | Evaluar solicitudes/autoservicio (vacaciones, permisos, documentos), experiencia móvil y notificaciones; validar primero qué necesita la operación outsourcing. |
+| Importación de datos | Importación XLS/XLSX/CSV y plantilla implementadas en el dashboard; servidor valida y limita lotes, pero falta verificación real de archivo en navegador. | No se compara aquí una función equivalente. | No se compara aquí una función equivalente. | Probar archivos reales y casos de codificación, fórmulas, encabezados, duplicados y reintentos en navegador y API. |
+| Operación multiempresa de outsourcing | La arquitectura declara aislamiento por empresa y roles SUPER_ADMIN/TENANT_ADMIN/EMPLOYEE; las pruebas cubren autorización multi-tenant. | La información pública revisada describe una plataforma de RR. HH. general, no prueba un flujo de outsourcing de terceros. | La información pública revisada describe nómina/contabilidad, no prueba dicho flujo de outsourcing. | Diferenciar como posible ventaja: administración central de múltiples clientes, aislamiento, operación por lotes e informes consolidados, después de validarlos en escenarios completos. |
+
+Fuentes de proveedor consultadas el 2026-10-29:
+
+- Buk Colombia, [Portal Colaborador](https://supportcenter.buk.co/hc/es-419/articles/57149175935387-Portal-Colaborador) y [módulos de producto](https://www.buk.co/productos?section=atrae).
+- Siigo, [planes y funciones de nómina](https://www.siigo.com/precios-siigo?cta=FunCobranzaVerPlanes) y [generación PILA](https://siigopyme.portaldeclientes.siigo.com/basedeconocimiento/generacion-de-pila-nomina-rrhh/).
+
+### Comparación con la bitácora previa
+
+- **Resueltos/confirmados ahora:** la rama local y `origin/feat/employee-leaves` apuntan a `8e052cb`; el árbol estaba limpio al iniciar la revisión. Typecheck, build, 208 pruebas Jest y 4 pruebas Python pasan.
+- **Sigue pendiente:** ejecución E2E real en Firefox (y ahora también Chrome); confirmar estado de GitHub Actions de `e753b20`; revisar el contenido vigente de issues #18 y #11; decidir qué hacer con ramas `wip/dian-firma-envio` y `wip/logos-accesibilidad`; corregir el README.
+- **Añadido por esta evaluación:** aclarar si la transmisión DIAN de `Dashboard.tsx` y la importación de `BulkEmployeeImportExport.tsx` son interfaces activas; la revisión estática encontró que esos manejadores son alertas, no acciones de servidor. Confirmar montaje antes de asignarles prioridad de usuario.
+- **Mejora de producto sugerida por comparación:** evaluar autoservicio de solicitudes y experiencia móvil observados en el portal público de Buk. Esto es una oportunidad, no un compromiso aprobado ni un cambio iniciado.
+
+### Orden sugerido para continuar
+
+1. Desbloquear una prueba visual ejecutable en Firefox o Chromium (permitir servidor local y navegador, o usar un entorno E2E con CI) y ejecutar todos los escenarios, especialmente importación XLSX y portal.
+2. Verificar/ajustar las dos acciones que parecen simuladas (transmisión DIAN e importación del componente alterno), después de confirmar que forman parte de la UI en uso.
+3. Corregir la documentación del rol EMPLOYEE.
+4. Revisar los issues y estado de CI, y sólo entonces decidir cuáles ramas WIP son pendientes vigentes.
+5. Priorizar con el usuario mejoras comparativas de solicitudes/autoservicio y móvil.
+
 ## Notas para quien retome
 
 - El archivo generado `src/dashboard/app.generated.ts` está ignorado por Git. `npm run build:dashboard` lo regenera a partir de `src/dashboard/app.jsx` y `src/dashboard/components/*.jsx`.
