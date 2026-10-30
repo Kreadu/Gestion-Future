@@ -167,6 +167,17 @@ try {
     await expectText(page, 'XML de nómina generado.');
   });
 
+  await step('Firmar y enviar a la DIAN (habilitación simulada)', async () => {
+    await page.getByRole('button', { name: /Firmar y enviar a la DIAN/ }).click();
+    await expectText(page, 'En proceso en la DIAN');
+    await page.getByRole('button', { name: /Consultar estado/ }).click();
+    await expectText(page, 'Aceptado por la DIAN');
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: /XML firmado/ }).click();
+    const name = (await download).suggestedFilename();
+    if (!name.endsWith('-firmada.xml')) throw new Error('Descarga inesperada: ' + name);
+  });
+
   await step('Descargar archivo bancario', async () => {
     await page.getByRole('button', { name: /Archivo bancario del periodo/ }).click();
     const download = page.waitForEvent('download');

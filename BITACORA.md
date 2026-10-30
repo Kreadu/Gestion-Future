@@ -260,3 +260,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - `dianWebService.ts` (ZIP deflate, sobre SOAP 1.2 firmado con WS-Security, SendTestSetAsync/SendNominaSync/GetStatusZip) y rutas `POST /api/payroll-settlements/:id/dian/send|status`, `GET .../dian/signed-xml`; migración 0016 con estado del envío (SENT/ACCEPTED/REJECTED), ZipKey, XML firmado y respuesta. Tras un rechazo se regenera con el mismo consecutivo; no se envía un XML hecho con otras credenciales o en otro ambiente.
 - Secretos nuevos: `DIAN_CERT_P12`, `DIAN_CERT_PASSWORD`, `DIAN_TEST_SET_ID` (`DIAN_AMBIENTE=1` para producción). Verificación: Jest 31 suites / 288 pruebas.
+
+## DIAN 4/4: envío desde el dashboard (2026-10-30)
+
+- Panel "📤 Envío a la DIAN" bajo la liquidación (`components/dian.jsx`): firmar y enviar, consultar estado, mensajes de rechazo y descarga del XML firmado; "Volver a generar XML" mientras la DIAN no lo tenga.
+- Verificación: E2E Firefox 26/26 con el envío simulado (el servidor E2E responde por la DIAN); firma, ZIP y sobre comprobados también en workerd (`wrangler dev`). Jest 31 suites / 288 pruebas.

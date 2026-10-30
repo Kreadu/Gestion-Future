@@ -743,6 +743,16 @@ function App({ me, onSignOut }) {
     }
   }
 
+  const currentSettlement = settlements.find(function(s) {
+    return s.id === currentSettlementId;
+  }) || null;
+
+  // Se puede regenerar mientras la DIAN no tenga el documento (sin enviar o rechazado).
+  const canGenerateDianXml = !currentSettlement ||
+    currentSettlementStatus !== 'GENERATED' ||
+    !currentSettlement.dianSubmissionStatus ||
+    currentSettlement.dianSubmissionStatus === 'REJECTED';
+
   function findSettlementForEmployee(employeeId) {
     return settlements.find(function(s) {
       return s.employeeId === employeeId;
@@ -2278,13 +2288,21 @@ function App({ me, onSignOut }) {
             <button
               className="btn btn-success"
               onClick={generateDianXml}
-              disabled={loading || currentSettlementStatus === 'GENERATED'}
+              disabled={loading || !canGenerateDianXml}
             >
-              {currentSettlementStatus === 'GENERATED'
-                ? '✅ XML ya generado'
-                : '🧾 Generar XML DIAN'}
+              {currentSettlementStatus !== 'GENERATED'
+                ? '🧾 Generar XML DIAN'
+                : canGenerateDianXml
+                  ? '🔁 Volver a generar XML'
+                  : '✅ XML ya generado'}
             </button>
           </div>
+
+          <DianSubmissionPanel
+            key={currentSettlementId}
+            settlement={currentSettlement}
+            onChanged={function() { return loadSettlements(selectedPeriodId); }}
+          />
 
           {dianXmlResult && (
             <div className="result-section" style={{marginTop: '18px'}}>

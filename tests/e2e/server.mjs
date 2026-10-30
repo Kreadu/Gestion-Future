@@ -41,6 +41,9 @@ await build({
   mainFields: ['module', 'main'],
   outfile: join(outdir, 'worker.mjs'),
   logLevel: 'warning',
+  // node-forge usa require('crypto') cuando detecta Node (en Workers no).
+  external: ['crypto'],
+  banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   plugins: [{
     name: 'fake-firebase-token',
     setup(b) {
@@ -88,12 +91,37 @@ db.prepare(
    VALUES ('USR-super', ?, 'SUPER_ADMIN', 1, '2026-01-01')`
 ).run(SUPER_ADMIN_EMAIL);
 
+// Certificado autofirmado de prueba (tests/fixtures) y datos de
+// habilitación ficticios. La DIAN también se simula: ninguna petición
+// sale a sus servidores.
+const dianCert = JSON.parse(readFileSync(join(root, 'tests/fixtures/dian-test-cert.json'), 'utf8'));
+
 const env = {
   DB: createD1(db),
   ENVIRONMENT: 'development',
   FIREBASE_PROJECT_ID: 'e2e-project',
   FIREBASE_API_KEY: 'e2e-key',
   FIREBASE_AUTH_DOMAIN: 'e2e.firebaseapp.com',
+  DIAN_CERT_P12: dianCert.p12Base64,
+  DIAN_CERT_PASSWORD: dianCert.password,
+  DIAN_SOFTWARE_ID: 'software-e2e',
+  DIAN_SOFTWARE_PIN: '13579',
+  DIAN_TEST_SET_ID: 'set-e2e',
+};
+
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input instanceof Request ? input.url : input);
+  if (!url.includes('dian.gov.co')) return realFetch(input, init);
+  const body = String(init && init.body || '');
+  const result = body.includes('SendTestSetAsync')
+    ? '<SendTestSetAsyncResult xmlns:b="b"><b:ZipKey>zip-e2e</b:ZipKey></SendTestSetAsyncResult>'
+    : '<GetStatusZipResult xmlns:b="b"><b:DianResponse><b:IsValid>true</b:IsValid><b:StatusCode>00</b:StatusCode>' +
+      '<b:StatusDescription>Procesado Correctamente.</b:StatusDescription></b:DianResponse></GetStatusZipResult>';
+  return new Response(
+    `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>${result}</s:Body></s:Envelope>`,
+    { headers: { 'Content-Type': 'application/soap+xml' } }
+  );
 };
 
 createServer(async (req, res) => {
