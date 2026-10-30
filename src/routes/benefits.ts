@@ -32,6 +32,7 @@ import {
   type ContractType,
   type TerminationReason,
 } from '../engine/countries/colombiaBenefits';
+import { employeeName } from './periodEmployees';
 
 interface RouteEnv {
   DB: D1Database;
@@ -57,11 +58,6 @@ const minDate = (...dates: (string | null | undefined)[]) =>
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-function employeeName(row: any): string {
-  return [row.firstName, row.firstName2, row.lastName, row.lastName2]
-    .filter(Boolean)
-    .join(' ');
-}
 
 async function loadEmployee(env: RouteEnv, user: AuthUser, employeeId: string) {
   const row = await env.DB

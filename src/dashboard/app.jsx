@@ -375,6 +375,7 @@ function App({ me, onSignOut }) {
   const [selectedPeriodId, setSelectedPeriodId] = useState('');
   const [settlements, setSettlements] = useState([]);
   const [periodModal, setPeriodModal] = useState(false);
+  const [showCloseReview, setShowCloseReview] = useState(false);
   const [periodForm, setPeriodForm] = useState({ periodStart: '', periodEnd: '' });
 
   // ------------------------------------------------------------
@@ -1072,31 +1073,11 @@ function App({ me, onSignOut }) {
     }
   }
 
-  async function closeCurrentPeriod() {
-    if (!selectedPeriod) return;
-
-    const confirmed = window.confirm(
-      '¿Cerrar el periodo ' + selectedPeriod.periodStart + ' a ' +
-      selectedPeriod.periodEnd + '? No podrás calcular más liquidaciones en él.'
-    );
-
-    if (!confirmed) return;
-
-    try {
-      clearMessages();
-      setLoading(true);
-
-      await api('/api/payroll-periods/' + encodeURIComponent(selectedPeriod.id) + '/close', {
-        method: 'POST'
-      });
-
-      setSuccess('Periodo cerrado correctamente.');
-      await loadPeriods(selectedCompanyId);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  async function onPeriodClosed() {
+    setShowCloseReview(false);
+    clearMessages();
+    setSuccess('Periodo cerrado correctamente.');
+    await loadPeriods(selectedCompanyId);
   }
 
   async function calculatePayroll() {
@@ -3278,7 +3259,7 @@ function App({ me, onSignOut }) {
                 {selectedPeriod && (
                   <button
                     className="btn"
-                    onClick={closeCurrentPeriod}
+                    onClick={function() { setShowCloseReview(true); }}
                     disabled={loading || selectedPeriod.status === 'CLOSED'}
                   >
                     🔒 Cerrar periodo
@@ -3305,6 +3286,14 @@ function App({ me, onSignOut }) {
                 )}
 
                 {selectedPeriod && <PilaButton period={selectedPeriod} />}
+
+                {showCloseReview && selectedPeriod && (
+                  <CloseReviewModal
+                    period={selectedPeriod}
+                    onClosed={onPeriodClosed}
+                    onClose={function() { setShowCloseReview(false); }}
+                  />
+                )}
               </div>
 
               {disbursementResult && (

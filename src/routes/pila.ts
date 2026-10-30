@@ -18,6 +18,7 @@ import {
 } from '../auth/authz';
 import { buildPilaFile, type PilaEmployeeInput } from '../services/pilaFile';
 import { CONSTANTS_2026 } from '../engine/countries/constants2026';
+import { employeeName, linkedEmployeesWithoutSettlement } from './periodEmployees';
 
 interface RouteEnv {
   DB: D1Database;
@@ -128,11 +129,6 @@ export function pilaAffiliationOf(row: any, kind: PilaKind): Record<string, stri
 // ARCHIVO
 // ------------------------------------------------------------
 
-function employeeName(row: any): string {
-  return [row.firstName, row.firstName2, row.lastName, row.lastName2]
-    .filter(Boolean)
-    .join(' ');
-}
 
 function lastDayOfMonth(iso: string): string {
   const [y, m] = iso.split('-').map(Number);
@@ -241,23 +237,7 @@ export async function handlePilaRoutes(
   });
 
   // Empleados vinculados en el periodo que no tienen liquidación.
-  const active = await env.DB
-    .prepare(`
-      SELECT e.*
-      FROM employees e
-      WHERE e.companyId = ?1
-        AND (e.hireDate IS NULL OR e.hireDate <= ?3)
-        AND (e.terminationDate IS NULL OR e.terminationDate >= ?2)
-        AND (e.active = 1 OR e.terminationDate IS NOT NULL)
-        AND NOT EXISTS (
-          SELECT 1 FROM payroll_settlements s
-          WHERE s.periodId = ?4 AND s.employeeId = e.id
-        )
-    `)
-    .bind(period.companyId, periodStart, periodEnd, period.id)
-    .all<any>();
-
-  for (const row of active.results || []) {
+  for (const row of await linkedEmployeesWithoutSettlement(env, period)) {
     warnings.push(`${employeeName(row)} (${row.taxId}): vinculado en el periodo pero sin liquidación en este periodo; no se incluyó.`);
   }
 

@@ -16,7 +16,7 @@ Este documento guarda hallazgos y un orden sugerido para mejorar el producto. Es
 
 - [ ] Documentar y completar el ciclo de nómina electrónica: configuración/habilitación, generación, firma/transmisión, consulta de estado, respuesta DIAN, rechazo, reintento y notas de ajuste. Mostrar claramente cuáles pasos están implementados y cuáles requieren intervención externa.
 - [ ] Persistir una bitácora consultable por empresa de cálculos, cierres, documentos DIAN, archivos descargados y acciones de usuarios, con fecha, actor y resultado.
-- [ ] Añadir una vista de cierre que reúna pendientes/errores antes de cerrar el periodo: novedades sin validar, datos bancarios faltantes, afiliaciones PILA incompletas, documentos electrónicos no aceptados y totales de control.
+- [x] (2026-10-30, `close-review`) Añadir una vista de cierre que reúna pendientes/errores antes de cerrar el periodo: novedades sin validar, datos bancarios faltantes, afiliaciones PILA incompletas, documentos electrónicos no aceptados y totales de control.
 - [ ] Asegurar que los periodos cerrados sean reproducibles: guardar versión de reglas/constantes usadas, valores de entrada y resultados; definir un flujo explícito de reapertura o ajuste.
 - [ ] Ampliar reportes y exportaciones operativas (contabilidad, centros de costo, pagos, novedades y conciliación) según los formatos reales solicitados por los clientes y operadores.
 

@@ -155,8 +155,12 @@ try {
     await page.keyboard.press('Escape');
   });
 
-  await step('Cerrar periodo', async () => {
+  await step('Revisión antes de cerrar y cerrar periodo', async () => {
     await page.getByRole('button', { name: /Cerrar periodo/ }).click();
+    const m = page.getByRole('dialog', { name: 'Revisión antes de cerrar' });
+    await m.getByText('Neto a pagar').waitFor();
+    await m.getByText(/falta código de .*para la PILA/).waitFor();
+    await m.getByRole('button', { name: 'Cerrar de todos modos' }).click();
     await expectText(page, 'cerrado correctamente.');
   });
 

@@ -34,6 +34,7 @@ import { handleBenefitRoutes } from './routes/benefits';
 import { handleCertificateRoutes } from './routes/certificates';
 import { handleImportRoutes } from './routes/imports';
 import { handlePilaRoutes, parsePilaAffiliation, savePilaAffiliation, pilaAffiliationOf } from './routes/pila';
+import { handleCloseReviewRoutes, periodCloseBlockers } from './routes/closeReview';
 import { handlePortalRoutes } from './routes/portal';
 import { getDashboardHtml } from './dashboard';
 import { getLegalHtml, LEGAL_VERSION } from './legal';
@@ -1840,59 +1841,40 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, String(periodRow.companyId));
 
-        if (periodRow.status === 'CLOSED') {
+        // Mismas reglas que GET .../close-review (src/routes/closeReview.ts).
+        const blockers = await periodCloseBlockers(env, periodRow);
+
+        if (blockers.length > 0) {
           return sendJson(
-            { success: false, error: 'El periodo ya está cerrado.' },
-            400
-          );
-        }
-
-        const totals = await env.DB
-          .prepare(`
-            SELECT
-              COUNT(*) AS total,
-              SUM(CASE WHEN dianStatus != 'GENERATED' THEN 1 ELSE 0 END) AS pending
-            FROM payroll_settlements
-            WHERE periodId = ?1
-          `)
-          .bind(periodId)
-          .first();
-
-        const total = Number((totals as any)?.total ?? 0);
-        const pending = Number((totals as any)?.pending ?? 0);
-
-        if (total === 0) {
-          return sendJson(
-            {
-              success: false,
-              error: 'El periodo no tiene liquidaciones todavía.',
-            },
-            400
-          );
-        }
-
-        if (pending > 0) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                `Faltan ${pending} liquidación(es) por generar su XML DIAN ` +
-                'antes de poder cerrar el periodo.',
-            },
+            { success: false, error: blockers[0].message },
             400
           );
         }
 
         const closedAt = new Date().toISOString();
 
-        await env.DB
+        const closeResult = await env.DB
           .prepare(`
             UPDATE payroll_periods
             SET status = 'CLOSED', closedAt = ?1
             WHERE id = ?2
+              AND status = 'DRAFT'
+              AND NOT EXISTS (
+                SELECT 1 FROM payroll_settlements
+                WHERE periodId = ?2 AND dianStatus != 'GENERATED'
+              )
           `)
           .bind(closedAt, periodId)
           .run();
+
+        // Otro usuario cerró el periodo o recalculó una liquidación
+        // entre la revisión y este UPDATE.
+        if (!closeResult.meta?.changes) {
+          return sendJson(
+            { success: false, error: 'El periodo cambió mientras se cerraba; revisa de nuevo antes de cerrar.' },
+            409
+          );
+        }
 
         await audit(
           env,
@@ -4212,6 +4194,9 @@ export default {
 
       const pilaResponse = await handlePilaRoutes(request, url, env, user);
       if (pilaResponse) return pilaResponse;
+
+      const closeReviewResponse = await handleCloseReviewRoutes(request, url, env, user);
+      if (closeReviewResponse) return closeReviewResponse;
 
       /*
        * ============================================================

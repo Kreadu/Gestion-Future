@@ -136,3 +136,18 @@ Fuentes de proveedor consultadas el 2026-10-29:
 - README: rol `EMPLOYEE` descrito como portal implementado; comandos E2E de Firefox y Chrome.
 - `jest.config.js` ignora `.claude/` (las copias en `.claude/worktrees` hacían fallar `npm test` con suites viejas).
 - Verificación: `tsc --noEmit` OK; Jest 20 suites / 208 pruebas OK; Python 4 pruebas OK.
+
+## Revisión antes del cierre (2026-10-30)
+
+Primera brecha de `MEJORAS.md` / issue #11 cerrada. Siigo y Alegra validan antes de transmitir; aquí la validación cubre también pago y PILA, que es lo que más le cuesta a una outsourcing con varias empresas.
+
+- `GET /api/payroll-periods/:id/close-review` (`src/routes/closeReview.ts`) devuelve `canClose`, `blockers`, `warnings` y totales de control (liquidaciones, devengado, deducciones, neto).
+  - Bloqueos: periodo ya cerrado, sin liquidaciones, liquidaciones sin XML DIAN.
+  - Avisos: empresa sin ARL; empleado sin cuenta bancaria; sin EPS/AFP/CCF; neto ≤ 0; vinculado en el periodo y sin liquidar; novedad (incapacidad/licencia/vacaciones) que no coincide con lo que incluyó la liquidación (`resultJson.leaveDetails`), sea porque se registró o porque se borró después de calcular. Si la liquidación ya tiene XML DIAN no se puede recalcular, y el aviso indica registrarla como ajuste en el periodo siguiente.
+- `POST .../close` usa los mismos bloqueos (`periodCloseBlockers`) y un `UPDATE` condicionado (`status = 'DRAFT'` y sin liquidaciones pendientes): si otro usuario cerró o recalculó en medio, responde 409.
+- La consulta "vinculados sin liquidación" y `employeeName` pasaron a `src/routes/periodEmployees.ts`, compartidos con PILA, prestaciones y portal.
+- Revisión de código (`/code-review`) aplicada: no se detectaba una novedad registrada entre el cálculo y el XML (se comparaban fechas `updatedAt`, que el XML también cambia), el modal no tenía Escape y el error de cierre quedaba detrás del modal.
+- Dashboard: "🔒 Cerrar periodo" abre el modal "Revisión antes de cerrar" (`src/dashboard/components/closeReview.jsx`) en lugar del `window.confirm`; con avisos el botón dice "Cerrar de todos modos"; con bloqueos queda deshabilitado.
+- Decisiones tomadas sin consultar: los avisos no bloquean (el periodo puede necesitar cerrarse aunque falte un dato PILA); en un periodo cerrado sólo se informa el bloqueo, no avisos.
+- Verificación: `tests/closeReview.test.ts` (9 pruebas); Jest 21 suites / 217 pruebas; E2E Firefox 21/21 con el nuevo paso "Revisión antes de cerrar y cerrar periodo".
+- El usuario indicó que la prueba de navegador es en **un** navegador: desde aquí se corre sólo Firefox (`npm run e2e`); la opción Chromium queda disponible.

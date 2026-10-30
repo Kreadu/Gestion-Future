@@ -25,6 +25,7 @@ import { sendJson } from '../http';
 import { HttpError, type AuthUser } from '../auth/authz';
 import { vacationBalance } from './benefits';
 import { buildEmploymentCertificate, buildIncomeCertificate } from './certificates';
+import { employeeName } from './periodEmployees';
 
 interface RouteEnv {
   DB: D1Database;
@@ -34,11 +35,6 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function employeeName(row: any): string {
-  return [row.firstName, row.firstName2, row.lastName, row.lastName2]
-    .filter(Boolean)
-    .join(' ');
-}
 
 /** Deja visibles sólo los últimos 4 dígitos de la cuenta. */
 export function maskAccount(value: unknown): string | null {
