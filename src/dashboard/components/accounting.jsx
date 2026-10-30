@@ -32,9 +32,10 @@ function AccountingModal({ period, onClose }) {
           {data && (
             <>
               <div className="info-box">
-                Asiento de nómina con {data.lines} línea(s): gasto de personal, aportes, provisiones,
-                retenciones y salarios por pagar, un tercero por empleado. Impórtalo en tu software
-                contable (Siigo, Alegra, World Office…) o revísalo en Excel.
+                Asiento con {data.lines} línea(s): nómina del periodo (gasto de personal, aportes,
+                provisiones, retenciones y salarios por pagar) y personal por horas liquidado dentro
+                del periodo (jornada parcial y contratistas: honorarios o servicios con su retención).
+                Impórtalo en tu software contable (Siigo, Alegra, World Office…) o revísalo en Excel.
               </div>
 
               {data.warnings.length > 0 && (

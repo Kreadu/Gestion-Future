@@ -164,5 +164,14 @@ Segunda brecha del issue #11 (Siigo y Alegra contabilizan la nómina; aquí no s
 - Dashboard: botón "📒 Comprobante contable" en la barra del periodo (`src/dashboard/components/accounting.jsx`), con totales débito/crédito y descarga CSV en UTF-8 con BOM (Excel muestra bien las tildes).
 - Avisos: periodo en borrador; liquidación con `resultJson` dañado (se omite, no da 500); cuentas y códigos que el contador debe confirmar (issue #9).
 - Revisión de código aplicada: vacaciones gastadas dos veces, recobro sin cuenta por cobrar, sueldos como cifra de cuadre que escondía descuadres, `JSON.parse` sin protección, tercero de los pasivos, consultas en serie y Escape duplicado (se quitó el manejador propio de los modales de cierre y contable; el global de `app.jsx` ya cierra). No se cambió el 403/404 entre empresas porque todas las rutas lo hacen igual.
-- No incluye todavía las liquidaciones del personal por horas/contratistas (tabla `settlements`), que llevan otras cuentas (honorarios 5110).
 - Verificación: `tests/payrollAccounting.test.ts` (10 pruebas); Jest 22 suites / 227 pruebas; E2E Firefox 22/22 con el paso "Comprobante contable: cuadrado y descarga".
+
+## Personal por horas y contratistas en el comprobante (2026-10-30)
+
+Pedido del usuario: el comprobante contable debía cubrir también el personal por horas y los contratistas.
+
+- `GET .../accounting` incluye las liquidaciones de la tabla `settlements` de la empresa cuyo tramo cae dentro del periodo:
+  - **Jornada parcial** (`PART_TIME_EMPLOYEE`): mismas cuentas que la nómina (el motor devuelve la misma estructura).
+  - **Contratistas** (`INDEPENDENT_SERVICES`): honorarios → D 511095 / C 236515 retención / C 233525 honorarios por pagar; servicios → D 513595 / C 236525 / C 233595. Tercero = el contratista. Si neto ≠ bruto − retención por más de 2 pesos, aviso.
+- **Error encontrado y corregido:** se podía liquidar dos veces la misma vinculación en el mismo periodo. Cada vez se creaba un registro nuevo y se gastaba otro consecutivo DIAN (nómina electrónica o documento soporte). Ahora `POST /api/hourly/settlements/calculate` responde 409 si el tramo se cruza con uno ya liquidado, antes de gastar consecutivo. Para datos viejos con duplicados, el comprobante usa la liquidación más reciente y lo avisa.
+- Verificación: `tests/payrollAccounting.test.ts` (14 pruebas) y `tests/hourlySettlements.test.ts` (nuevo), escritos antes del código; Jest 23 suites / 232 pruebas; E2E Firefox 22/22.

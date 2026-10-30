@@ -161,6 +161,47 @@ describe('buildPayrollJournal', () => {
   });
 });
 
+describe('buildPayrollJournal · contratistas', () => {
+  const base = { periodStart: '2026-10-01', periodEnd: '2026-10-31', companyArlCode: '14-23', settlements: [] };
+  const PRO = { taxId: '1061000999', name: 'Carlos Ruiz' };
+
+  test('honorarios: gasto 5110, retención 236515 y honorarios por pagar 233525', () => {
+    const journal = buildPayrollJournal({
+      ...base,
+      contractors: [{ professional: PRO, concept: 'HONORARIOS', grossAmount: 2_000_000, retentionAmount: 200_000, netAmount: 1_800_000 }],
+    });
+    const { lines } = journal;
+
+    expect(sum(lines, '511095', 'debit')).toBe(2_000_000);
+    expect(sum(lines, '236515', 'credit')).toBe(200_000);
+    expect(sum(lines, '233525', 'credit')).toBe(1_800_000);
+    expect(lines.every(l => l.thirdPartyId === '1061000999')).toBe(true);
+    expect(journal.totals.debit).toBe(journal.totals.credit);
+  });
+
+  test('servicios: gasto 5135, retención 236525 y cuentas por pagar 233595', () => {
+    const { lines, totals } = buildPayrollJournal({
+      ...base,
+      contractors: [{ professional: PRO, concept: 'SERVICIOS', grossAmount: 1_000_000, retentionAmount: 40_000, netAmount: 960_000 }],
+    });
+
+    expect(sum(lines, '513595', 'debit')).toBe(1_000_000);
+    expect(sum(lines, '236525', 'credit')).toBe(40_000);
+    expect(sum(lines, '233595', 'credit')).toBe(960_000);
+    expect(totals.debit).toBe(totals.credit);
+  });
+
+  test('neto ≠ bruto − retención: se avisa y el asiento sigue cuadrado', () => {
+    const journal = buildPayrollJournal({
+      ...base,
+      contractors: [{ professional: PRO, concept: 'SERVICIOS', grossAmount: 1_000_000, retentionAmount: 40_000, netAmount: 900_000 }],
+    });
+
+    expect(journal.warnings[0]).toMatch(/Carlos Ruiz.*diferencia/);
+    expect(journal.totals.debit).toBe(journal.totals.credit);
+  });
+});
+
 async function liquidated(companyExtra: Record<string, unknown> = { arlCode: '14-23' }) {
   const company = await createCompany(companyExtra);
   const emp = await createEmployee(company.id, { hireDate: '2026-01-05', epsCode: 'EPS037', afpCode: '230301', ccfCode: 'CCF22' });
@@ -201,6 +242,43 @@ describe('GET /api/payroll-periods/:id/accounting', () => {
     const res = await accounting(periodId);
     expect(res.status).toBe(200);
     expect(res.json.data.warnings.join(' ')).toMatch(/Luis Pérez.*dañada/);
+    expect(res.json.data.totals.debit).toBe(res.json.data.totals.credit);
+  });
+
+  test('incluye jornada parcial y contratistas del periodo; con varias liquidaciones usa la última y avisa', async () => {
+    const { company, periodId } = await liquidated();
+
+    const insertHourly = (kind: string, taxId: string, name: string) => {
+      db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES (?, ?, 'Ruiz', ?, 'Ingeniero')`)
+        .run('PRO-' + taxId, name, taxId);
+      db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate, retentionConcept)
+                  VALUES (?, ?, ?, ?, 50000, '2026-01-01', 'HONORARIOS')`)
+        .run('ENG-' + taxId, 'PRO-' + taxId, company.id, kind);
+    };
+    const insertSettlement = (id: string, taxId: string, json: unknown, createdAt: string, start = '2026-10-01', end = '2026-10-31') =>
+      db.prepare(`INSERT INTO settlements (id, engagementId, periodStart, periodEnd, totalHours, grossAmount, retentionAmount, netAmount, resultJson, createdAt)
+                  VALUES (?, ?, ?, ?, 20, 0, 0, 0, ?, ?)`)
+        .run(id, 'ENG-' + taxId, start, end, JSON.stringify(json), createdAt);
+
+    insertHourly('INDEPENDENT_SERVICES', '1061000999', 'Carlos');
+    const contractor = (gross: number) => ({ calculation: { grossAmount: gross, retentionConcept: 'HONORARIOS', retentionAmount: gross / 10, netAmount: gross * 0.9 } });
+    insertSettlement('SET-1', '1061000999', contractor(1_000_000), '2026-10-31T10:00:00Z');
+    insertSettlement('SET-2', '1061000999', contractor(2_000_000), '2026-10-31T11:00:00Z');
+    // Fuera del periodo: no entra.
+    insertSettlement('SET-3', '1061000999', contractor(9_000_000), '2026-11-30T10:00:00Z', '2026-11-01', '2026-11-30');
+
+    insertHourly('PART_TIME_EMPLOYEE', '1061000888', 'Marta');
+    insertSettlement('SET-4', '1061000888', { calculation: { ...RESULT } }, '2026-10-31T10:00:00Z');
+
+    const res = await accounting(periodId);
+    expect(res.status).toBe(200);
+    const csv: string = res.json.data.content;
+
+    expect(csv).toContain('"511095","Honorarios - otros","1061000999","Carlos Ruiz"');
+    expect(csv).toContain(',2000000.00,0.00');
+    expect(csv).not.toContain('9000000.00');
+    expect(csv).toMatch(/"250505","Salarios por pagar","1061000888","Marta Ruiz"/);
+    expect(res.json.data.warnings.join(' ')).toMatch(/Carlos Ruiz.*2 liquidaciones.*más reciente/);
     expect(res.json.data.totals.debit).toBe(res.json.data.totals.credit);
   });
 

@@ -3,6 +3,8 @@
  *
  *   GET /api/payroll-periods/:id/accounting → { fileName, content, totals, lines, warnings }
  *
+ * Incluye la nómina del periodo y las liquidaciones del personal por
+ * horas (jornada parcial y contratistas) cuyo periodo cae dentro de él.
  * El asiento lo arma src/services/payrollAccounting.ts.
  */
 
@@ -40,7 +42,7 @@ export async function handleAccountingRoutes(
 
   requireCompanyAccess(user, String(period.companyId));
 
-  const [company, settlements] = await Promise.all([
+  const [company, settlements, hourly] = await Promise.all([
     env.DB
       .prepare(`SELECT nit, arlCode FROM companies WHERE id = ?1`)
       .bind(period.companyId)
@@ -56,13 +58,34 @@ export async function handleAccountingRoutes(
       `)
       .bind(period.id)
       .all<any>(),
+    // Personal por horas cuyo periodo liquidado cae dentro del periodo.
+    env.DB
+      .prepare(`
+        SELECT s.engagementId, s.periodStart, s.periodEnd, s.resultJson,
+               g.vinculationType, p.firstName, p.firstName2, p.lastName, p.lastName2, p.taxId
+        FROM settlements s
+        JOIN engagements g ON g.id = s.engagementId
+        JOIN professionals p ON p.id = g.professionalId
+        WHERE g.companyId = ?1 AND s.periodStart >= ?2 AND s.periodEnd <= ?3
+        ORDER BY s.createdAt
+      `)
+      .bind(period.companyId, period.periodStart, period.periodEnd)
+      .all<any>(),
   ]);
 
   const rows = settlements.results || [];
 
-  if (rows.length === 0) {
+  // Una vinculación puede haberse liquidado varias veces para el mismo
+  // periodo: vale la última.
+  const hourlyByKey = new Map<string, { row: any; count: number }>();
+  for (const row of hourly.results || []) {
+    const key = `${row.engagementId}|${row.periodStart}|${row.periodEnd}`;
+    hourlyByKey.set(key, { row, count: (hourlyByKey.get(key)?.count || 0) + 1 });
+  }
+
+  if (rows.length === 0 && hourlyByKey.size === 0) {
     return sendJson(
-      { success: false, error: 'El periodo no tiene liquidaciones: calcula la nómina antes de contabilizarla.' },
+      { success: false, error: 'El periodo no tiene liquidaciones (ni de nómina ni por horas): calcúlalas antes de contabilizar.' },
       400
     );
   }
@@ -73,7 +96,7 @@ export async function handleAccountingRoutes(
     warnings.push('El periodo sigue en borrador: los valores pueden cambiar hasta que lo cierres.');
   }
 
-  const entries = [];
+  const entries: { employee: any; result: any }[] = [];
 
   for (const row of rows) {
     const employee = {
@@ -91,11 +114,44 @@ export async function handleAccountingRoutes(
     }
   }
 
+  const contractors = [];
+
+  for (const { row, count } of hourlyByKey.values()) {
+    const name = employeeName(row);
+    const who = `${name} (${row.taxId})`;
+
+    if (count > 1) {
+      warnings.push(`${who}: tiene ${count} liquidaciones por horas del ${row.periodStart} al ${row.periodEnd}; se contabilizó la más reciente.`);
+    }
+
+    let calculation: any;
+    try {
+      calculation = JSON.parse(String(row.resultJson)).calculation;
+    } catch {
+      // Se avisa abajo.
+    }
+
+    if (!calculation) {
+      warnings.push(`${who}: la liquidación por horas guardada está dañada y no se incluyó.`);
+    } else if (row.vinculationType === 'INDEPENDENT_SERVICES') {
+      contractors.push({
+        professional: { taxId: String(row.taxId || ''), name },
+        concept: calculation.retentionConcept,
+        grossAmount: calculation.grossAmount,
+        retentionAmount: calculation.retentionAmount,
+        netAmount: calculation.netAmount,
+      });
+    } else {
+      entries.push({ employee: { taxId: String(row.taxId || ''), name }, result: calculation });
+    }
+  }
+
   const journal = buildPayrollJournal({
     periodStart: String(period.periodStart),
     periodEnd: String(period.periodEnd),
     companyArlCode: company?.arlCode || null,
     settlements: entries,
+    contractors,
   });
 
   warnings.push(...journal.warnings);

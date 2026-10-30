@@ -3643,6 +3643,32 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, engagement.companyId);
 
+        // Cada liquidación gasta un consecutivo DIAN (nómina electrónica o
+        // documento soporte): un mismo tramo no se liquida dos veces.
+        const overlapping = await env.DB
+          .prepare(`
+            SELECT periodStart, periodEnd
+            FROM settlements
+            WHERE engagementId = ?1
+              AND periodStart <= ?3
+              AND periodEnd >= ?2
+            LIMIT 1
+          `)
+          .bind(engagementId, periodStart, periodEnd)
+          .first();
+
+        if (overlapping) {
+          return sendJson(
+            {
+              success: false,
+              error:
+                `Esta vinculación ya tiene una liquidación del ${(overlapping as any).periodStart} ` +
+                `al ${(overlapping as any).periodEnd}; no se puede liquidar dos veces el mismo periodo.`,
+            },
+            409
+          );
+        }
+
         const hoursResult = await env.DB
           .prepare(`
             SELECT COALESCE(SUM(hours), 0) AS totalHours

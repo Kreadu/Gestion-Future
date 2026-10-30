@@ -15,6 +15,8 @@
  * - Sueldos (510506) se arma con sus componentes; sólo absorbe hasta
  *   MAX_ROUNDING pesos de redondeo. Una diferencia mayor entre
  *   devengados y neto + deducciones se informa en `warnings`.
+ * Contratistas independientes: honorarios (5110) o servicios (5135)
+ * contra retención (2365) y cuenta por pagar (2335).
  * Las cuentas son las de uso general; el contador debe validarlas
  * (issue #9).
  */
@@ -29,11 +31,22 @@ export interface JournalEmployee {
   ccfCode?: string | null;
 }
 
+/** Contratista independiente (personal por horas, Documento Soporte). */
+export interface JournalContractor {
+  professional: { taxId: string; name: string };
+  concept: 'HONORARIOS' | 'SERVICIOS' | string;
+  grossAmount: number;
+  retentionAmount: number;
+  netAmount: number;
+}
+
 export interface JournalInput {
   periodStart: string;
   periodEnd: string;
   companyArlCode: string | null;
+  /** Nómina mensual y personal por horas en jornada parcial (mismo resultado del motor). */
   settlements: { employee: JournalEmployee; result: any }[];
+  contractors?: JournalContractor[];
 }
 
 export interface JournalLine {
@@ -61,8 +74,14 @@ export const PUC_ACCOUNTS: Record<string, string> = {
   '510572': 'Aportes cajas de compensación familiar',
   '510575': 'Aportes ICBF',
   '510578': 'SENA',
+  '511095': 'Honorarios - otros',
+  '513595': 'Servicios - otros',
   '138095': 'Incapacidades y licencias por cobrar (EPS/ARL)',
+  '233525': 'Honorarios por pagar',
+  '233595': 'Otros costos y gastos por pagar',
   '236505': 'Retención en la fuente - salarios',
+  '236515': 'Retención en la fuente - honorarios',
+  '236525': 'Retención en la fuente - servicios',
   '237005': 'Aportes a EPS',
   '237006': 'Aportes a ARL',
   '237010': 'Aportes parafiscales (CCF, ICBF, SENA)',
@@ -176,6 +195,45 @@ export function buildPayrollJournal(input: JournalInput) {
       add(expense, 'debit', value);
       add(liability, 'credit', value);
     }
+  }
+
+  // Contratistas: gasto por honorarios (5110) o servicios (5135) contra
+  // la retención practicada y la cuenta por pagar al contratista.
+  const CONTRACTOR_ACCOUNTS: Record<string, [string, string, string]> = {
+    HONORARIOS: ['511095', '236515', '233525'],
+    SERVICIOS: ['513595', '236525', '233595'],
+  };
+
+  for (const c of input.contractors || []) {
+    const [expense, retention, payable] = CONTRACTOR_ACCOUNTS[c.concept] || CONTRACTOR_ACCOUNTS.SERVICIOS;
+    const who = `${c.professional.name} (${c.professional.taxId})`;
+    const gross = n(c.grossAmount);
+    const withheld = n(c.retentionAmount);
+    let net = n(c.netAmount);
+    const difference = gross - withheld - net;
+
+    if (Math.abs(difference) > MAX_ROUNDING) {
+      warnings.push(`${who}: el neto no coincide con bruto − retención (diferencia ${difference}); se llevó a la cuenta por pagar. Revisa la liquidación.`);
+    }
+    net += difference;
+
+    const line = (account: string, debit: number, credit: number) => {
+      if (debit === 0 && credit === 0) return;
+      lines.push({
+        account,
+        accountName: PUC_ACCOUNTS[account],
+        thirdPartyId: c.professional.taxId,
+        thirdPartyName: c.professional.name,
+        entity: '',
+        detail: `Contratista ${period}`,
+        debit,
+        credit,
+      });
+    };
+
+    line(expense, gross, 0);
+    line(retention, 0, withheld);
+    line(payable, 0, net);
   }
 
   const totals = {
