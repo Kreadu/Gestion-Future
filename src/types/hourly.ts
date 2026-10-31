@@ -132,6 +132,11 @@ export interface Engagement {
   weeklyHours?: number | null;
   contractType?: string | null;
 
+  /** Cliente (empresa usuaria EST o contratante del servicio). */
+  clientId?: string | null;
+  position?: string | null;
+  /** Tarifa de cobro por hora al cliente (clientes HOURLY_RATE). */
+  billRate?: number | null;
   createdAt?: string | null;
 }
 

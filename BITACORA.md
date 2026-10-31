@@ -285,3 +285,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - El dueño también es empresa de servicios temporales y presta servicios (aseo, camareros): sus trabajadores tienen contrato laboral y se pagan **por horas, cada semana**. El registro de horas ahora va por tipo (ordinarias diurnas/nocturnas, dominical/festiva, extras; migración 0019) y el motor de jornada parcial aplica recargo nocturno 35 %, dominical/festivo 90 % y extras 1,25/1,75 (2,15/2,65 en festivo), con vacaciones sólo sobre lo ordinario y auxilio de transporte sólo por horas ordinarias.
 - Verificación: `tests/hourlySurcharges.test.ts` y prueba de API; Jest 32 suites / 300 pruebas; E2E Firefox 27/27.
+
+## Clientes, trabajadores en misión y cobro (2026-10-30)
+
+- `service_clients` (migración 0020): clientes de la empresa con figura EST (empresa usuaria) o SERVICIO (aseo, meseros), forma de cobro (tarifa por hora o costo + % administración) y clase de riesgo ARL del sitio. Las vinculaciones por horas se asignan a un cliente (cargo y tarifa de cobro) y liquidan con su riesgo ARL.
+- EST habilitado: exige la resolución del Ministerio (`/api/companies/:id/est-authorization`), cliente EST y misión con fin ≤ 1 año (6 + 6 meses). Reporte `GET /api/service-clients/:id/billing` con costo de nómina, valor a cobrar y margen; la liquidación guarda cliente y tarifa vigentes.
