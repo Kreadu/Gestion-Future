@@ -560,8 +560,13 @@ function App({ me, onSignOut }) {
     isIncomeTaxFiler: false,
     deliverableDescription: '',
     weeklyHours: '',
-    contractType: '2'
+    contractType: '2',
+    clientId: '',
+    position: '',
+    billRate: ''
   });
+  // Clientes (temporales y servicios) para asignar la vinculación.
+  const [engagementClients, setEngagementClients] = useState([]);
 
   const [timeEntryModal, setTimeEntryModal] = useState(false);
   const [timeEntryForm, setTimeEntryForm] = useState({
@@ -1714,8 +1719,20 @@ function App({ me, onSignOut }) {
       isIncomeTaxFiler: false,
       deliverableDescription: '',
       weeklyHours: '',
-      contractType: '2'
+      contractType: '2',
+      clientId: '',
+      position: '',
+      billRate: ''
     });
+
+    setEngagementClients([]);
+    if (selectedCompany) {
+      api('/api/service-clients?companyId=' + encodeURIComponent(selectedCompany.id))
+        .then(function(r) {
+          setEngagementClients((r.data || []).filter(function(c) { return c.active; }));
+        })
+        .catch(function() {});
+    }
 
     setEngagementModal(true);
   }
@@ -1750,7 +1767,7 @@ function App({ me, onSignOut }) {
       }
 
       if (
-        engagementForm.vinculationType === 'PART_TIME_EMPLOYEE' &&
+        engagementForm.vinculationType !== 'INDEPENDENT_SERVICES' &&
         (!engagementForm.weeklyHours || Number(engagementForm.weeklyHours) <= 0)
       ) {
         throw new Error('Las horas semanales son obligatorias.');
@@ -1769,7 +1786,10 @@ function App({ me, onSignOut }) {
         isIncomeTaxFiler: engagementForm.isIncomeTaxFiler,
         deliverableDescription: engagementForm.deliverableDescription,
         weeklyHours: Number(engagementForm.weeklyHours) || undefined,
-        contractType: engagementForm.contractType
+        contractType: engagementForm.contractType,
+        clientId: engagementForm.vinculationType === 'INDEPENDENT_SERVICES' ? null : engagementForm.clientId || null,
+        position: engagementForm.position,
+        billRate: engagementForm.billRate === '' ? null : Number(engagementForm.billRate)
       };
 
       await api('/api/engagements', {
@@ -3010,6 +3030,8 @@ function App({ me, onSignOut }) {
               <button className="btn" onClick={openNewProfessional}>
                 + Nuevo profesional
               </button>
+
+              <ServiceClientsButton company={selectedCompany} />
             </div>
 
             {professionalResults.length > 0 && (
@@ -5297,10 +5319,68 @@ function App({ me, onSignOut }) {
                       Contratista independiente (prestación de servicios)
                     </option>
                     <option value="PART_TIME_EMPLOYEE">
-                      Empleado de jornada parcial
+                      Empleado por horas (incluye servicios: aseo, meseros…)
+                    </option>
+                    <option value="EST_MISSION">
+                      Trabajador en misión (EST)
                     </option>
                   </select>
                 </div>
+
+                {engagementForm.vinculationType !== 'INDEPENDENT_SERVICES' && (
+                  <>
+                    <div className="form-group full">
+                      <label htmlFor="gf-engagement-client">Cliente donde trabajará</label>
+                      <select id="gf-engagement-client"
+                        value={engagementForm.clientId}
+                        onChange={function(e) {
+                          setEngagementForm({ ...engagementForm, clientId: e.target.value });
+                        }}
+                      >
+                        <option value="">Sin cliente (trabaja para la empresa)</option>
+                        {engagementClients
+                          .filter(function(c) {
+                            return engagementForm.vinculationType === 'EST_MISSION' ? c.figure === 'EST' : c.figure === 'SERVICIO';
+                          })
+                          .map(function(c) {
+                            return <option key={c.id} value={c.id}>{c.name} · ARL clase {c.arlRiskClass}</option>;
+                          })}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="gf-engagement-position">Cargo</label>
+                      <input id="gf-engagement-position"
+                        value={engagementForm.position}
+                        placeholder="Ej: camarero, auxiliar de aseo"
+                        onChange={function(e) {
+                          setEngagementForm({ ...engagementForm, position: e.target.value });
+                        }}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="gf-engagement-bill-rate">Tarifa de cobro por hora al cliente</label>
+                      <input id="gf-engagement-bill-rate"
+                        type="number"
+                        min="0"
+                        value={engagementForm.billRate}
+                        placeholder="Sólo si el cliente se cobra por hora"
+                        onChange={function(e) {
+                          setEngagementForm({ ...engagementForm, billRate: e.target.value });
+                        }}
+                      />
+                    </div>
+
+                    {engagementForm.vinculationType === 'EST_MISSION' && (
+                      <div className="form-group full">
+                        <div className="info-box">
+                          La misión debe tener fecha fin: máximo 6 meses, prorrogables hasta un año (art. 77 Ley 50 de 1990).
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
 
                 <div className="form-group">
                   <label htmlFor="gf-field-72-tarifa-por-hora" className="required">Tarifa por hora</label>

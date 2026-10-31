@@ -14,8 +14,8 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 31 suites, 294 pruebas (ya sin --forceExit)
-npm run e2e                                         # Firefox, hoy 27/27 pasos
+npx jest --runInBand --watchman=false              # hoy: 33 suites, 309 pruebas (ya sin --forceExit)
+npm run e2e                                         # Firefox, hoy 28/28 pasos
 ```
 
 ## Pendientes, en este orden
@@ -42,6 +42,8 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 
 ## Continuación prioritaria para la siguiente IA
+
+0. Modelo de negocio (30-oct): (a) servicio de RRHH externo: cada empresa cliente se registra como empresa con sus empleados y es su propio empleador; (b) EST: trabajadores en misión a empresas usuarias; (c) servicios (aseo, meseros) con personal propio. En (b) y (c) el empleador es la empresa del dueño, se paga **por horas, semanal**, con horas por tipo desde la planilla del cliente, y se cobra al cliente por tarifa por hora o costo + % administración. Falta: liquidar la semana de todos los trabajadores de un cliente en un paso, el XML DIAN con los elementos de recargos y horas extra completos (HED, HEN, HRN, HDDF…; hoy el XML no detalla dominicales y la DIAN podría rechazar la suma) y la cotización PILA por semanas para quienes ganan menos de un mínimo (validar con el contador, issue #9).
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
 2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).

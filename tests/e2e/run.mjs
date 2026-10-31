@@ -298,6 +298,68 @@ try {
     await expectText(page, '$ 1.504.000');
   });
 
+  await step('Temporales y servicios: cliente, camarero por horas con recargos y cobro', async () => {
+    const weekEnd = shiftDays(currentPeriodStart, 6);
+    await page.getByRole('button', { name: /Clientes/ }).click();
+    let m = modal(page);
+    await m.getByRole('button', { name: '+ Nuevo cliente' }).click();
+    await fill(m, 'Nombre del cliente', 'Hotel Andino');
+    await fill(m, 'Forma de cobro', 'HOURLY_RATE');
+    await fill(m, 'Clase de riesgo ARL del sitio', '2');
+    await m.getByRole('button', { name: 'Guardar cliente' }).click();
+    await expectText(m, 'Cliente creado.');
+    await m.getByRole('button', { name: 'Cerrar' }).click();
+
+    await page.getByRole('button', { name: '+ Nuevo profesional' }).click();
+    m = modal(page);
+    await fill(m, 'Primer nombre', 'Iván');
+    await fill(m, 'Primer apellido', 'Lara');
+    await fill(m, 'Documento', '1061000777');
+    await fill(m, 'Profesión', 'Camarero');
+    await m.getByRole('button', { name: 'Guardar y vincular' }).click();
+    m = modal(page);
+    await fill(m, 'Modalidad', 'PART_TIME_EMPLOYEE');
+    await m.getByLabel('Cliente donde trabajará').selectOption({ label: 'Hotel Andino · ARL clase 2' });
+    await fill(m, 'Cargo', 'Camarero');
+    await fill(m, 'Tarifa de cobro por hora al cliente', '20000');
+    await fill(m, 'Tarifa por hora', '12000');
+    await fill(m, 'Fecha inicio', currentPeriodStart);
+    await fill(m, 'Horas semanales (máx. 42)', '42');
+    await m.getByRole('button', { name: 'Crear vinculación' }).click();
+    await page.locator('.modal').waitFor({ state: 'detached' });
+    await page.getByText(/Iván.*Lara/).first().click();
+
+    await page.getByRole('button', { name: /Registrar horas/ }).click();
+    m = modal(page);
+    await fill(m, 'Periodo desde', currentPeriodStart);
+    await fill(m, 'Periodo hasta', weekEnd);
+    await fill(m, 'Ordinarias diurnas', '30');
+    await fill(m, 'Ordinarias nocturnas (+35%)', '4');
+    await fill(m, 'Dominical/festiva diurna (+90%)', '6');
+    await m.getByRole('button').last().click();
+    await expectText(page, 'Horas registradas correctamente.');
+
+    await page.getByRole('button', { name: /Liquidar periodo/ }).click();
+    m = modal(page);
+    await fill(m, 'Periodo desde', currentPeriodStart);
+    await fill(m, 'Periodo hasta', weekEnd);
+    await m.getByRole('button', { name: 'Calcular liquidación' }).click();
+    await expectText(page, 'Liquidación calculada correctamente.');
+
+    await page.getByRole('button', { name: /Clientes/ }).click();
+    m = modal(page);
+    await m.getByRole('button', { name: /Cobro/ }).first().click();
+    await fill(m, 'Cobro desde', currentPeriodStart);
+    await fill(m, 'Cobro hasta', weekEnd);
+    await m.getByRole('button', { name: 'Calcular cobro' }).click();
+    // 20.000 × (30 + 4 × 1,35 + 6 × 1,90) = 936.000
+    await expectText(m, '$ 936.000');
+    const download = page.waitForEvent('download');
+    await m.getByRole('button', { name: /Descargar CSV/ }).click();
+    if (!(await download).suggestedFilename().startsWith('cobro-Hotel-Andino')) throw new Error('Descarga inesperada');
+    await m.getByRole('button', { name: 'Cerrar' }).click();
+  });
+
   await step('Prestaciones: calcular y registrar la prima del semestre', async () => {
     await page.getByRole('button', { name: /Prestaciones/ }).click();
     await page.locator('#benefit-year').fill(testYear);
