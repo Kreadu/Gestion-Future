@@ -8,6 +8,14 @@
  * Cada empresa reporta su nómina con su NIT: la propia (trabajadores
  * en misión) y cada cliente a la que se le lleva la nómina. El PIN, el
  * .p12 y su contraseña se guardan cifrados (ver secretBox.ts).
+ *
+ * Documento soporte (pagos a contratistas independientes), con su
+ * propio Software ID, set de pruebas y numeración autorizada:
+ *
+ *   GET /api/companies/:id/ds-config
+ *   PUT /api/companies/:id/ds-config { softwareId, pin?, testSetId?, environment, resolutionNumber,
+ *                                      resolutionStartDate, resolutionEndDate, prefix, rangeFrom,
+ *                                      rangeTo, taxLevelCode? }
  */
 
 import { sendJson } from '../http';
@@ -15,6 +23,7 @@ import { HttpError, audit, requireCompanyAccess, requireRole, type AuthEnv, type
 import type { DianEnvironment } from '../services/dianNominaXmlService';
 import { DianCertificateError, loadPkcs12, type DianCertificate } from '../services/dianSigner';
 import { SecretBoxError, openSecret, sealSecret } from '../services/secretBox';
+import type { DocumentoSoporteNumbering } from '../types/hourly';
 
 export interface DianConfigEnv extends AuthEnv {
   DIAN_CONFIG_KEY?: string;
@@ -65,6 +74,167 @@ export async function dianSoftwareFor(env: DianConfigEnv, companyId: string): Pr
   };
 }
 
+/** Credenciales y numeración del documento soporte de la empresa. */
+export interface DsSoftware extends DianSoftware {
+  numbering: DocumentoSoporteNumbering;
+  /** Responsabilidades fiscales del RUT de la empresa (adquiriente). */
+  taxLevelCode: string;
+}
+
+/**
+ * Valores de relleno mientras la empresa no tenga la habilitación del
+ * documento soporte (numeración de ejemplo del set de pruebas DIAN).
+ */
+const DS_PLACEHOLDER: DsSoftware = {
+  ...PLACEHOLDER,
+  numbering: {
+    resolutionNumber: '18760000001',
+    startDate: '2019-01-19',
+    endDate: '2030-01-19',
+    prefix: 'SEDS',
+    from: 984000000,
+    to: 985000000,
+  },
+  taxLevelCode: 'R-99-PN',
+};
+
+export async function dsSoftwareFor(env: DianConfigEnv, companyId: string): Promise<DsSoftware> {
+  const row = await env.DB
+    .prepare(`SELECT * FROM company_ds_config WHERE companyId = ?1`)
+    .bind(companyId)
+    .first<any>();
+  if (!row) return DS_PLACEHOLDER;
+  let pin: string;
+  try {
+    pin = await openSecret(env.DIAN_CONFIG_KEY, String(row.pinSealed));
+  } catch (error) {
+    if (error instanceof SecretBoxError) throw new HttpError(409, error.message);
+    throw error;
+  }
+  return {
+    softwareId: String(row.softwareId),
+    pin,
+    environment: row.environment === '1' ? '1' : '2',
+    testSetId: row.testSetId ? String(row.testSetId) : null,
+    configured: true,
+    numbering: {
+      resolutionNumber: String(row.resolutionNumber),
+      startDate: String(row.resolutionStartDate),
+      endDate: String(row.resolutionEndDate),
+      prefix: String(row.prefix),
+      from: Number(row.rangeFrom),
+      to: Number(row.rangeTo),
+    },
+    taxLevelCode: String(row.taxLevelCode || 'R-99-PN'),
+  };
+}
+
+function dsPublicView(row: any | null) {
+  return {
+    configured: !!row,
+    softwareId: row?.softwareId ?? null,
+    testSetId: row?.testSetId ?? null,
+    environment: row?.environment ?? '2',
+    resolutionNumber: row?.resolutionNumber ?? null,
+    resolutionStartDate: row?.resolutionStartDate ?? null,
+    resolutionEndDate: row?.resolutionEndDate ?? null,
+    prefix: row?.prefix ?? null,
+    rangeFrom: row?.rangeFrom ?? null,
+    rangeTo: row?.rangeTo ?? null,
+    taxLevelCode: row?.taxLevelCode ?? 'R-99-PN',
+    updatedAt: row?.updatedAt ?? null,
+  };
+}
+
+async function handleDsConfig(request: Request, env: DianConfigEnv, user: AuthUser, companyId: string): Promise<Response> {
+  const existing = await env.DB
+    .prepare(`SELECT * FROM company_ds_config WHERE companyId = ?1`)
+    .bind(companyId)
+    .first<any>();
+  if (request.method === 'GET') {
+    return sendJson({ success: true, data: dsPublicView(existing) });
+  }
+
+  const body = (await request.json().catch(() => ({}))) as any;
+  const text = (key: string) => String(body[key] ?? '').trim();
+  const softwareId = text('softwareId');
+  const pin = text('pin');
+  const prefix = text('prefix').toUpperCase();
+  const resolutionNumber = text('resolutionNumber');
+  const resolutionStartDate = text('resolutionStartDate');
+  const resolutionEndDate = text('resolutionEndDate');
+  const rangeFrom = Number(body.rangeFrom);
+  const rangeTo = Number(body.rangeTo);
+  const taxLevelCode = text('taxLevelCode') || 'R-99-PN';
+
+  if (!softwareId) throw new HttpError(400, 'El Software ID del documento soporte es obligatorio.');
+  if (!pin && !existing) throw new HttpError(400, 'El PIN del software es obligatorio.');
+  if (!resolutionNumber || !/^[A-Z0-9]{1,4}$/.test(prefix)) {
+    throw new HttpError(400, 'Indica el número de resolución de numeración y el prefijo (hasta 4 letras o números).');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(resolutionStartDate) || !/^\d{4}-\d{2}-\d{2}$/.test(resolutionEndDate) || resolutionStartDate > resolutionEndDate) {
+    throw new HttpError(400, 'Indica las fechas de vigencia de la resolución (AAAA-MM-DD).');
+  }
+  if (!Number.isInteger(rangeFrom) || !Number.isInteger(rangeTo) || rangeFrom < 1 || rangeFrom > rangeTo) {
+    throw new HttpError(400, 'El rango autorizado debe ir de un número entero positivo a otro mayor o igual.');
+  }
+  if (!/^[A-Z0-9-]+(;[A-Z0-9-]+)*$/.test(taxLevelCode)) {
+    throw new HttpError(400, 'Las responsabilidades fiscales van separadas por punto y coma, p. ej. O-13;O-15.');
+  }
+
+  try {
+    const pinSealed = pin ? await sealSecret(env.DIAN_CONFIG_KEY, pin) : String(existing.pinSealed);
+    await env.DB
+      .prepare(`
+        INSERT INTO company_ds_config (
+          companyId, softwareId, pinSealed, testSetId, environment, resolutionNumber,
+          resolutionStartDate, resolutionEndDate, prefix, rangeFrom, rangeTo, taxLevelCode, updatedAt
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT(companyId) DO UPDATE SET
+          softwareId = excluded.softwareId,
+          pinSealed = excluded.pinSealed,
+          testSetId = excluded.testSetId,
+          environment = excluded.environment,
+          resolutionNumber = excluded.resolutionNumber,
+          resolutionStartDate = excluded.resolutionStartDate,
+          resolutionEndDate = excluded.resolutionEndDate,
+          prefix = excluded.prefix,
+          rangeFrom = excluded.rangeFrom,
+          rangeTo = excluded.rangeTo,
+          taxLevelCode = excluded.taxLevelCode,
+          updatedAt = excluded.updatedAt
+      `)
+      .bind(
+        companyId, softwareId, pinSealed, text('testSetId') || null, body.environment === '1' ? '1' : '2',
+        resolutionNumber, resolutionStartDate, resolutionEndDate, prefix, rangeFrom, rangeTo, taxLevelCode,
+        new Date().toISOString()
+      )
+      .run();
+  } catch (error) {
+    if (error instanceof SecretBoxError) throw new HttpError(409, error.message);
+    throw error;
+  }
+
+  // La numeración del documento soporte arranca en el rango autorizado.
+  await env.DB
+    .prepare(`
+      INSERT INTO dian_counters (companyId, documentType, lastConsecutive)
+      VALUES (?1, 'DOCUMENTO_SOPORTE', ?2)
+      ON CONFLICT(companyId, documentType) DO UPDATE SET
+        lastConsecutive = MAX(lastConsecutive, excluded.lastConsecutive)
+    `)
+    .bind(companyId, rangeFrom - 1)
+    .run();
+
+  await audit(env, user, 'UPDATE', 'ds_config', companyId, companyId);
+  const saved = await env.DB
+    .prepare(`SELECT * FROM company_ds_config WHERE companyId = ?1`)
+    .bind(companyId)
+    .first<any>();
+  return sendJson({ success: true, data: dsPublicView(saved) });
+}
+
 // Abrir un .p12 (PBKDF + 3DES en JS) tarda cientos de ms: se reutiliza
 // mientras el isolate siga vivo y la configuración no cambie.
 const certificateCache = new Map<string, Promise<DianCertificate>>();
@@ -108,7 +278,7 @@ export async function handleDianConfigRoutes(
   env: DianConfigEnv,
   user: AuthUser
 ): Promise<Response | null> {
-  const match = url.pathname.match(/^\/api\/companies\/([^/]+)\/dian-config$/);
+  const match = url.pathname.match(/^\/api\/companies\/([^/]+)\/(dian|ds)-config$/);
   if (!match || (request.method !== 'GET' && request.method !== 'PUT')) return null;
 
   const companyId = decodeURIComponent(match[1]);
@@ -120,6 +290,8 @@ export async function handleDianConfigRoutes(
     .bind(companyId)
     .first<any>();
   if (!company) throw new HttpError(404, 'Empresa no encontrada.');
+
+  if (match[2] === 'ds') return handleDsConfig(request, env, user, companyId);
 
   const existing = await configRow(env, companyId);
   if (request.method === 'GET') {

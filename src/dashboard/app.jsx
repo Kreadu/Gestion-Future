@@ -2973,11 +2973,16 @@ function App({ me, onSignOut }) {
               </button>
             </div>
 
-            {settlementResult.dianDocument && String(settlementResult.dianDocument.xmlContent || '').indexOf('<NominaIndividual') !== -1 && (
+            {settlementResult.dianDocument && /<(NominaIndividual|Invoice)[\s>]/.test(String(settlementResult.dianDocument.xmlContent || '')) && (
               <DianSubmissionPanel
                 key={settlementResult.id}
                 basePath="/api/hourly/settlements"
-                settlement={{ id: settlementResult.id, dianConsecutive: settlementResult.dianDocument.consecutive, hoursByType: settlementResult.calculation && settlementResult.calculation.hoursBreakdown }}
+                settlement={{
+                  id: settlementResult.id,
+                  dianConsecutive: settlementResult.dianDocument.consecutive,
+                  hoursByType: settlementResult.calculation && settlementResult.calculation.hoursBreakdown,
+                  documentoSoporte: String(settlementResult.dianDocument.xmlContent || '').indexOf('<Invoice') !== -1
+                }}
               />
             )}
           </div>

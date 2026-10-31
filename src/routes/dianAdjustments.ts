@@ -220,6 +220,9 @@ async function createAdjustment(
   const lastReplacement = previous.filter(a => a.noteType === 'REPLACE' && a.dianSubmissionStatus === 'ACCEPTED').pop();
   const predecessorXml = lastReplacement ? String(lastReplacement.dianXmlContent) : acceptedSourceXml(table, source);
   if (!predecessorXml) throw new HttpError(409, 'No se encontró el XML aceptado de esta liquidación.');
+  if (predecessorXml.includes('<Invoice')) {
+    throw new HttpError(400, 'Un documento soporte no se corrige con nota de ajuste de nómina.');
+  }
   const predecessor = predecessorFromXml(predecessorXml);
 
   // Una nota sin enviar o rechazada se rehace con el mismo número (sin huecos en la serie NA).

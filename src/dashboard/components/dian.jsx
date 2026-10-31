@@ -4,7 +4,8 @@
 //   <DianSubmissionPanel settlement={...} basePath="/api/payroll-settlements" onChanged={fn} />
 //
 // `settlement` trae id, dianConsecutive y, si ya se envió,
-// dianSubmissionStatus, dianErrors y dianSentAt. basePath es
+// dianSubmissionStatus, dianErrors y dianSentAt; documentoSoporte = true
+// para el de un contratista (sin notas de ajuste de nómina). basePath es
 // /api/payroll-settlements (nómina mensual) o /api/hourly/settlements
 // (jornada parcial). onChanged (opcional) recarga la lista del padre.
 // Cuando la DIAN ya aceptó el documento, muestra las notas de ajuste
@@ -131,7 +132,7 @@ function DianSubmissionPanel({ settlement, basePath, onChanged }) {
       {message && <div className="alert success" role="status" style={{position: 'static', transform: 'none', width: 'auto', marginTop: '10px'}}>{message}</div>}
       {error && <div className="inline-warning" role="alert" style={{marginTop: '10px'}}>{error}</div>}
 
-      {status === 'ACCEPTED' && <DianAdjustments path={path} settlement={settlement} onChanged={onChanged} />}
+      {status === 'ACCEPTED' && !settlement.documentoSoporte && <DianAdjustments path={path} settlement={settlement} onChanged={onChanged} />}
     </div>
   );
 }
@@ -536,8 +537,118 @@ function DianConfigModal({ company, onClose }) {
             </button>
           </div>
         </form>
+
+        <DsConfigForm company={company} />
       </div>
     </div>
+  );
+}
+
+// Documento soporte (pagos a contratistas independientes): otro Software ID,
+// otro set de pruebas y la numeración que autorizó la DIAN.
+// GET/PUT /api/companies/:id/ds-config; usa el certificado de arriba.
+const DS_FIELDS = [
+  ['softwareId', 'Software ID (documento soporte)', 'text'],
+  ['pin', 'PIN del software', 'password'],
+  ['testSetId', 'TestSetId (habilitación)', 'text'],
+  ['resolutionNumber', 'Resolución de numeración', 'text'],
+  ['resolutionStartDate', 'Vigente desde', 'date'],
+  ['resolutionEndDate', 'Vigente hasta', 'date'],
+  ['prefix', 'Prefijo', 'text'],
+  ['rangeFrom', 'Número inicial', 'number'],
+  ['rangeTo', 'Número final', 'number'],
+  ['taxLevelCode', 'Responsabilidades fiscales (RUT)', 'text']
+];
+
+function DsConfigForm({ company }) {
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState({ environment: '2', taxLevelCode: 'R-99-PN' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const url = '/api/companies/' + encodeURIComponent(company.id) + '/ds-config';
+
+  useEffect(function() {
+    let cancelled = false;
+    api(url)
+      .then(function(r) {
+        if (cancelled) return;
+        setConfig(r.data);
+        if (r.data.configured) {
+          const values = { environment: r.data.environment || '2' };
+          DS_FIELDS.forEach(function(f) { if (f[0] !== 'pin') values[f[0]] = r.data[f[0]] === null ? '' : String(r.data[f[0]]); });
+          setForm(values);
+        }
+      })
+      .catch(function(err) { if (!cancelled) setError(err.message); });
+    return function() { cancelled = true; };
+  }, [url]);
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const r = await api(url, { method: 'PUT', body: JSON.stringify(form) });
+      setConfig(r.data);
+      setForm(function(prev) { return { ...prev, pin: '' }; });
+      setNotice('Habilitación de documento soporte guardada.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save}>
+      <div className="modal-body">
+        <h4 style={{ margin: '0 0 8px' }}>📄 Documento soporte (pagos a contratistas)</h4>
+        <div className="info-box" style={{ marginBottom: '12px' }}>
+          {config && config.configured
+            ? '✅ Configurado. '
+            : 'Sin configurar: los documentos soporte llevan datos de prueba y no se pueden enviar. '}
+          Se habilita aparte en la DIAN y lleva la numeración que ella autorizó (resolución, prefijo y rango).
+        </div>
+        <div className="form-grid">
+          {DS_FIELDS.map(function(f) {
+            return (
+              <div className="form-group" key={f[0]}>
+                <label htmlFor={'ds-' + f[0]}>{f[1]}</label>
+                <input
+                  id={'ds-' + f[0]}
+                  type={f[2]}
+                  autoComplete="off"
+                  value={form[f[0]] || ''}
+                  placeholder={f[0] === 'pin' && config && config.configured ? 'Sin cambios' : ''}
+                  onChange={function(e) { const v = e.target.value; setForm(function(prev) { return { ...prev, [f[0]]: v }; }); }}
+                />
+              </div>
+            );
+          })}
+          <div className="form-group">
+            <label htmlFor="ds-environment">Ambiente</label>
+            <select id="ds-environment" value={form.environment}
+              onChange={function(e) { const v = e.target.value; setForm(function(prev) { return { ...prev, environment: v }; }); }}>
+              <option value="2">Habilitación (pruebas)</option>
+              <option value="1">Producción</option>
+            </select>
+          </div>
+        </div>
+        {error && <div className="inline-warning" role="alert" style={{ marginTop: '10px' }}>{error}</div>}
+        {notice && (
+          <div className="alert success" role="status" style={{ position: 'static', transform: 'none', width: 'auto', marginTop: '10px' }}>
+            {notice}
+          </div>
+        )}
+      </div>
+      <div className="modal-footer">
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Guardando…' : 'Guardar documento soporte'}
+        </button>
+      </div>
+    </form>
   );
 }
 

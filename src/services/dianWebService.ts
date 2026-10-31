@@ -125,8 +125,8 @@ export function dianFileNames(
   nit: string,
   year: number,
   sequence: number,
-  /** nie = nómina individual; nia = nota de ajuste. */
-  prefix: 'nie' | 'nia' = 'nie'
+  /** nie = nómina individual; nia = nota de ajuste; ds = documento soporte. */
+  prefix: 'nie' | 'nia' | 'ds' = 'nie'
 ): { xml: string; zip: string } {
   const base =
     nit.replace(/\D/g, '').padStart(10, '0').slice(-10) +
@@ -321,6 +321,8 @@ export interface SendNominaInput {
   testSetId?: string;
   certificate: DianCertificate;
   fetchImpl?: FetchLike;
+  /** Documento soporte: en producción va por SendBillSync, como la factura. */
+  documentoSoporte?: boolean;
 }
 
 export async function sendNomina(input: SendNominaInput): Promise<DianResult> {
@@ -334,6 +336,17 @@ export async function sendNomina(input: SendNominaInput): Promise<DianResult> {
       'SendTestSetAsync',
       `<wcf:SendTestSetAsync><wcf:fileName>${escapeXml(input.fileNames.zip)}</wcf:fileName>` +
         `<wcf:contentFile>${zip}</wcf:contentFile><wcf:testSetId>${escapeXml(input.testSetId)}</wcf:testSetId></wcf:SendTestSetAsync>`,
+      input.certificate,
+      fetchImpl
+    );
+  }
+
+  if (input.documentoSoporte) {
+    return callDian(
+      '1',
+      'SendBillSync',
+      `<wcf:SendBillSync><wcf:fileName>${escapeXml(input.fileNames.zip)}</wcf:fileName>` +
+        `<wcf:contentFile>${zip}</wcf:contentFile></wcf:SendBillSync>`,
       input.certificate,
       fetchImpl
     );

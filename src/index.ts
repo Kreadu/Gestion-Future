@@ -11,7 +11,7 @@ import type {
 
 import { DianNominaXmlService, DianXmlBalanceError } from './services/dianNominaXmlService';
 import { handleDianRoutes } from './routes/dian';
-import { dianSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
+import { dianSoftwareFor, dsSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
 import { handleServiceClientRoutes, resolveAssignment } from './routes/serviceClients';
 import { handleDianAdjustmentRoutes, isDeletedAtDian, type AdjustmentSourceTable, type CorrectedPayroll } from './routes/dianAdjustments';
 interface DianEmployerInfo {
@@ -386,6 +386,8 @@ const ENGAGEMENT_WITH_PROFESSIONAL_SQL = `
     p.lastName2 AS p_lastName2,
     p.taxId AS p_taxId,
     p.documentType AS p_documentType,
+    p.dv AS p_dv,
+    p.city AS p_city,
     sc.arlRiskClass AS client_arlRiskClass
   FROM engagements e
   JOIN professionals p ON p.id = e.professionalId
@@ -634,7 +636,7 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
   }
 
   const companyRow = await env.DB
-    .prepare(`SELECT nit, dv, name FROM companies WHERE id = ?1 AND active = 1`)
+    .prepare(`SELECT nit, dv, name, address, city, department, divipolaCode FROM companies WHERE id = ?1 AND active = 1`)
     .bind(engagement.companyId)
     .first();
 
@@ -743,7 +745,8 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
 
       const settlementResult = IndependentContractorEngine.calculate(input);
 
-      const software = await dianSoftwareFor(env, engagement.companyId);
+      // Habilitación y numeración del documento soporte (datos de prueba si aún no la tiene).
+      const software = await dsSoftwareFor(env, engagement.companyId);
 
       const payerInfo: DocumentoSoportePayerInfo = {
         nit: String(companyRow.nit || ''),
@@ -751,6 +754,13 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
         companyName: String(companyRow.name || ''),
         softwareId: software.softwareId,
         pinSoftware: software.pin,
+        environment: software.environment,
+        numbering: software.numbering,
+        taxLevelCode: software.taxLevelCode,
+        address: companyRow.address ? String(companyRow.address) : null,
+        city: companyRow.city ? String(companyRow.city) : null,
+        department: companyRow.department ? String(companyRow.department) : null,
+        divipolaCode: companyRow.divipolaCode ? String(companyRow.divipolaCode) : null,
       };
 
       const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
@@ -758,13 +768,32 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
           (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
           '13',
         concept: settlementResult.retentionConcept,
+        dv: engagementRow.p_dv ? String(engagementRow.p_dv) : null,
+        city: engagementRow.p_city ? String(engagementRow.p_city) : null,
+        periodStart,
+        periodEnd,
       };
+
+      const today = new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10);
+      if (software.configured && (today < software.numbering.startDate || today > software.numbering.endDate)) {
+        return sendJson(
+          { success: false, error: 'La resolución de numeración del documento soporte no está vigente hoy: actualízala en Empresas → DIAN.' },
+          409
+        );
+      }
 
       const soporteConsecutive = await getNextDianConsecutive(
         env.DB,
         engagement.companyId,
         'DOCUMENTO_SOPORTE'
       );
+
+      if (software.configured && soporteConsecutive > software.numbering.to) {
+        return sendJson(
+          { success: false, error: 'Se agotó el rango de numeración autorizado del documento soporte: pide uno nuevo a la DIAN y cárgalo en Empresas → DIAN.' },
+          409
+        );
+      }
 
       const documentoSoporte = await DocumentoSoporteService.generate(
         settlementResult,

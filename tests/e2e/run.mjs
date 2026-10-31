@@ -168,9 +168,9 @@ try {
     await page.getByRole('button', { name: 'Habilitación DIAN de la empresa' }).click();
     const m = modal(page);
     await expectText(m, 'Sin configurar');
-    await m.getByLabel('Software ID').fill('software-e2e');
-    await m.getByLabel('PIN del software').fill('13579');
-    await m.getByLabel('TestSetId (habilitación)').fill('set-e2e');
+    await m.locator('#dian-software-id').fill('software-e2e');
+    await m.locator('#dian-pin').fill('13579');
+    await m.locator('#dian-test-set').fill('set-e2e');
     await m.getByLabel('Certificado digital (.p12 / .pfx)').setInputFiles({
       name: 'certificado.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(cert.p12Base64, 'base64'),
     });
@@ -178,6 +178,16 @@ try {
     await m.getByRole('button', { name: 'Guardar habilitación' }).click();
     await expectText(m, 'Habilitación DIAN guardada.');
     await expectText(m, 'Empresa de prueba');
+
+    // Documento soporte de los contratistas: su propio software y numeración.
+    const ds = {
+      softwareId: 'software-ds-e2e', pin: '24680', testSetId: 'set-ds-e2e', resolutionNumber: '18764000001',
+      resolutionStartDate: `${testYear}-01-01`, resolutionEndDate: `${Number(testYear) + 1}-12-31`,
+      prefix: 'DSE', rangeFrom: '1', rangeTo: '5000',
+    };
+    for (const [field, value] of Object.entries(ds)) await m.locator('#ds-' + field).fill(value);
+    await m.getByRole('button', { name: 'Guardar documento soporte' }).click();
+    await expectText(m, 'Habilitación de documento soporte guardada.');
     await m.getByRole('button', { name: 'Cerrar' }).last().click();
   });
 
@@ -309,6 +319,12 @@ try {
     await m.getByRole('button', { name: 'Calcular liquidación' }).click();
     await expectText(page, 'Liquidación calculada correctamente.');
     await expectText(page, '$ 1.504.000');
+
+    // Documento soporte del contratista, firmado y enviado (DIAN simulada).
+    await page.getByRole('button', { name: /Firmar y enviar a la DIAN/ }).click();
+    await expectText(page, 'En proceso en la DIAN');
+    await page.getByRole('button', { name: /Consultar estado/ }).click();
+    await expectText(page, 'Aceptado por la DIAN');
   });
 
   await step('Temporales y servicios: cliente, camarero por horas, liquidación del mes y cobro', async () => {

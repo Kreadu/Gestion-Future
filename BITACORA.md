@@ -311,3 +311,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - Sobre una nómina que la DIAN ya aceptó: "Corregir (reemplazar)" recalcula con los valores correctos y genera la nota NA con ReemplazandoPredecesor; "Eliminar ante la DIAN" genera la nota de eliminación. Se firman y envían como la nómina (`/api/dian-adjustments/:id/dian/...`); al aceptarse un reemplazo, la liquidación queda corregida; eliminada, la de por horas se puede anular. Serie NA propia (migración 0021). Issues #8, #13, #16 y #18 cerrados.
 - Verificación: `tests/dianAdjustments.test.ts`; Jest 35 suites / 321 pruebas; E2E Firefox 29/29.
+
+## 31-oct-2026 · Documento soporte electrónico de contratistas (firma y envío)
+
+- El documento soporte pasó al formato UBL del anexo (Invoice tipo 05, CUDS) con la numeración autorizada de cada empresa; habilitación aparte en Empresas → DIAN ("Documento soporte": Software ID, PIN, TestSetId, resolución, prefijo y rango). Se firma y envía como la nómina; sin habilitación lleva datos de prueba y no se envía. Las notas de ajuste de nómina no aplican al documento soporte.
+- Verificación: Jest 35 suites / 322 pruebas; E2E Firefox 29/29 (envía el documento soporte del contratista a la DIAN simulada).

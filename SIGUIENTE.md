@@ -14,7 +14,7 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 35 suites, 321 pruebas (ya sin --forceExit)
+npx jest --runInBand --watchman=false              # hoy: 35 suites, 322 pruebas (ya sin --forceExit)
 npm run e2e                                         # Firefox, hoy 29/29 pasos
 ```
 
@@ -59,5 +59,5 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
 2. [x] Notas de ajuste de nómina (TipoXML 103, prefijo NA, 31-oct): reemplazar con la nómina corregida o eliminar, sobre lo que la DIAN ya aceptó (`routes/dianAdjustments.ts`). Confirmar en habilitación: CUNE de la eliminación (valores 0.00 y documento 0) y que el nombre del .zip (consecutivo del documento) no choque entre la serie NE y la NA.
-   Documento soporte de contratistas independientes: sigue sin firma ni envío (otro tipo de documento DIAN, UBL).
+3. [x] Documento soporte de contratistas independientes (31-oct): UBL 2.1 Invoice del anexo (CustomizationID 10, tipo 05, CUDS SHA-384), numeración autorizada y habilitación propias por empresa (Empresas → DIAN → "Documento soporte", migración 0022), firma y envío por las rutas de /api/hourly/settlements (SendTestSetAsync / SendBillSync). Confirmar en habilitación: TaxScheme y responsabilidades del adquiriente, unidad HUR, prefijo de archivo `ds`, ClaimedRole de la firma y dirección/municipio del contratista (hoy usa la ciudad del profesional y el código DANE de la empresa).
 3. [x] Acceso Firebase con `raipimo36@gmail.com` confirmado por el dueño (30-oct).

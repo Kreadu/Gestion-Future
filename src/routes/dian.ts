@@ -6,10 +6,10 @@
  *   GET  /api/payroll-settlements/:id/dian/signed-xml → descarga el XML firmado enviado
  *
  * Las mismas tres rutas existen bajo /api/hourly/settlements/:id/dian/...
- * para la nómina de jornada parcial del personal por horas (los
- * contratistas independientes llevan documento soporte, que no se envía
- * por aquí) y bajo /api/dian-adjustments/:id/dian/... para las notas de
- * ajuste (routes/dianAdjustments.ts).
+ * para la nómina de jornada parcial del personal por horas y bajo /api/dian-adjustments/:id/dian/... para las notas de
+ * ajuste (routes/dianAdjustments.ts). Los contratistas independientes
+ * llevan documento soporte (UBL), que se envía por las mismas rutas de
+ * /api/hourly/settlements con la habilitación de documento soporte.
  *
  * Cada empresa envía con su propia habilitación (certificado, Software
  * ID, PIN, TestSetId y ambiente): ver routes/dianConfig.ts.
@@ -25,9 +25,10 @@ import {
 } from '../services/dianNominaXmlService';
 import { DianCertificateError, signDianXml } from '../services/dianSigner';
 import { SecretBoxError } from '../services/secretBox';
-import { dianCertificateFor, dianSoftwareFor, type DianConfigEnv } from './dianConfig';
+import { dianCertificateFor, dianSoftwareFor, dsSoftwareFor, type DianConfigEnv } from './dianConfig';
+import { DS_CBC_NAMESPACE, DS_STS_NAMESPACE, DocumentoSoporteService } from '../services/documentoSoporteService';
 import { DianServiceError, dianFileNames, getStatusZip, sendNomina, type DianResult } from '../services/dianWebService';
-import { findElements, getAttribute, parseXml } from '../services/xmlC14n';
+import { findElements, getAttribute, parseXml, textContent } from '../services/xmlC14n';
 import { applyAcceptedAdjustment } from './dianAdjustments';
 
 export type DianRouteEnv = DianConfigEnv;
@@ -47,6 +48,8 @@ export function submissionStatusFor(result: DianResult, environment: DianEnviron
 /** Liquidación con XML de nómina, venga de la nómina mensual o del personal por horas. */
 interface DianSource {
   table: 'payroll_settlements' | 'settlements' | 'dian_adjustments';
+  /** Documento soporte de un contratista (UBL) en vez de nómina. */
+  documentoSoporte: boolean;
   id: string;
   companyId: string;
   companyNit: string;
@@ -77,6 +80,7 @@ async function loadSource(env: DianRouteEnv, user: AuthUser, kind: SourceKind, i
     requireCompanyAccess(user, String(row.companyId));
     return {
       table: 'dian_adjustments',
+      documentoSoporte: false,
       id,
       companyId: String(row.companyId),
       companyNit: String(row.companyNit || ''),
@@ -114,20 +118,25 @@ async function loadSource(env: DianRouteEnv, user: AuthUser, kind: SourceKind, i
   requireCompanyAccess(user, String(row.companyId));
 
   let xml: string | null = null;
+  let documentoSoporte = false;
   let consecutive = Number(row.dianConsecutive || 0);
   if (kind === 'payroll') {
     xml = row.dianStatus === 'GENERATED' && row.dianXmlContent ? String(row.dianXmlContent) : null;
   } else {
     const document = JSON.parse(String(row.resultJson || '{}')).dianDocument;
-    // Sólo la nómina de jornada parcial; el documento soporte es otro tipo de documento.
-    if (document && typeof document.xmlContent === 'string' && document.xmlContent.includes('<NominaIndividual')) {
+    // Nómina de jornada parcial o documento soporte UBL (los generados
+    // antes de este formato no se pueden enviar).
+    if (document && typeof document.xmlContent === 'string' &&
+      (document.xmlContent.includes('<NominaIndividual') || document.xmlContent.includes('<Invoice'))) {
       xml = document.xmlContent;
+      documentoSoporte = document.xmlContent.includes('<Invoice');
       consecutive = Number(String(document.consecutive || '').replace(/\D/g, '')) || 0;
     }
   }
 
   return {
     table: kind === 'payroll' ? 'payroll_settlements' : 'settlements',
+    documentoSoporte,
     id,
     companyId: String(row.companyId),
     companyNit: String(row.companyNit || ''),
@@ -228,7 +237,9 @@ export async function handleDianRoutes(
   let software;
   let certificate;
   try {
-    software = await dianSoftwareFor(env, source.companyId);
+    software = source.documentoSoporte
+      ? await dsSoftwareFor(env, source.companyId)
+      : await dianSoftwareFor(env, source.companyId);
     certificate = await dianCertificateFor(env, source.companyId);
   } catch (error) {
     dianError(error);
@@ -242,7 +253,7 @@ export async function handleDianRoutes(
   if (missing.length || !certificate) {
     throw new HttpError(
       409,
-      `Falta la habilitación DIAN de esta empresa (${missing.join(', ')}). ` +
+      `Falta la habilitación DIAN ${source.documentoSoporte ? 'de documento soporte ' : ''}de esta empresa (${missing.join(', ')}). ` +
         'Cárgala en Empresas → DIAN.'
     );
   }
@@ -276,16 +287,33 @@ export async function handleDianRoutes(
   // El XML lleva el SoftwareSC de las credenciales con que se generó; si
   // cambiaron (p. ej. se generó con las de prueba), la DIAN lo rechazaría.
   const root = parseXml(source.xml);
-  const NOMINA_NS = kind === 'adjustment' ? NOMINA_AJUSTE_NAMESPACE : NOMINA_NAMESPACE;
-  const provider = findElements(root, NOMINA_NS, 'ProveedorXML')[0];
-  const number = findElements(root, NOMINA_NS, 'NumeroSecuenciaXML')[0];
-  const expectedSC = await DianNominaXmlService.calculateSoftwareSC(
-    software.softwareId,
-    software.pin,
-    String(number && getAttribute(number, 'Numero'))
-  );
-  const info = findElements(root, NOMINA_NS, 'InformacionGeneral')[0];
-  if (!provider || getAttribute(provider, 'SoftwareSC') !== expectedSC || getAttribute(info, 'Ambiente') !== environment) {
+  let credentialsMatch: boolean;
+  let issueDate: string;
+  if (source.documentoSoporte) {
+    const text = (namespace: string, name: string) => {
+      const element = findElements(root, namespace, name)[0];
+      return element ? textContent(element).trim() : '';
+    };
+    const expected = await DocumentoSoporteService.calculateSoftwareSecurityCode(
+      software.softwareId, software.pin, text(DS_CBC_NAMESPACE, 'ID')
+    );
+    credentialsMatch = text(DS_STS_NAMESPACE, 'SoftwareSecurityCode') === expected &&
+      text(DS_CBC_NAMESPACE, 'ProfileExecutionID') === environment;
+    issueDate = text(DS_CBC_NAMESPACE, 'IssueDate');
+  } else {
+    const NOMINA_NS = kind === 'adjustment' ? NOMINA_AJUSTE_NAMESPACE : NOMINA_NAMESPACE;
+    const provider = findElements(root, NOMINA_NS, 'ProveedorXML')[0];
+    const number = findElements(root, NOMINA_NS, 'NumeroSecuenciaXML')[0];
+    const expectedSC = await DianNominaXmlService.calculateSoftwareSC(
+      software.softwareId,
+      software.pin,
+      String(number && getAttribute(number, 'Numero'))
+    );
+    const info = findElements(root, NOMINA_NS, 'InformacionGeneral')[0];
+    credentialsMatch = !!provider && getAttribute(provider, 'SoftwareSC') === expectedSC && getAttribute(info, 'Ambiente') === environment;
+    issueDate = String(getAttribute(info, 'FechaGen') || '');
+  }
+  if (!credentialsMatch) {
     throw new HttpError(
       409,
       'El XML se generó con otras credenciales de software o en otro ambiente. ' + source.regenerateHint
@@ -296,13 +324,15 @@ export async function handleDianRoutes(
   let result: DianResult;
   try {
     signedXml = await signDianXml(source.xml, certificate);
-    const issueYear = Number(String(getAttribute(info, 'FechaGen') || '').slice(0, 4)) || new Date().getUTCFullYear();
+    const issueYear = Number(issueDate.slice(0, 4)) || new Date().getUTCFullYear();
+    const filePrefix = source.documentoSoporte ? 'ds' : kind === 'adjustment' ? 'nia' : 'nie';
     result = await sendNomina({
       environment,
       signedXml,
-      fileNames: dianFileNames(source.companyNit, issueYear, source.consecutive, kind === 'adjustment' ? 'nia' : 'nie'),
+      fileNames: dianFileNames(source.companyNit, issueYear, source.consecutive, filePrefix),
       testSetId: software.testSetId || undefined,
       certificate,
+      documentoSoporte: source.documentoSoporte,
     });
   } catch (error) {
     dianError(error);

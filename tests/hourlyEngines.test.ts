@@ -313,6 +313,7 @@ describe('Enrutado automático del documento DIAN según el tipo de vinculación
       companyName: 'Empresa Cliente S.A.S.',
       softwareId: 'SOFT-TEST',
       pinSoftware: '12345',
+      numbering: { resolutionNumber: '18760000001', startDate: '2019-01-19', endDate: '2030-01-19', prefix: 'SEDS', from: 984000000, to: 985000000 },
     };
 
     const beneficiary: DocumentoSoporteBeneficiaryInfo = {
@@ -324,12 +325,28 @@ describe('Enrutado automático del documento DIAN según el tipo de vinculación
       settlement,
       payer,
       beneficiary,
-      1
+      984000001,
+      '2026-10-31',
+      '10:00:00-05:00'
     );
 
-    expect(docResult.xmlContent).toContain('<DocumentoSoporte');
-    expect(docResult.xmlContent).not.toContain('NominaIndividual');
-    expect(docResult.documentKey).toBeTruthy();
+    const xml = docResult.xmlContent;
+    expect(xml).toContain('<Invoice');
+    expect(xml).toContain('<cbc:CustomizationID>10</cbc:CustomizationID>');
+    expect(xml).toContain('<cbc:InvoiceTypeCode>05</cbc:InvoiceTypeCode>');
+    expect(xml).toContain('<cbc:ID>SEDS984000001</cbc:ID>');
+    expect(xml).not.toContain('NominaIndividual');
+    // Un solo ExtensionContent vacío: ahí va la firma.
+    expect(xml.split('<ext:ExtensionContent></ext:ExtensionContent>')).toHaveLength(2);
+
+    // CUDS del anexo: NumDS+FecDS+HorDS+ValDS+01+ValImp+ValTol+NumSNO+NITABS+PIN+Ambiente.
+    const gross = settlement.grossAmount.toFixed(2);
+    const expected = await crypto.subtle.digest('SHA-384', new TextEncoder().encode(
+      `SEDS9840000012026-10-3110:00:00-05:00${gross}010.00${gross}${settlement.taxId}900123456123452`
+    ));
+    expect(docResult.documentKey).toBe(Buffer.from(expected).toString('hex'));
+    expect(xml).toContain(`schemeName="CUDS-SHA384">${docResult.documentKey}</cbc:UUID>`);
+    expect(xml).toContain('<cbc:Name>ReteRenta</cbc:Name>');
     expect(docResult.netAmount).toBeCloseTo(settlement.netAmount, 2);
     expect(docResult.disclaimer.length).toBeGreaterThan(0);
   });

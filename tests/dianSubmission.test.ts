@@ -183,16 +183,66 @@ describe('envío de la nómina electrónica a la DIAN', () => {
     expect((await call(SUPER, 'GET', `/api/hourly/settlements/${id}/dian/signed-xml`)).json).toContain('<ds:Signature');
   });
 
-  test('un contratista independiente (documento soporte) no se envía como nómina', async () => {
+  test('un documento soporte del formato anterior no se envía', async () => {
     const company = await createCompany();
     await habilitar(company.id);
     db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-x', 'Luis', 'Paz', '1061000999', 'Diseñador')`).run();
     db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate)
                 VALUES ('ENG-x', 'PRO-x', ?, 'INDEPENDENT_SERVICES', 1, '2026-01-01')`).run(company.id);
     db.prepare(`INSERT INTO settlements (id, engagementId, periodStart, periodEnd, totalHours, grossAmount, netAmount, resultJson)
-                VALUES ('SET-x', 'ENG-x', '2026-10-01', '2026-10-31', 1, 1, 1, '{"dianDocument":{"xmlContent":"<Invoice/>"}}')`).run();
+                VALUES ('SET-x', 'ENG-x', '2026-10-01', '2026-10-31', 1, 1, 1, '{"dianDocument":{"xmlContent":"<DocumentoSoporte/>"}}')`).run();
     const res = await call(SUPER, 'POST', '/api/hourly/settlements/SET-x/dian/send');
     expect(res.status).toBe(400);
+  });
+
+  test('el documento soporte del contratista se numera con su resolución y se envía con su habilitación', async () => {
+    const company = await createCompany();
+    await habilitar(company.id);
+    db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-x', 'Luis', 'Paz', '1061000999', 'Diseñador')`).run();
+    db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate, retentionConcept, isIncomeTaxFiler)
+                VALUES ('ENG-x', 'PRO-x', ?, 'INDEPENDENT_SERVICES', 80000, '2026-01-01', 'SERVICIOS', 0)`).run(company.id);
+    db.prepare(`INSERT INTO time_entries (id, engagementId, periodStart, periodEnd, hours, createdAt)
+                VALUES ('TE-x', 'ENG-x', '2026-10-01', '2026-10-31', 20, '2026-10-31')`).run();
+    db.prepare(`INSERT INTO pila_verifications (id, engagementId, period, declaredIbc, verified, createdAt)
+                VALUES ('PV-x', 'ENG-x', '2026-10', 1750905, 1, '2026-10-31')`).run();
+
+    // Sin la habilitación de documento soporte, el documento lleva datos de prueba y no se envía.
+    const draft = await call(SUPER, 'POST', '/api/hourly/settlements/calculate', { engagementId: 'ENG-x', periodStart: '2026-10-01', periodEnd: '2026-10-31' });
+    expect(draft.status).toBe(201);
+    expect(draft.json.data.dianDocument.xmlContent).toContain('<cbc:InvoiceTypeCode>05</cbc:InvoiceTypeCode>');
+    const blocked = await call(SUPER, 'POST', `/api/hourly/settlements/${draft.json.data.id}/dian/send`);
+    expect(blocked.status).toBe(409);
+    expect(blocked.json.error).toContain('Falta la habilitación DIAN de documento soporte de esta empresa (Software ID y PIN, TestSetId de habilitación)');
+    expect((await call(SUPER, 'DELETE', `/api/hourly/settlements/${draft.json.data.id}`)).status).toBe(200);
+
+    const config = {
+      softwareId: 'software-ds', pin: '13579', testSetId: 'set-ds', environment: '2',
+      resolutionNumber: '18764000001', resolutionStartDate: '2026-01-01', resolutionEndDate: '2027-12-31',
+      prefix: 'DSE', rangeFrom: 1000, rangeTo: 1999, taxLevelCode: 'O-13;O-15',
+    };
+    expect((await call(SUPER, 'PUT', `/api/companies/${company.id}/ds-config`, { ...config, prefix: 'mal prefijo' })).status).toBe(400);
+    const saved = await call(SUPER, 'PUT', `/api/companies/${company.id}/ds-config`, config);
+    expect(saved.status).toBe(200);
+    expect(saved.json.data).toMatchObject({ configured: true, prefix: 'DSE', rangeFrom: 1000 });
+    expect(saved.json.data.pin).toBeUndefined();
+
+    const liquidation = await call(SUPER, 'POST', '/api/hourly/settlements/calculate', { engagementId: 'ENG-x', periodStart: '2026-10-01', periodEnd: '2026-10-31' });
+    expect(liquidation.status).toBe(201);
+    const xml = liquidation.json.data.dianDocument.xmlContent;
+    expect(xml).toContain('<cbc:ID>DSE1000</cbc:ID>');
+    expect(xml).toContain('<sts:InvoiceAuthorization>18764000001</sts:InvoiceAuthorization>');
+    expect(xml).toContain('O-13;O-15');
+
+    fetchMock.mockResolvedValueOnce(new Response(ZIP_KEY));
+    const sent = await call(SUPER, 'POST', `/api/hourly/settlements/${liquidation.json.data.id}/dian/send`);
+    expect(sent.status).toBe(200);
+    expect(sent.json.data.dianSubmissionStatus).toBe('SENT');
+    const envelope = String(fetchMock.mock.calls[0][1].body);
+    expect(envelope).toContain('<wcf:testSetId>set-ds</wcf:testSetId>');
+    expect(envelope).toContain('<wcf:fileName>z090012345600026000003e8.zip</wcf:fileName>');
+    const signed = db.prepare(`SELECT dianSignedXml FROM settlements WHERE id = ?`).get(liquidation.json.data.id).dianSignedXml;
+    expect(signed).toContain('<ds:SignatureValue');
+    expect(signed).toContain('<sts:DianExtensions>');
   });
 });
 
