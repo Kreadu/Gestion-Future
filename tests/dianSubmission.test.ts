@@ -1,6 +1,6 @@
 import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { verifyFirebaseIdToken } from '../src/auth/firebaseToken';
-import { TENANT_A, resetDb, db, env, call, createCompany, createEmployee, insertUser } from './helpers/api';
+import { SUPER, TENANT_A, resetDb, db, env, call, createCompany, createEmployee, insertUser } from './helpers/api';
 import { testP12 } from './helpers/dianCert';
 
 jest.mock('../src/auth/firebaseToken');
@@ -149,5 +149,46 @@ describe('envío de la nómina electrónica a la DIAN', () => {
     const { id } = await generatedSettlement();
     expect((await call(ADMIN_B, 'POST', `/api/payroll-settlements/${id}/dian/send`)).status).toBe(403);
     expect((await call(ADMIN_B, 'GET', `/api/payroll-settlements/${id}/dian/signed-xml`)).status).toBe(403);
+  });
+
+  test('la nómina de jornada parcial del personal por horas también se envía, y no se anula si la DIAN la tiene', async () => {
+    Object.assign(env, SECRETS);
+    const company = await createCompany();
+    db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-1', 'Marta', 'Ruiz', '1061000888', 'Contadora')`).run();
+    db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate, weeklyHours, contractType)
+                VALUES ('ENG-1', 'PRO-1', ?, 'PART_TIME_EMPLOYEE', 20000, '2026-01-01', 20, '2')`).run(company.id);
+    db.prepare(`INSERT INTO time_entries (id, engagementId, periodStart, periodEnd, hours, createdAt)
+                VALUES ('TE-1', 'ENG-1', '2026-10-01', '2026-10-31', 80, '2026-10-31')`).run();
+    const liquidation = await call(SUPER, 'POST', '/api/hourly/settlements/calculate', { engagementId: 'ENG-1', periodStart: '2026-10-01', periodEnd: '2026-10-31' });
+    expect(liquidation.status).toBe(201);
+    const id = liquidation.json.data.id;
+
+    fetchMock.mockResolvedValueOnce(new Response(ZIP_KEY));
+    const sent = await call(SUPER, 'POST', `/api/hourly/settlements/${id}/dian/send`);
+    expect(sent.status).toBe(200);
+    expect(sent.json.data.dianSubmissionStatus).toBe('SENT');
+    expect(sent.json.data.dianSentAt).toBeTruthy();
+    expect(String(fetchMock.mock.calls[0][1].body)).toContain('<wcf:fileName>z0900123456000260000000' + '1.zip</wcf:fileName>');
+
+    expect((await call(SUPER, 'DELETE', `/api/hourly/settlements/${id}`)).status).toBe(409);
+
+    fetchMock.mockResolvedValueOnce(new Response(status(true, '00')));
+    expect((await call(SUPER, 'POST', `/api/hourly/settlements/${id}/dian/status`)).json.data.dianSubmissionStatus).toBe('ACCEPTED');
+    const del = await call(SUPER, 'DELETE', `/api/hourly/settlements/${id}`);
+    expect(del.status).toBe(409);
+    expect(del.json.error).toContain('ya aceptó');
+    expect((await call(SUPER, 'GET', `/api/hourly/settlements/${id}/dian/signed-xml`)).json).toContain('<ds:Signature');
+  });
+
+  test('un contratista independiente (documento soporte) no se envía como nómina', async () => {
+    Object.assign(env, SECRETS);
+    const company = await createCompany();
+    db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-x', 'Luis', 'Paz', '1061000999', 'Diseñador')`).run();
+    db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate)
+                VALUES ('ENG-x', 'PRO-x', ?, 'INDEPENDENT_SERVICES', 1, '2026-01-01')`).run(company.id);
+    db.prepare(`INSERT INTO settlements (id, engagementId, periodStart, periodEnd, totalHours, grossAmount, netAmount, resultJson)
+                VALUES ('SET-x', 'ENG-x', '2026-10-01', '2026-10-31', 1, 1, 1, '{"dianDocument":{"xmlContent":"<Invoice/>"}}')`).run();
+    const res = await call(SUPER, 'POST', '/api/hourly/settlements/SET-x/dian/send');
+    expect(res.status).toBe(400);
   });
 });

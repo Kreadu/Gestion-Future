@@ -1,11 +1,12 @@
 // ------------------------------------------------------------
 // ENVÍO A LA DIAN — firma y transmisión de la nómina electrónica
 //
-//   <DianSubmissionPanel settlement={...} onChanged={fn} />
+//   <DianSubmissionPanel settlement={...} basePath="/api/payroll-settlements" onChanged={fn} />
 //
-// `settlement` es la fila de GET /api/payroll-settlements (con
-// dianSubmissionStatus, dianErrors y dianSentAt). onChanged recarga
-// las liquidaciones después de enviar o consultar.
+// `settlement` trae id, dianConsecutive y, si ya se envió,
+// dianSubmissionStatus, dianErrors y dianSentAt. basePath es
+// /api/payroll-settlements (nómina mensual) o /api/hourly/settlements
+// (jornada parcial). onChanged (opcional) recarga la lista del padre.
 // ------------------------------------------------------------
 
 const DIAN_SUBMISSION_LABELS = {
@@ -14,7 +15,7 @@ const DIAN_SUBMISSION_LABELS = {
   REJECTED: '❌ Rechazado por la DIAN'
 };
 
-async function downloadSignedDianXml(settlement) {
+async function downloadSignedDianXml(basePath, settlement) {
   const currentUser = firebase.auth().currentUser;
   const headers = {};
 
@@ -23,7 +24,7 @@ async function downloadSignedDianXml(settlement) {
   }
 
   const response = await fetch(
-    '/api/payroll-settlements/' + encodeURIComponent(settlement.id) + '/dian/signed-xml',
+    basePath + '/' + encodeURIComponent(settlement.id) + '/dian/signed-xml',
     { headers: headers }
   );
 
@@ -34,17 +35,21 @@ async function downloadSignedDianXml(settlement) {
   downloadText('nomina-' + (settlement.dianConsecutive || settlement.id) + '-firmada.xml', await response.text(), 'application/xml');
 }
 
-function DianSubmissionPanel({ settlement, onChanged }) {
+function DianSubmissionPanel({ settlement, basePath, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  // Última respuesta de la DIAN en esta sesión; si no hay, lo que trae la liquidación.
+  const [latest, setLatest] = useState(null);
 
-  if (!settlement || settlement.dianStatus !== 'GENERATED') {
+  if (!settlement) {
     return null;
   }
 
-  const status = settlement.dianSubmissionStatus || null;
-  const errors = settlement.dianErrors || [];
+  const path = basePath || '/api/payroll-settlements';
+  const status = latest ? latest.dianSubmissionStatus : (settlement.dianSubmissionStatus || null);
+  const errors = latest ? (latest.errors || []) : (settlement.dianErrors || []);
+  const sentAt = latest ? latest.dianSentAt : settlement.dianSentAt;
 
   async function run(action) {
     setBusy(true);
@@ -53,12 +58,13 @@ function DianSubmissionPanel({ settlement, onChanged }) {
 
     try {
       const result = await api(
-        '/api/payroll-settlements/' + encodeURIComponent(settlement.id) + '/dian/' + action,
+        path + '/' + encodeURIComponent(settlement.id) + '/dian/' + action,
         { method: 'POST' }
       );
       const data = result.data || {};
+      setLatest(data);
       setMessage(DIAN_SUBMISSION_LABELS[data.dianSubmissionStatus] || 'Listo.');
-      await onChanged();
+      if (onChanged) await onChanged();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -70,7 +76,7 @@ function DianSubmissionPanel({ settlement, onChanged }) {
     setError('');
 
     try {
-      await downloadSignedDianXml(settlement);
+      await downloadSignedDianXml(path, settlement);
     } catch (err) {
       setError(err.message);
     }
@@ -85,10 +91,10 @@ function DianSubmissionPanel({ settlement, onChanged }) {
         <strong>{DIAN_SUBMISSION_LABELS[status] || 'Sin enviar'}</strong>
       </div>
 
-      {settlement.dianSentAt && (
+      {sentAt && (
         <div className="result-row">
           <span>Último envío</span>
-          <strong>{new Date(settlement.dianSentAt).toLocaleString('es-CO')}</strong>
+          <strong>{new Date(sentAt).toLocaleString('es-CO')}</strong>
         </div>
       )}
 
@@ -115,7 +121,7 @@ function DianSubmissionPanel({ settlement, onChanged }) {
           </button>
         )}
 
-        {settlement.dianSentAt && (
+        {sentAt && (
           <button className="btn" onClick={download}>⬇️ XML firmado</button>
         )}
       </div>

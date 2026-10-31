@@ -270,3 +270,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - "A worker process has failed to exit gracefully" salía sólo en paralelo: `resetDb()` dejaba abiertas cientos de bases SQLite en memoria; ahora cierra la anterior. Dos corridas paralelas limpias, 288/288.
 - El envío DIAN reutiliza el certificado ya abierto (abrir el .p12 cuesta cientos de ms) y la suite de envío tiene 30 s de margen.
+
+## DIAN: jornada parcial del personal por horas (2026-10-30)
+
+- Las rutas `/api/hourly/settlements/:id/dian/send|status|signed-xml` envían la nómina de jornada parcial (migración 0017); no se anula una liquidación que la DIAN tiene o aceptó. El documento soporte de contratistas no se envía por aquí. Panel de envío también en la liquidación por horas.
+- Verificación: Jest 31 suites / 290 pruebas; E2E Firefox 26/26.

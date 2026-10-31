@@ -5,6 +5,11 @@
  *   POST /api/payroll-settlements/:id/dian/status  → consulta el resultado (habilitación)
  *   GET  /api/payroll-settlements/:id/dian/signed-xml → descarga el XML firmado enviado
  *
+ * Las mismas tres rutas existen bajo /api/hourly/settlements/:id/dian/...
+ * para la nómina de jornada parcial del personal por horas (los
+ * contratistas independientes llevan documento soporte, que no se envía
+ * por aquí).
+ *
  * Configuración del Worker (secretos): DIAN_CERT_P12 (.p12 en base64),
  * DIAN_CERT_PASSWORD, DIAN_SOFTWARE_ID, DIAN_SOFTWARE_PIN y, en
  * habilitación (DIAN_AMBIENTE distinto de '1'), DIAN_TEST_SET_ID.
@@ -68,20 +73,73 @@ function cachedCertificate(p12Base64: string, password: string): Promise<DianCer
   return certificateCache.value;
 }
 
-async function loadSettlement(env: DianRouteEnv, user: AuthUser, id: string): Promise<any> {
-  const row = await env.DB
-    .prepare(`
-      SELECT s.*, c.nit AS companyNit
-      FROM payroll_settlements s
-      JOIN companies c ON c.id = s.companyId
-      WHERE s.id = ?1
-    `)
-    .bind(id)
-    .first<any>();
+/** Liquidación con XML de nómina, venga de la nómina mensual o del personal por horas. */
+interface DianSource {
+  table: 'payroll_settlements' | 'settlements';
+  id: string;
+  companyId: string;
+  companyNit: string;
+  /** XML sin firmar; null si no hay nómina electrónica generada. */
+  xml: string | null;
+  consecutive: number;
+  submissionStatus: SubmissionStatus | null;
+  trackId: string | null;
+  signedXml: string | null;
+  regenerateHint: string;
+}
+
+async function loadSource(env: DianRouteEnv, user: AuthUser, kind: 'payroll' | 'hourly', id: string): Promise<DianSource> {
+  const row = kind === 'payroll'
+    ? await env.DB
+      .prepare(`
+        SELECT s.*, c.nit AS companyNit
+        FROM payroll_settlements s
+        JOIN companies c ON c.id = s.companyId
+        WHERE s.id = ?1
+      `)
+      .bind(id)
+      .first<any>()
+    : await env.DB
+      .prepare(`
+        SELECT s.*, g.companyId, c.nit AS companyNit
+        FROM settlements s
+        JOIN engagements g ON g.id = s.engagementId
+        JOIN companies c ON c.id = g.companyId
+        WHERE s.id = ?1
+      `)
+      .bind(id)
+      .first<any>();
   if (!row) throw new HttpError(404, 'Liquidación no encontrada.');
   requireRole(user, ['TENANT_ADMIN']);
   requireCompanyAccess(user, String(row.companyId));
-  return row;
+
+  let xml: string | null = null;
+  let consecutive = Number(row.dianConsecutive || 0);
+  if (kind === 'payroll') {
+    xml = row.dianStatus === 'GENERATED' && row.dianXmlContent ? String(row.dianXmlContent) : null;
+  } else {
+    const document = JSON.parse(String(row.resultJson || '{}')).dianDocument;
+    // Sólo la nómina de jornada parcial; el documento soporte es otro tipo de documento.
+    if (document && typeof document.xmlContent === 'string' && document.xmlContent.includes('<NominaIndividual')) {
+      xml = document.xmlContent;
+      consecutive = Number(String(document.consecutive || '').replace(/\D/g, '')) || 0;
+    }
+  }
+
+  return {
+    table: kind === 'payroll' ? 'payroll_settlements' : 'settlements',
+    id,
+    companyId: String(row.companyId),
+    companyNit: String(row.companyNit || ''),
+    xml,
+    consecutive,
+    submissionStatus: row.dianSubmissionStatus ?? null,
+    trackId: row.dianTrackId ?? null,
+    signedXml: row.dianSignedXml ?? null,
+    regenerateHint: kind === 'payroll'
+      ? 'Vuelve a generarlo antes de enviarlo.'
+      : 'Anula la liquidación y vuelve a liquidar el periodo antes de enviarla.',
+  };
 }
 
 function dianError(error: unknown): never {
@@ -92,30 +150,37 @@ function dianError(error: unknown): never {
 
 async function saveResult(
   env: DianRouteEnv,
-  id: string,
+  source: DianSource,
   status: SubmissionStatus,
   result: DianResult,
   extra: { signedXml?: string; trackId?: string | null } = {}
-): Promise<void> {
+): Promise<string | null> {
   const now = new Date().toISOString();
+  // payroll_settlements tiene updatedAt; settlements (por horas), no.
+  const touch = source.table === 'payroll_settlements' ? ', updatedAt = ?5' : '';
   await env.DB
     .prepare(`
-      UPDATE payroll_settlements
+      UPDATE ${source.table}
       SET dianSubmissionStatus = ?1,
           dianResponseJson = ?2,
           dianTrackId = COALESCE(?3, dianTrackId),
           dianSignedXml = COALESCE(?4, dianSignedXml),
-          dianSentAt = CASE WHEN ?4 IS NULL THEN dianSentAt ELSE ?5 END,
-          updatedAt = ?5
+          dianSentAt = CASE WHEN ?4 IS NULL THEN dianSentAt ELSE ?5 END${touch}
       WHERE id = ?6
     `)
-    .bind(status, JSON.stringify(result), extra.trackId ?? null, extra.signedXml ?? null, now, id)
+    .bind(status, JSON.stringify(result), extra.trackId ?? null, extra.signedXml ?? null, now, source.id)
     .run();
+  const row = await env.DB
+    .prepare(`SELECT dianSentAt FROM ${source.table} WHERE id = ?1`)
+    .bind(source.id)
+    .first<any>();
+  return row?.dianSentAt ?? null;
 }
 
-function describe(status: SubmissionStatus, result: DianResult) {
+function describe(status: SubmissionStatus, result: DianResult, dianSentAt: string | null) {
   return {
     dianSubmissionStatus: status,
+    dianSentAt,
     statusCode: result.statusCode,
     statusDescription: result.statusDescription,
     errors: result.errors,
@@ -128,29 +193,33 @@ export async function handleDianRoutes(
   env: DianRouteEnv,
   user: AuthUser
 ): Promise<Response | null> {
-  const match = url.pathname.match(/^\/api\/payroll-settlements\/([^/]+)\/dian\/(send|status|signed-xml)$/);
+  const match = url.pathname.match(
+    /^\/api\/(payroll-settlements|hourly\/settlements)\/([^/]+)\/dian\/(send|status|signed-xml)$/
+  );
   if (!match) return null;
 
-  const [, id, action] = match;
+  const [, prefix, rawId, action] = match;
+  const kind = prefix === 'payroll-settlements' ? 'payroll' : 'hourly';
+  const id = decodeURIComponent(rawId);
   const environment = dianEnvironment(env);
 
   if (action === 'signed-xml') {
     if (request.method !== 'GET') return null;
-    const row = await loadSettlement(env, user, id);
-    if (!row.dianSignedXml) throw new HttpError(404, 'Esta liquidación aún no se ha enviado a la DIAN.');
-    return new Response(String(row.dianSignedXml), {
+    const source = await loadSource(env, user, kind, id);
+    if (!source.signedXml) throw new HttpError(404, 'Esta liquidación aún no se ha enviado a la DIAN.');
+    return new Response(source.signedXml, {
       headers: {
         'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': `attachment; filename="nomina-${row.dianConsecutive}.xml"`,
+        'Content-Disposition': `attachment; filename="nomina-${source.consecutive}.xml"`,
         'Cache-Control': 'no-store',
       },
     });
   }
 
   if (request.method !== 'POST') return null;
-  const row = await loadSettlement(env, user, id);
+  const source = await loadSource(env, user, kind, id);
 
-  if (row.dianStatus !== 'GENERATED' || !row.dianXmlContent) {
+  if (!source.xml) {
     throw new HttpError(400, 'Primero genera el XML DIAN de esta liquidación.');
   }
 
@@ -174,32 +243,31 @@ export async function handleDianRoutes(
   }
 
   if (action === 'status') {
-    if (row.dianSubmissionStatus !== 'SENT' || !row.dianTrackId) {
+    if (source.submissionStatus !== 'SENT' || !source.trackId) {
       throw new HttpError(400, 'No hay un envío en proceso para consultar.');
     }
     let result: DianResult;
     try {
-      result = await getStatusZip(environment, String(row.dianTrackId), certificate);
+      result = await getStatusZip(environment, source.trackId, certificate);
     } catch (error) {
       dianError(error);
     }
     const status = submissionStatusFor(result, environment, false);
-    await saveResult(env, id, status, result);
-    return sendJson({ success: true, data: describe(status, result) });
+    const sentAt = await saveResult(env, source, status, result);
+    return sendJson({ success: true, data: describe(status, result, sentAt) });
   }
 
   // action === 'send'
-  if (row.dianSubmissionStatus === 'ACCEPTED') {
+  if (source.submissionStatus === 'ACCEPTED') {
     throw new HttpError(409, 'La DIAN ya aceptó este documento.');
   }
-  if (row.dianSubmissionStatus === 'SENT') {
+  if (source.submissionStatus === 'SENT') {
     throw new HttpError(409, 'El documento ya está en proceso en la DIAN: consulta su estado.');
   }
 
   // El XML lleva el SoftwareSC de las credenciales con que se generó; si
   // cambiaron (p. ej. se generó con las de prueba), la DIAN lo rechazaría.
-  const xml = String(row.dianXmlContent);
-  const root = parseXml(xml);
+  const root = parseXml(source.xml);
   const provider = findElements(root, NOMINA_NS, 'ProveedorXML')[0];
   const number = findElements(root, NOMINA_NS, 'NumeroSecuenciaXML')[0];
   const expectedSC = await DianNominaXmlService.calculateSoftwareSC(
@@ -211,19 +279,19 @@ export async function handleDianRoutes(
   if (!provider || getAttribute(provider, 'SoftwareSC') !== expectedSC || getAttribute(info, 'Ambiente') !== environment) {
     throw new HttpError(
       409,
-      'El XML se generó con otras credenciales de software o en otro ambiente. Vuelve a generarlo antes de enviarlo.'
+      'El XML se generó con otras credenciales de software o en otro ambiente. ' + source.regenerateHint
     );
   }
 
   let signedXml: string;
   let result: DianResult;
   try {
-    signedXml = await signDianXml(xml, certificate);
+    signedXml = await signDianXml(source.xml, certificate);
     const issueYear = Number(String(getAttribute(info, 'FechaGen') || '').slice(0, 4)) || new Date().getUTCFullYear();
     result = await sendNomina({
       environment,
       signedXml,
-      fileNames: dianFileNames(String(row.companyNit || ''), issueYear, Number(row.dianConsecutive || 0)),
+      fileNames: dianFileNames(source.companyNit, issueYear, source.consecutive),
       testSetId: env.DIAN_TEST_SET_ID,
       certificate,
     });
@@ -232,8 +300,8 @@ export async function handleDianRoutes(
   }
 
   const status = submissionStatusFor(result, environment, true);
-  await saveResult(env, id, status, result, { signedXml, trackId: result.zipKey });
-  await audit(env, user, 'SEND_DIAN', 'payroll_settlement', id, String(row.companyId));
+  const sentAt = await saveResult(env, source, status, result, { signedXml, trackId: result.zipKey });
+  await audit(env, user, 'SEND_DIAN', source.table === 'payroll_settlements' ? 'payroll_settlement' : 'settlement', id, source.companyId);
 
-  return sendJson({ success: true, data: describe(status, result) });
+  return sendJson({ success: true, data: describe(status, result, sentAt) });
 }

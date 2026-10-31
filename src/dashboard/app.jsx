@@ -2298,11 +2298,14 @@ function App({ me, onSignOut }) {
             </button>
           </div>
 
-          <DianSubmissionPanel
-            key={currentSettlementId}
-            settlement={currentSettlement}
-            onChanged={function() { return loadSettlements(selectedPeriodId); }}
-          />
+          {currentSettlementStatus === 'GENERATED' && currentSettlement && (
+            <DianSubmissionPanel
+              key={currentSettlementId + ':' + (currentSettlement.dianGeneratedAt || '')}
+              basePath="/api/payroll-settlements"
+              settlement={currentSettlement}
+              onChanged={function() { return loadSettlements(selectedPeriodId); }}
+            />
+          )}
 
           {dianXmlResult && (
             <div className="result-section" style={{marginTop: '18px'}}>
@@ -2927,6 +2930,14 @@ function App({ me, onSignOut }) {
                 Anular liquidación
               </button>
             </div>
+
+            {settlementResult.dianDocument && String(settlementResult.dianDocument.xmlContent || '').indexOf('<NominaIndividual') !== -1 && (
+              <DianSubmissionPanel
+                key={settlementResult.id}
+                basePath="/api/hourly/settlements"
+                settlement={{ id: settlementResult.id, dianConsecutive: settlementResult.dianDocument.consecutive }}
+              />
+            )}
           </div>
         )}
       </div>

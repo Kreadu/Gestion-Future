@@ -3843,7 +3843,7 @@ export default {
         const settlementId = decodeURIComponent(hourlySettlementMatch[1]);
         const row = await env.DB
           .prepare(`
-            SELECT s.id, g.companyId
+            SELECT s.id, s.dianSubmissionStatus, g.companyId
             FROM settlements s
             JOIN engagements g ON g.id = s.engagementId
             WHERE s.id = ?1
@@ -3856,6 +3856,16 @@ export default {
         }
 
         requireCompanyAccess(user, String(row.companyId));
+
+        // Lo que la DIAN ya tiene no se borra: se corrige con una nota de ajuste.
+        if (row.dianSubmissionStatus === 'SENT' || row.dianSubmissionStatus === 'ACCEPTED') {
+          return sendJson({
+            success: false,
+            error: row.dianSubmissionStatus === 'ACCEPTED'
+              ? 'La DIAN ya aceptó esta nómina electrónica: no se puede anular.'
+              : 'La nómina electrónica está en proceso en la DIAN: consulta su estado antes de anular.',
+          }, 409);
+        }
 
         await env.DB.prepare(`DELETE FROM settlements WHERE id = ?1`).bind(settlementId).run();
         await audit(env, user, 'DELETE', 'settlement', settlementId, String(row.companyId));
