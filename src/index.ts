@@ -12,6 +12,7 @@ import type {
 import { DianNominaXmlService } from './services/dianNominaXmlService';
 import { handleDianRoutes } from './routes/dian';
 import { dianSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
+import { handleServiceClientRoutes, resolveAssignment } from './routes/serviceClients';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -83,7 +84,9 @@ import type {
   IndependentContractorInput,
   DocumentoSoportePayerInfo,
   DocumentoSoporteBeneficiaryInfo,
+  HourBreakdown,
 } from './types/hourly';
+import { HOUR_COLUMNS, HOUR_TYPES } from './types/hourly';
 
 import type {
   PayrollPeriod,
@@ -314,6 +317,9 @@ function normalizeEngagement(row: any): Engagement {
         ? null
         : Number(row.weeklyHours),
     contractType: row.contractType ?? null,
+    clientId: row.clientId ?? null,
+    position: row.position ?? null,
+    billRate: row.billRate === null || row.billRate === undefined ? null : Number(row.billRate),
     createdAt: row.createdAt ?? null,
   };
 }
@@ -442,6 +448,9 @@ export default {
 
       const dianConfigResponse = await handleDianConfigRoutes(request, url, env, user);
       if (dianConfigResponse) return dianConfigResponse;
+
+      const serviceClientResponse = await handleServiceClientRoutes(request, url, env, user);
+      if (serviceClientResponse) return serviceClientResponse;
 
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
@@ -2829,21 +2838,11 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, companyId);
 
-        if (vinculationType === 'EST_MISSION') {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'La modalidad de Empresa de Servicios Temporales no está ' +
-                'disponible: requiere autorización del Ministerio del Trabajo.',
-            },
-            400
-          );
-        }
 
         if (
           vinculationType !== 'INDEPENDENT_SERVICES' &&
-          vinculationType !== 'PART_TIME_EMPLOYEE'
+          vinculationType !== 'PART_TIME_EMPLOYEE' &&
+          vinculationType !== 'EST_MISSION'
         ) {
           return sendJson(
             {
@@ -2979,6 +2978,11 @@ export default {
           contractType = body.contractType || '1';
         }
 
+        // Cliente al que va el trabajador (temporales y servicios) y reglas EST.
+        const assignment = await resolveAssignment(
+          env, companyId, vinculationType, startDate, body.endDate || null, body
+        );
+
         const id = `ENG-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
@@ -2988,9 +2992,9 @@ export default {
               id, professionalId, companyId, vinculationType, hourlyRate,
               startDate, endDate, active, retentionConcept,
               isIncomeTaxFiler, deliverableDescription, weeklyHours,
-              contractType, createdAt
+              contractType, createdAt, clientId, position, billRate
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
           `)
           .bind(
             id,
@@ -3005,7 +3009,10 @@ export default {
             deliverableDescription,
             weeklyHours,
             contractType,
-            createdAt
+            createdAt,
+            assignment.clientId,
+            assignment.position,
+            assignment.billRate
           )
           .run();
 
@@ -3142,6 +3149,17 @@ export default {
           );
         }
 
+        const endDate = body.endDate === undefined ? existing.endDate ?? null : body.endDate || null;
+        const assignment = await resolveAssignment(
+          env,
+          String(existing.companyId),
+          String(existing.vinculationType),
+          String(existing.startDate),
+          endDate,
+          body,
+          existing
+        );
+
         // vinculationType, professionalId y companyId son inmutables:
         // un cambio de modalidad o de empresa debe ser una vinculación
         // nueva, no una edición, para no perder el rastro legal.
@@ -3153,16 +3171,22 @@ export default {
               endDate = ?2,
               active = ?3,
               weeklyHours = ?4,
-              deliverableDescription = ?5
+              deliverableDescription = ?5,
+              clientId = ?7,
+              position = ?8,
+              billRate = ?9
             WHERE id = ?6
           `)
           .bind(
             hourlyRate,
-            body.endDate ?? existing.endDate ?? null,
+            endDate,
             body.active === undefined ? existing.active : (body.active ? 1 : 0),
             body.weeklyHours ?? existing.weeklyHours ?? null,
             body.deliverableDescription ?? existing.deliverableDescription ?? null,
-            engagementId
+            engagementId,
+            assignment.clientId,
+            assignment.position,
+            assignment.billRate
           )
           .run();
 
@@ -3242,7 +3266,22 @@ export default {
         const engagementId = String(body.engagementId || '').trim();
         const periodStart = String(body.periodStart || '').trim();
         const periodEnd = String(body.periodEnd || '').trim();
-        const hours = Number(body.hours);
+
+        // Horas por tipo (planilla del cliente) o, como antes, un total
+        // de horas ordinarias diurnas en `hours`.
+        const byType = body.hoursByType && typeof body.hoursByType === 'object' ? body.hoursByType : { ordinary: body.hours };
+        const breakdown = {} as HourBreakdown;
+        for (const type of HOUR_TYPES) {
+          const value = byType[type] === undefined || byType[type] === '' ? 0 : Number(byType[type]);
+          if (!Number.isFinite(value) || value < 0 || value > 744) {
+            return sendJson(
+              { success: false, error: 'Cada tipo de hora debe ser un número entre 0 y 744.' },
+              400
+            );
+          }
+          breakdown[type] = value;
+        }
+        const hours = HOUR_TYPES.reduce((sum, type) => sum + breakdown[type], 0);
 
         if (!engagementId || !periodStart || !periodEnd) {
           return sendJson(
@@ -3288,18 +3327,19 @@ export default {
         await env.DB
           .prepare(`
             INSERT INTO time_entries (
-              id, engagementId, periodStart, periodEnd, hours, notes, createdAt
+              id, engagementId, periodStart, periodEnd, notes, createdAt,
+              ${HOUR_TYPES.map(type => HOUR_COLUMNS[type]).join(', ')}
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ${HOUR_TYPES.map((_, i) => `?${i + 7}`).join(', ')})
           `)
           .bind(
             id,
             engagementId,
             periodStart,
             periodEnd,
-            hours,
             body.notes || null,
-            createdAt
+            createdAt,
+            ...HOUR_TYPES.map(type => breakdown[type])
           )
           .run();
 
@@ -3321,6 +3361,7 @@ export default {
               periodStart,
               periodEnd,
               hours,
+              hoursByType: breakdown,
               notes: body.notes || null,
               createdAt,
             },
@@ -3511,9 +3552,11 @@ export default {
               p.lastName AS p_lastName,
               p.lastName2 AS p_lastName2,
               p.taxId AS p_taxId,
-              p.documentType AS p_documentType
+              p.documentType AS p_documentType,
+              sc.arlRiskClass AS client_arlRiskClass
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
+            LEFT JOIN service_clients sc ON sc.id = e.clientId
             WHERE e.id = ?1
               AND e.active = 1
           `)
@@ -3563,7 +3606,7 @@ export default {
 
         const hoursResult = await env.DB
           .prepare(`
-            SELECT COALESCE(SUM(hours), 0) AS totalHours
+            SELECT ${HOUR_TYPES.map(type => `COALESCE(SUM(${HOUR_COLUMNS[type]}), 0) AS ${type}`).join(', ')}
             FROM time_entries
             WHERE engagementId = ?1
               AND periodStart >= ?2
@@ -3572,7 +3615,9 @@ export default {
           .bind(engagementId, periodStart, periodEnd)
           .first();
 
-        const totalHours = Number((hoursResult as any)?.totalHours ?? 0);
+        const hoursByType = {} as HourBreakdown;
+        for (const type of HOUR_TYPES) hoursByType[type] = Number((hoursResult as any)?.[type] ?? 0);
+        const totalHours = HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0);
 
         if (totalHours <= 0) {
           return sendJson(
@@ -3599,15 +3644,6 @@ export default {
           );
         }
 
-        if (engagement.vinculationType === 'EST_MISSION') {
-          return sendJson(
-            {
-              success: false,
-              error: 'Módulo EST no disponible.',
-            },
-            400
-          );
-        }
 
         let grossAmount: number;
         let retentionAmount: number;
@@ -3616,7 +3652,8 @@ export default {
         let dianDocument: unknown;
 
         try {
-          if (engagement.vinculationType === 'PART_TIME_EMPLOYEE') {
+          // Trabajadores en misión (EST) y de servicios: empleados por horas.
+          if (engagement.vinculationType === 'PART_TIME_EMPLOYEE' || engagement.vinculationType === 'EST_MISSION') {
             const input: PartTimeEmployeeInput = {
               companyId: engagement.companyId,
               engagementId: engagement.id,
@@ -3629,6 +3666,9 @@ export default {
               hourlyRate: engagement.hourlyRate,
               weeklyHours: Number(engagement.weeklyHours || 0),
               hoursWorked: totalHours,
+              hours: hoursByType,
+              // La clase de riesgo ARL es la del sitio del cliente al que fue asignado.
+              riskClass: ARL_RISK_CLASS_RATES[Number(engagementRow.client_arlRiskClass) || 1],
             };
 
             const payrollResult = PartTimeEmployeeEngine.calculate(input);
@@ -3776,7 +3816,11 @@ export default {
         const settlementId = `SET-${crypto.randomUUID()}`;
         const createdAt = new Date().toISOString();
 
-        const resultJson = JSON.stringify({ calculation, dianDocument });
+        // Cliente y tarifa de cobro vigentes al liquidar (reporte de cobro por cliente).
+        const assignmentSnapshot = engagement.clientId
+          ? { clientId: engagement.clientId, position: engagement.position ?? null, billRate: engagement.billRate ?? null, hours: hoursByType }
+          : null;
+        const resultJson = JSON.stringify({ calculation, dianDocument, assignment: assignmentSnapshot });
 
         await env.DB
           .prepare(`

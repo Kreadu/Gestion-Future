@@ -23,6 +23,39 @@ export type VinculationType =
   | 'PART_TIME_EMPLOYEE'
   | 'EST_MISSION';
 
+/**
+ * Horas de un periodo por tipo, sin solaparse: cada hora trabajada va
+ * en una sola casilla. Las ordinarias (diurnas, nocturnas, dominicales)
+ * pagan la tarifa base más su recargo; las extra, su factor completo.
+ */
+export interface HourBreakdown {
+  ordinary: number;
+  night: number;
+  sunday: number;
+  sundayNight: number;
+  extraDay: number;
+  extraNight: number;
+  extraSundayDay: number;
+  extraSundayNight: number;
+}
+
+export const HOUR_TYPES: (keyof HourBreakdown)[] = [
+  'ordinary', 'night', 'sunday', 'sundayNight',
+  'extraDay', 'extraNight', 'extraSundayDay', 'extraSundayNight',
+];
+
+/** Columna de time_entries para cada tipo de hora. */
+export const HOUR_COLUMNS: Record<keyof HourBreakdown, string> = {
+  ordinary: 'hours',
+  night: 'hoursNight',
+  sunday: 'hoursSunday',
+  sundayNight: 'hoursSundayNight',
+  extraDay: 'hoursExtraDay',
+  extraNight: 'hoursExtraNight',
+  extraSundayDay: 'hoursExtraSundayDay',
+  extraSundayNight: 'hoursExtraSundayNight',
+};
+
 export type RetentionConcept = 'SERVICIOS' | 'HONORARIOS';
 
 /**
@@ -99,6 +132,11 @@ export interface Engagement {
   weeklyHours?: number | null;
   contractType?: string | null;
 
+  /** Cliente (empresa usuaria EST o contratante del servicio). */
+  clientId?: string | null;
+  position?: string | null;
+  /** Tarifa de cobro por hora al cliente (clientes HOURLY_RATE). */
+  billRate?: number | null;
   createdAt?: string | null;
 }
 
@@ -153,7 +191,10 @@ export interface PartTimeEmployeeInput {
 
   hourlyRate: number;
   weeklyHours: number;
+  /** Horas ordinarias diurnas; se ignora si llega `hours`. */
   hoursWorked: number;
+  /** Desglose de horas por tipo (planilla del cliente). */
+  hours?: Partial<HourBreakdown>;
 
   riskClass?: RiskClass;
   isExempt114_1?: boolean;
