@@ -2977,7 +2977,7 @@ function App({ me, onSignOut }) {
               <DianSubmissionPanel
                 key={settlementResult.id}
                 basePath="/api/hourly/settlements"
-                settlement={{ id: settlementResult.id, dianConsecutive: settlementResult.dianDocument.consecutive }}
+                settlement={{ id: settlementResult.id, dianConsecutive: settlementResult.dianDocument.consecutive, hoursByType: settlementResult.calculation && settlementResult.calculation.hoursBreakdown }}
               />
             )}
           </div>

@@ -13,6 +13,7 @@ import { DianNominaXmlService, DianXmlBalanceError } from './services/dianNomina
 import { handleDianRoutes } from './routes/dian';
 import { dianSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
 import { handleServiceClientRoutes, resolveAssignment } from './routes/serviceClients';
+import { handleDianAdjustmentRoutes, isDeletedAtDian, type AdjustmentSourceTable, type CorrectedPayroll } from './routes/dianAdjustments';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -375,6 +376,170 @@ function normalizePayrollSettlement(row: any): PayrollSettlement {
   };
 }
 
+/** Engagement con los datos del profesional y la clase de riesgo de su cliente. */
+const ENGAGEMENT_WITH_PROFESSIONAL_SQL = `
+  SELECT
+    e.*,
+    p.firstName AS p_firstName,
+    p.firstName2 AS p_firstName2,
+    p.lastName AS p_lastName,
+    p.lastName2 AS p_lastName2,
+    p.taxId AS p_taxId,
+    p.documentType AS p_documentType,
+    sc.arlRiskClass AS client_arlRiskClass
+  FROM engagements e
+  JOIN professionals p ON p.id = e.professionalId
+  LEFT JOIN service_clients sc ON sc.id = e.clientId
+  WHERE e.id = ?1
+`;
+
+/** Entrada del motor de jornada parcial (EST y servicios) con las horas por tipo. */
+function partTimeInput(engagementRow: any, engagement: Engagement, hoursByType: HourBreakdown): PartTimeEmployeeInput {
+  return {
+    companyId: engagement.companyId,
+    engagementId: engagement.id,
+    professionalId: engagement.professionalId,
+    firstName: String(engagementRow.p_firstName || ''),
+    firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+    lastName: String(engagementRow.p_lastName || ''),
+    lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+    taxId: String(engagementRow.p_taxId || ''),
+    hourlyRate: engagement.hourlyRate,
+    weeklyHours: Number(engagement.weeklyHours || 0),
+    hoursWorked: HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0),
+    hours: hoursByType,
+    // La clase de riesgo ARL es la del sitio del cliente al que fue asignado.
+    riskClass: ARL_RISK_CLASS_RATES[Number(engagementRow.client_arlRiskClass) || 1],
+  };
+}
+
+function partTimeEmployeeExtra(engagement: Engagement): DianEmployeeExtraInfo {
+  return {
+    typeDocument: '13',
+    typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
+      ? String(engagement.contractType)
+      : '2') as DianEmployeeExtraInfo['typeContract'],
+    paymentMethod: '42',
+    startDate: engagement.startDate || undefined,
+  };
+}
+
+/** Horas por tipo (planilla del cliente); sin desglose, `ordinary` es el total de horas. */
+function parseHourBreakdown(byType: any): HourBreakdown {
+  const breakdown = {} as HourBreakdown;
+  for (const type of HOUR_TYPES) {
+    const value = byType?.[type] === undefined || byType?.[type] === '' ? 0 : Number(byType[type]);
+    if (!Number.isFinite(value) || value < 0 || value > 744) {
+      throw new HttpError(400, 'Cada tipo de hora debe ser un número entre 0 y 744.');
+    }
+    breakdown[type] = value;
+  }
+  return breakdown;
+}
+
+/** Tipo de contrato, cuenta y fecha de ingreso del empleado para el XML de nómina. */
+async function monthlyEmployeeExtra(env: Env, employeeId: string, input: any = {}): Promise<DianEmployeeExtraInfo> {
+  // El tipo de contrato y la cuenta salen del empleado guardado,
+  // no del navegador (antes el dashboard mandaba siempre '1').
+  const employeeRow = await env.DB
+    .prepare(`
+      SELECT contractType, bankName, bankAccountType, bankAccountNumber, hireDate
+      FROM employees
+      WHERE id = ?1
+    `)
+    .bind(employeeId)
+    .first<any>();
+
+  const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
+    ? String(employeeRow.contractType)
+    : '2';
+
+  return {
+    typeDocument: input.typeDocument || '13',
+    typeContract: contractType as DianEmployeeExtraInfo['typeContract'],
+
+    /*
+     * 42 = transferencia bancaria.
+     * El servicio DIAN preparado acepta 10, 42 o 20.
+     */
+    paymentMethod: input.paymentMethod || '42',
+
+    bankName: employeeRow?.bankName || undefined,
+    accountNumber: employeeRow?.bankAccountNumber || undefined,
+    accountType: employeeRow?.bankAccountType || undefined,
+    startDate: employeeRow?.hireDate || undefined,
+  };
+}
+
+/**
+ * Nómina corregida para una nota de ajuste que reemplaza lo aceptado
+ * por la DIAN: se recalcula con el mismo motor y los datos actuales
+ * (salario, incapacidades) más la corrección del body.
+ */
+async function correctedPayroll(
+  env: Env,
+  table: AdjustmentSourceTable,
+  sourceRow: any,
+  body: any
+): Promise<CorrectedPayroll> {
+  if (table === 'payroll_settlements') {
+    const periodRow = await env.DB
+      .prepare(`SELECT * FROM payroll_periods WHERE id = ?1`)
+      .bind(sourceRow.periodId)
+      .first<any>();
+    const employeeRow = await env.DB
+      .prepare(`SELECT * FROM employees WHERE id = ?1`)
+      .bind(sourceRow.employeeId)
+      .first();
+    const company = await env.DB
+      .prepare(`SELECT isExempt114_1 FROM companies WHERE id = ?1`)
+      .bind(sourceRow.companyId)
+      .first<any>();
+    if (!periodRow || !employeeRow) throw new HttpError(404, 'No se encontró el periodo o el empleado de la liquidación.');
+
+    const computed = await computeMonthlyPayroll(env, periodRow, normalizeEmployee(employeeRow), !!company?.isExempt114_1, body);
+    return {
+      payroll: computed.payrollResult,
+      employeeExtra: await monthlyEmployeeExtra(env, String(sourceRow.employeeId)),
+      periodStart: String(periodRow.periodStart),
+      periodEnd: String(periodRow.periodEnd),
+      inputs: {
+        daysWorked: computed.daysWorked,
+        extraDiurna: computed.extraDiurna,
+        extraNocturna: computed.extraNocturna,
+        recargoNocturno: computed.recargoNocturno,
+      },
+    };
+  }
+
+  const engagementRow = await env.DB.prepare(ENGAGEMENT_WITH_PROFESSIONAL_SQL).bind(sourceRow.engagementId).first<any>();
+  if (!engagementRow) throw new HttpError(404, 'No se encontró la vinculación de la liquidación.');
+  const engagement = normalizeEngagement(engagementRow);
+  if (engagement.vinculationType !== 'PART_TIME_EMPLOYEE' && engagement.vinculationType !== 'EST_MISSION') {
+    throw new HttpError(400, 'Sólo la nómina de jornada parcial lleva nota de ajuste de nómina.');
+  }
+
+  const hoursByType = parseHourBreakdown(body.hoursByType);
+  const totalHours = HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0);
+  if (totalHours <= 0) throw new HttpError(400, 'Las horas deben ser mayores que cero.');
+
+  let payroll: ColombiaPayrollResult;
+  try {
+    payroll = PartTimeEmployeeEngine.calculate(partTimeInput(engagementRow, engagement, hoursByType));
+  } catch (engineError) {
+    if (engineError instanceof PartTimeEmployeeEngineError) throw new HttpError(400, engineError.message);
+    throw engineError;
+  }
+
+  return {
+    payroll,
+    employeeExtra: partTimeEmployeeExtra(engagement),
+    periodStart: String(sourceRow.periodStart),
+    periodEnd: String(sourceRow.periodEnd),
+    inputs: { hoursByType, totalHours },
+  };
+}
+
 /**
  * Liquida una vinculación por horas en un periodo: suma las horas
  * registradas, enruta al motor y al documento DIAN de su modalidad y
@@ -398,22 +563,7 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
   }
 
   const engagementRow = await env.DB
-    .prepare(`
-      SELECT
-        e.*,
-        p.firstName AS p_firstName,
-        p.firstName2 AS p_firstName2,
-        p.lastName AS p_lastName,
-        p.lastName2 AS p_lastName2,
-        p.taxId AS p_taxId,
-        p.documentType AS p_documentType,
-        sc.arlRiskClass AS client_arlRiskClass
-      FROM engagements e
-      JOIN professionals p ON p.id = e.professionalId
-      LEFT JOIN service_clients sc ON sc.id = e.clientId
-      WHERE e.id = ?1
-        AND e.active = 1
-    `)
+    .prepare(`${ENGAGEMENT_WITH_PROFESSIONAL_SQL} AND e.active = 1`)
     .bind(engagementId)
     .first();
 
@@ -508,24 +658,7 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
   try {
     // Trabajadores en misión (EST) y de servicios: empleados por horas.
     if (engagement.vinculationType === 'PART_TIME_EMPLOYEE' || engagement.vinculationType === 'EST_MISSION') {
-      const input: PartTimeEmployeeInput = {
-        companyId: engagement.companyId,
-        engagementId: engagement.id,
-        professionalId: engagement.professionalId,
-        firstName: String(engagementRow.p_firstName || ''),
-        firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
-        lastName: String(engagementRow.p_lastName || ''),
-        lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
-        taxId: String(engagementRow.p_taxId || ''),
-        hourlyRate: engagement.hourlyRate,
-        weeklyHours: Number(engagement.weeklyHours || 0),
-        hoursWorked: totalHours,
-        hours: hoursByType,
-        // La clase de riesgo ARL es la del sitio del cliente al que fue asignado.
-        riskClass: ARL_RISK_CLASS_RATES[Number(engagementRow.client_arlRiskClass) || 1],
-      };
-
-      const payrollResult = PartTimeEmployeeEngine.calculate(input);
+      const payrollResult = PartTimeEmployeeEngine.calculate(partTimeInput(engagementRow, engagement, hoursByType));
       const software = await dianSoftwareFor(env, engagement.companyId);
 
       const employerInfo = {
@@ -545,14 +678,7 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
       const xmlResult = await DianNominaXmlService.generateDSPNE(
         payrollResult,
         employerInfo,
-        {
-          typeDocument: '13',
-          typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
-            ? String(engagement.contractType)
-            : '2') as DianEmployeeExtraInfo['typeContract'],
-          paymentMethod: '42',
-          startDate: engagement.startDate || undefined,
-        },
+        partTimeEmployeeExtra(engagement),
         nominaConsecutive,
         undefined,
         undefined,
@@ -727,6 +853,168 @@ async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Prom
   );
 }
 
+/** Lo que se guarda de una liquidación mensual calculada. */
+interface MonthlyComputation {
+  payrollResult: ColombiaPayrollResult;
+  daysWorked: number;
+  extraDiurna: number;
+  extraNocturna: number;
+  recargoNocturno: number;
+}
+
+/**
+ * Calcula la nómina mensual de un empleado en un periodo a partir de
+ * los días y horas del body (con sus incapacidades/licencias). La usan
+ * el cálculo de la liquidación y la nota de ajuste que la reemplaza.
+ */
+async function computeMonthlyPayroll(
+  env: Env,
+  periodRow: any,
+  employee: Employee,
+  isExempt114_1: boolean,
+  body: any
+): Promise<MonthlyComputation> {
+  const daysWorked = Number(body.daysWorked ?? 30);
+
+  if (
+    !Number.isFinite(daysWorked) ||
+    daysWorked < 1 ||
+    daysWorked > 30
+  ) {
+    throw new HttpError(400, 'Los días trabajados deben estar entre 1 y 30.');
+  }
+
+  // Incapacidades/licencias que se solapen con el periodo: se
+  // detectan aquí (no las elige el frontend), y `daysWorked` del
+  // body son siempre los días NORMALES — el backend nunca los
+  // sobreescribe, sólo valida que quepan junto con la licencia
+  // dentro del mes.
+  const overlappingLeavesResult = await env.DB
+    .prepare(`
+      SELECT *
+      FROM employee_leaves
+      WHERE employeeId = ?1
+        AND startDate <= ?2
+        AND endDate >= ?3
+    `)
+    .bind(employee.id, String(periodRow.periodEnd), String(periodRow.periodStart))
+    .all();
+
+  const overlappingLeaves = overlappingLeavesResult.results || [];
+
+  // Un mismo período puede tener más de una incapacidad/licencia
+  // (ej. 3 días a inicios de mes + 5 días más adelante) — se
+  // pasan todas al motor y él las suma. No pueden solaparse
+  // ENTRE SÍ porque eso ya se valida al registrarlas
+  // (POST /api/employee-leaves).
+  const leaves: EmployeeLeaveInput[] = overlappingLeaves.map(
+    (row) => {
+      const leaveRow = normalizeEmployeeLeave(row);
+
+      // Ya sabemos que se solapan con el periodo (la consulta
+      // SQL lo garantiza), así que la intersección nunca es
+      // null aquí.
+      const intersection = intersectDateRanges(
+        leaveRow.startDate,
+        leaveRow.endDate,
+        String(periodRow.periodStart),
+        String(periodRow.periodEnd)
+      )!;
+
+      return {
+        type: leaveRow.leaveType,
+        daysInPeriod: intersection.days,
+        startDate: intersection.start,
+        endDate: intersection.end,
+        accumulatedDaysBefore:
+          leaveRow.leaveType === 'GENERAL_INCAPACITY'
+            ? leaveRow.accumulatedDaysBefore
+            : undefined,
+      };
+    }
+  );
+
+  const totalLeaveDays = leaves.reduce(
+    (sum, l) => sum + l.daysInPeriod,
+    0
+  );
+
+  if (totalLeaveDays > 0 && daysWorked + totalLeaveDays > 30) {
+    throw new HttpError(400, 'Días trabajados + días de incapacidad/licencia no pueden superar 30.');
+  }
+
+  const overtimeHours = body.overtimeHours || {};
+
+  const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
+  const extraNocturna = Number(overtimeHours.extraNocturna ?? 0);
+  const recargoNocturno = Number(overtimeHours.recargoNocturno ?? 0);
+  const horasDominicalFestivo = Number(body.horasDominicalFestivo ?? 0);
+  const horasExtraDominicalFestivo = Number(
+    body.horasExtraDominicalFestivo ?? 0
+  );
+
+  if (
+    !Number.isFinite(extraDiurna) ||
+    !Number.isFinite(extraNocturna) ||
+    !Number.isFinite(recargoNocturno) ||
+    !Number.isFinite(horasDominicalFestivo) ||
+    !Number.isFinite(horasExtraDominicalFestivo) ||
+    extraDiurna < 0 ||
+    extraNocturna < 0 ||
+    recargoNocturno < 0 ||
+    horasDominicalFestivo < 0 ||
+    horasExtraDominicalFestivo < 0
+  ) {
+    throw new HttpError(400, 'Las horas extras y recargos deben ser valores válidos.');
+  }
+
+  const payrollInput: ColombiaPayrollInput = {
+    companyId: employee.companyId,
+    employeeId: employee.id,
+
+    firstName: employee.firstName,
+    firstName2: employee.firstName2 || undefined,
+
+    lastName: employee.lastName,
+    lastName2: employee.lastName2 || undefined,
+
+    taxId: employee.taxId,
+
+    baseSalaryMonthly: employee.salary,
+
+    daysWorked,
+
+    extraDiurna,
+    extraNocturna,
+    recargoNocturno,
+    horasDominicalFestivo,
+    horasExtraDominicalFestivo,
+    isIntegralSalary: !!body.isIntegralSalary,
+    riskClass: ARL_RISK_CLASS_RATES[employee.arlRiskClass],
+    isExempt114_1,
+
+    leaves,
+
+    overtimeHours: {
+      extraDiurna,
+      extraNocturna,
+      recargoNocturno,
+    },
+  };
+
+  
+  try {
+    const payrollResult = ColombiaPayrollEngine.calculate(payrollInput);
+    return { payrollResult, daysWorked, extraDiurna, extraNocturna, recargoNocturno };
+  } catch (engineError) {
+    if (engineError instanceof ColombiaPayrollEngineError) {
+      throw new HttpError(400, engineError.message);
+    }
+
+    throw engineError;
+  }
+}
+
 export default {
   async fetch(
     request: Request,
@@ -800,6 +1088,11 @@ export default {
 
       const dianConfigResponse = await handleDianConfigRoutes(request, url, env, user);
       if (dianConfigResponse) return dianConfigResponse;
+
+      const adjustmentResponse = await handleDianAdjustmentRoutes(request, url, env, user, {
+        correctedPayroll: (table, sourceRow, body) => correctedPayroll(env, table, sourceRow, body),
+      });
+      if (adjustmentResponse) return adjustmentResponse;
 
       const serviceClientResponse = await handleServiceClientRoutes(request, url, env, user);
       if (serviceClientResponse) return serviceClientResponse;
@@ -2269,168 +2562,8 @@ export default {
           );
         }
 
-        const daysWorked = Number(body.daysWorked ?? 30);
-
-        if (
-          !Number.isFinite(daysWorked) ||
-          daysWorked < 1 ||
-          daysWorked > 30
-        ) {
-          return sendJson(
-            {
-              success: false,
-              error: 'Los días trabajados deben estar entre 1 y 30.',
-            },
-            400
-          );
-        }
-
-        // Incapacidades/licencias que se solapen con el periodo: se
-        // detectan aquí (no las elige el frontend), y `daysWorked` del
-        // body son siempre los días NORMALES — el backend nunca los
-        // sobreescribe, sólo valida que quepan junto con la licencia
-        // dentro del mes.
-        const overlappingLeavesResult = await env.DB
-          .prepare(`
-            SELECT *
-            FROM employee_leaves
-            WHERE employeeId = ?1
-              AND startDate <= ?2
-              AND endDate >= ?3
-          `)
-          .bind(employeeId, String(periodRow.periodEnd), String(periodRow.periodStart))
-          .all();
-
-        const overlappingLeaves = overlappingLeavesResult.results || [];
-
-        // Un mismo período puede tener más de una incapacidad/licencia
-        // (ej. 3 días a inicios de mes + 5 días más adelante) — se
-        // pasan todas al motor y él las suma. No pueden solaparse
-        // ENTRE SÍ porque eso ya se valida al registrarlas
-        // (POST /api/employee-leaves).
-        const leaves: EmployeeLeaveInput[] = overlappingLeaves.map(
-          (row) => {
-            const leaveRow = normalizeEmployeeLeave(row);
-
-            // Ya sabemos que se solapan con el periodo (la consulta
-            // SQL lo garantiza), así que la intersección nunca es
-            // null aquí.
-            const intersection = intersectDateRanges(
-              leaveRow.startDate,
-              leaveRow.endDate,
-              String(periodRow.periodStart),
-              String(periodRow.periodEnd)
-            )!;
-
-            return {
-              type: leaveRow.leaveType,
-              daysInPeriod: intersection.days,
-              startDate: intersection.start,
-              endDate: intersection.end,
-              accumulatedDaysBefore:
-                leaveRow.leaveType === 'GENERAL_INCAPACITY'
-                  ? leaveRow.accumulatedDaysBefore
-                  : undefined,
-            };
-          }
-        );
-
-        const totalLeaveDays = leaves.reduce(
-          (sum, l) => sum + l.daysInPeriod,
-          0
-        );
-
-        if (totalLeaveDays > 0 && daysWorked + totalLeaveDays > 30) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                'Días trabajados + días de incapacidad/licencia no ' +
-                'pueden superar 30.',
-            },
-            400
-          );
-        }
-
-        const overtimeHours = body.overtimeHours || {};
-
-        const extraDiurna = Number(overtimeHours.extraDiurna ?? 0);
-        const extraNocturna = Number(overtimeHours.extraNocturna ?? 0);
-        const recargoNocturno = Number(overtimeHours.recargoNocturno ?? 0);
-        const horasDominicalFestivo = Number(body.horasDominicalFestivo ?? 0);
-        const horasExtraDominicalFestivo = Number(
-          body.horasExtraDominicalFestivo ?? 0
-        );
-
-        if (
-          !Number.isFinite(extraDiurna) ||
-          !Number.isFinite(extraNocturna) ||
-          !Number.isFinite(recargoNocturno) ||
-          !Number.isFinite(horasDominicalFestivo) ||
-          !Number.isFinite(horasExtraDominicalFestivo) ||
-          extraDiurna < 0 ||
-          extraNocturna < 0 ||
-          recargoNocturno < 0 ||
-          horasDominicalFestivo < 0 ||
-          horasExtraDominicalFestivo < 0
-        ) {
-          return sendJson(
-            {
-              success: false,
-              error: 'Las horas extras y recargos deben ser valores válidos.',
-            },
-            400
-          );
-        }
-
-        const payrollInput: ColombiaPayrollInput = {
-          companyId: employee.companyId,
-          employeeId: employee.id,
-
-          firstName: employee.firstName,
-          firstName2: employee.firstName2 || undefined,
-
-          lastName: employee.lastName,
-          lastName2: employee.lastName2 || undefined,
-
-          taxId: employee.taxId,
-
-          baseSalaryMonthly: employee.salary,
-
-          daysWorked,
-
-          extraDiurna,
-          extraNocturna,
-          recargoNocturno,
-          horasDominicalFestivo,
-          horasExtraDominicalFestivo,
-          isIntegralSalary: !!body.isIntegralSalary,
-          riskClass: ARL_RISK_CLASS_RATES[employee.arlRiskClass],
-          isExempt114_1: !!companyExemption?.isExempt114_1,
-
-          leaves,
-
-          overtimeHours: {
-            extraDiurna,
-            extraNocturna,
-            recargoNocturno,
-          },
-        };
-
-        let payrollResult: ColombiaPayrollResult;
-
-        try {
-          payrollResult = ColombiaPayrollEngine.calculate(payrollInput);
-        } catch (engineError) {
-          if (engineError instanceof ColombiaPayrollEngineError) {
-            return sendJson(
-              { success: false, error: engineError.message },
-              400
-            );
-          }
-
-          throw engineError;
-        }
+        const { payrollResult, daysWorked, extraDiurna, extraNocturna, recargoNocturno } =
+          await computeMonthlyPayroll(env, periodRow, employee, !!companyExemption?.isExempt114_1, body);
 
         const now = new Date().toISOString();
         const settlementId = existing
@@ -2605,43 +2738,12 @@ export default {
         }
 
         const body = await request.json().catch(() => ({})) as any;
-        const employeeExtraInput = body?.employeeExtra || {};
-
-        // El tipo de contrato y la cuenta salen del empleado guardado,
-        // no del navegador (antes el dashboard mandaba siempre '1').
-        const employeeRow = await env.DB
-          .prepare(`
-            SELECT contractType, bankName, bankAccountType, bankAccountNumber, hireDate
-            FROM employees
-            WHERE id = ?1
-          `)
-          .bind(settlementRow.employeeId)
-          .first<any>();
+        const employeeExtra = await monthlyEmployeeExtra(env, String(settlementRow.employeeId), body?.employeeExtra || {});
 
         const periodRow = await env.DB
           .prepare(`SELECT periodStart, periodEnd FROM payroll_periods WHERE id = ?1`)
           .bind(settlementRow.periodId)
           .first<any>();
-
-        const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
-          ? String(employeeRow.contractType)
-          : '2';
-
-        const employeeExtra: DianEmployeeExtraInfo = {
-          typeDocument: employeeExtraInput.typeDocument || '13',
-          typeContract: contractType as DianEmployeeExtraInfo['typeContract'],
-
-          /*
-           * 42 = transferencia bancaria.
-           * El servicio DIAN preparado acepta 10, 42 o 20.
-           */
-          paymentMethod: employeeExtraInput.paymentMethod || '42',
-
-          bankName: employeeRow?.bankName || undefined,
-          accountNumber: employeeRow?.bankAccountNumber || undefined,
-          accountType: employeeRow?.bankAccountType || undefined,
-          startDate: employeeRow?.hireDate || undefined,
-        };
 
         const payrollResult: ColombiaPayrollResult = JSON.parse(
           String((settlementRow as any).resultJson)
@@ -3621,18 +3723,9 @@ export default {
 
         // Horas por tipo (planilla del cliente) o, como antes, un total
         // de horas ordinarias diurnas en `hours`.
-        const byType = body.hoursByType && typeof body.hoursByType === 'object' ? body.hoursByType : { ordinary: body.hours };
-        const breakdown = {} as HourBreakdown;
-        for (const type of HOUR_TYPES) {
-          const value = byType[type] === undefined || byType[type] === '' ? 0 : Number(byType[type]);
-          if (!Number.isFinite(value) || value < 0 || value > 744) {
-            return sendJson(
-              { success: false, error: 'Cada tipo de hora debe ser un número entre 0 y 744.' },
-              400
-            );
-          }
-          breakdown[type] = value;
-        }
+        const breakdown = parseHourBreakdown(
+          body.hoursByType && typeof body.hoursByType === 'object' ? body.hoursByType : { ordinary: body.hours }
+        );
         const hours = HOUR_TYPES.reduce((sum, type) => sum + breakdown[type], 0);
 
         if (!engagementId || !periodStart || !periodEnd) {
@@ -4014,8 +4107,10 @@ export default {
 
         requireCompanyAccess(user, String(row.companyId));
 
-        // Lo que la DIAN ya tiene no se borra: se corrige con una nota de ajuste.
-        if (row.dianSubmissionStatus === 'SENT' || row.dianSubmissionStatus === 'ACCEPTED') {
+        // Lo que la DIAN ya tiene no se borra: se corrige con una nota de
+        // ajuste. Si la DIAN aceptó su eliminación, ya se puede anular.
+        const deletedAtDian = await isDeletedAtDian(env, 'settlements', settlementId);
+        if (!deletedAtDian && (row.dianSubmissionStatus === 'SENT' || row.dianSubmissionStatus === 'ACCEPTED')) {
           return sendJson({
             success: false,
             error: row.dianSubmissionStatus === 'ACCEPTED'

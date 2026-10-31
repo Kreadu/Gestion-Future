@@ -13,9 +13,44 @@ export interface DianNominaOptions {
   periodStart?: string;
   periodEnd?: string;
   environment?: DianEnvironment;
+  /** Nota de ajuste que reemplaza este documento ya aceptado por la DIAN. */
+  replaces?: DianPredecessor;
+}
+
+/** Documento aceptado por la DIAN al que se refiere una nota de ajuste. */
+export interface DianPredecessor {
+  number: string;
+  cune: string;
+  issueDate: string;
 }
 
 export const NOMINA_INDIVIDUAL_TIPO_XML = '102';
+export const NOMINA_AJUSTE_TIPO_XML = '103';
+export const NOMINA_PREFIX = 'NE';
+export const NOMINA_AJUSTE_PREFIX = 'NA';
+
+export const NOMINA_NAMESPACE = 'dian:gov:co:facturaelectronica:NominaIndividual';
+export const NOMINA_AJUSTE_NAMESPACE = 'dian:gov:co:facturaelectronica:NominaIndividualDeAjuste';
+
+function rootOpening(rootName: string, namespace: string, xsd: string): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<${rootName}
+  xmlns="${namespace}"
+  xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+  xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+  xmlns:xades="http://uri.etsi.org/01903/v1.3.2#"
+  xmlns:xades141="http://uri.etsi.org/01903/v1.4.1#"
+  xmlns:xs="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  SchemaLocation=""
+  xsi:schemaLocation="${namespace} ${xsd}">
+
+  <ext:UBLExtensions>
+    <ext:UBLExtension>
+      <ext:ExtensionContent></ext:ExtensionContent>
+    </ext:UBLExtension>
+  </ext:UBLExtensions>`;
+}
 
 async function sha384Hex(value: string): Promise<string> {
   const hashBuffer = await crypto.subtle.digest('SHA-384', new TextEncoder().encode(value));
@@ -277,8 +312,14 @@ export class DianNominaXmlService {
     const startDate = employeeExtra.startDate || periodStart;
     const tiempoLaborado = Math.max(1, daysBetweenInclusive(startDate, periodEnd));
 
+    // Nota de ajuste tipo 1 (Reemplazar): el mismo contenido de la
+    // nómina, con su propia serie NA y la referencia al documento aceptado.
+    const replaces = options.replaces;
+    const tipoXml = replaces ? NOMINA_AJUSTE_TIPO_XML : NOMINA_INDIVIDUAL_TIPO_XML;
+    const prefix = replaces ? NOMINA_AJUSTE_PREFIX : NOMINA_PREFIX;
+
     const consecutive =
-      `NE${consecutiveNumber
+      `${prefix}${consecutiveNumber
         .toString()
         .padStart(8, '0')}`;
 
@@ -301,7 +342,7 @@ export class DianNominaXmlService {
         totalComprobante,
         employer.nit,
         payroll.taxId,
-        NOMINA_INDIVIDUAL_TIPO_XML,
+        tipoXml,
         employer.pinSoftware,
         ambiente
       );
@@ -341,23 +382,21 @@ export class DianNominaXmlService {
     const fullMunicipalityCode =
       `${departmentCode}${municipalityCode}`;
 
-    const xmlContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<NominaIndividual
-  xmlns="dian:gov:co:facturaelectronica:NominaIndividual"
-  xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
-  xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
-  xmlns:xades="http://uri.etsi.org/01903/v1.3.2#"
-  xmlns:xades141="http://uri.etsi.org/01903/v1.4.1#"
-  xmlns:xs="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  SchemaLocation=""
-  xsi:schemaLocation="dian:gov:co:facturaelectronica:NominaIndividual NominaIndividualElectronicaXSD.xsd">
+    const opening = replaces
+      ? `${rootOpening('NominaIndividualDeAjuste', NOMINA_AJUSTE_NAMESPACE, 'NominaIndividualDeAjusteElectronicaXSD.xsd')}
 
-  <ext:UBLExtensions>
-    <ext:UBLExtension>
-      <ext:ExtensionContent></ext:ExtensionContent>
-    </ext:UBLExtension>
-  </ext:UBLExtensions>
+  <TipoNota>1</TipoNota>
+
+  <Reemplazar>
+
+  <ReemplazandoPredecesor
+    NumeroPred="${this.escapeXml(replaces.number)}"
+    CUNEPred="${this.escapeXml(replaces.cune)}"
+    FechaGenPred="${this.escapeXml(replaces.issueDate)}"/>`
+      : rootOpening('NominaIndividual', NOMINA_NAMESPACE, 'NominaIndividualElectronicaXSD.xsd');
+    const closing = replaces ? '  </Reemplazar>\n\n</NominaIndividualDeAjuste>' : '</NominaIndividual>';
+
+    const xmlContent = `${opening}
 
   <Periodo
     FechaIngreso="${this.escapeXml(startDate)}"
@@ -368,7 +407,7 @@ export class DianNominaXmlService {
 
   <NumeroSecuenciaXML
     CodigoTrabajador="${this.escapeXml(payroll.employeeId)}"
-    Prefijo="NE"
+    Prefijo="${prefix}"
     Consecutivo="${consecutiveNumber}"
     Numero="${consecutive}"/>
 
@@ -388,9 +427,11 @@ export class DianNominaXmlService {
   <CodigoQR>${qrBase}${cune}</CodigoQR>
 
   <InformacionGeneral
-    Version="V1.0: Documento Soporte de Pago de Nómina Electrónica"
+    Version="${replaces
+      ? 'V1.0: Nota de Ajuste de Documento Soporte de Pago de Nómina Electrónica'
+      : 'V1.0: Documento Soporte de Pago de Nómina Electrónica'}"
     Ambiente="${ambiente}"
-    TipoXML="${NOMINA_INDIVIDUAL_TIPO_XML}"
+    TipoXML="${tipoXml}"
     CUNE="${cune}"
     EncripCUNE="CUNE-SHA384"
     FechaGen="${issueDate}"
@@ -450,7 +491,7 @@ ${deduccionesXml}
 
   <ComprobanteTotal>${totalComprobante.toFixed(2)}</ComprobanteTotal>
 
-</NominaIndividual>`.trim();
+${closing}`.trim();
 
     return {
       cune,
@@ -461,6 +502,103 @@ ${deduccionesXml}
       totalDevengado,
       totalDeducciones,
       totalComprobante,
+    };
+  }
+
+  /**
+   * Nota de ajuste tipo 2 (Eliminar): anula ante la DIAN un documento
+   * ya aceptado. No lleva trabajador ni valores; en el CUNE los valores
+   * van en 0.00 y el documento del trabajador en 0 (confirmar en
+   * habilitación).
+   */
+  public static async generateDeletion(
+    predecessor: DianPredecessor,
+    employer: DianEmployerInfo,
+    consecutiveNumber: number,
+    options: { environment?: DianEnvironment; departmentCode?: string; municipalityCode?: string } = {},
+    issueDateStr?: string,
+    issueTimeStr?: string
+  ): Promise<DianXmlGenerationResult> {
+    const now = colombiaNow();
+    const issueDate = issueDateStr || now.date;
+    const issueTime = issueTimeStr || now.time;
+    const ambiente: DianEnvironment = options.environment || '2';
+    const consecutive = `${NOMINA_AJUSTE_PREFIX}${consecutiveNumber.toString().padStart(8, '0')}`;
+
+    const cune = await this.calculateCUNE(
+      consecutive, issueDate, issueTime, 0, 0, 0,
+      employer.nit, '0', NOMINA_AJUSTE_TIPO_XML, employer.pinSoftware, ambiente
+    );
+    const softwareSC = await this.calculateSoftwareSC(employer.softwareId, employer.pinSoftware, consecutive);
+
+    const departmentCode = options.departmentCode || '05';
+    const fullMunicipalityCode = `${departmentCode}${options.municipalityCode || '001'}`;
+    const qrBase = ambiente === '1'
+      ? 'https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey='
+      : 'https://catalogo-vpfe-hab.dian.gov.co/document/searchqr?documentkey=';
+
+    const xmlContent = `${rootOpening('NominaIndividualDeAjuste', NOMINA_AJUSTE_NAMESPACE, 'NominaIndividualDeAjusteElectronicaXSD.xsd')}
+
+  <TipoNota>2</TipoNota>
+
+  <Eliminar>
+
+  <EliminandoPredecesor
+    NumeroPred="${this.escapeXml(predecessor.number)}"
+    CUNEPred="${this.escapeXml(predecessor.cune)}"
+    FechaGenPred="${this.escapeXml(predecessor.issueDate)}"/>
+
+  <NumeroSecuenciaXML
+    Prefijo="${NOMINA_AJUSTE_PREFIX}"
+    Consecutivo="${consecutiveNumber}"
+    Numero="${consecutive}"/>
+
+  <LugarGeneracionXML
+    Pais="CO"
+    DepartamentoEstado="${this.escapeXml(departmentCode)}"
+    MunicipioCiudad="${this.escapeXml(fullMunicipalityCode)}"
+    Idioma="es"/>
+
+  <ProveedorXML
+    RazonSocial="${this.escapeXml(employer.companyName)}"
+    NIT="${this.escapeXml(employer.nit)}"
+    DV="${this.escapeXml(employer.dv)}"
+    SoftwareID="${this.escapeXml(employer.softwareId)}"
+    SoftwareSC="${softwareSC}"/>
+
+  <CodigoQR>${qrBase}${cune}</CodigoQR>
+
+  <InformacionGeneral
+    Version="V1.0: Nota de Ajuste de Documento Soporte de Pago de Nómina Electrónica"
+    Ambiente="${ambiente}"
+    TipoXML="${NOMINA_AJUSTE_TIPO_XML}"
+    CUNE="${cune}"
+    EncripCUNE="CUNE-SHA384"
+    FechaGen="${issueDate}"
+    HoraGen="${issueTime}"/>
+
+  <Empleador
+    RazonSocial="${this.escapeXml(employer.companyName)}"
+    NIT="${this.escapeXml(employer.nit)}"
+    DV="${this.escapeXml(employer.dv)}"
+    Pais="${this.escapeXml(employer.country || 'CO')}"
+    DepartamentoEstado="${this.escapeXml(employer.department || departmentCode)}"
+    MunicipioCiudad="${this.escapeXml(fullMunicipalityCode)}"
+    Direccion="${this.escapeXml(employer.address || 'Dirección registrada')}"/>
+
+  </Eliminar>
+
+</NominaIndividualDeAjuste>`.trim();
+
+    return {
+      cune,
+      consecutive,
+      issueDate,
+      issueTime,
+      xmlContent,
+      totalDevengado: 0,
+      totalDeducciones: 0,
+      totalComprobante: 0,
     };
   }
 }

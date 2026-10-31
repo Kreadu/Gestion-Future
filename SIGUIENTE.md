@@ -14,8 +14,8 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 34 suites, 317 pruebas (ya sin --forceExit)
-npm run e2e                                         # Firefox, hoy 28/28 pasos
+npx jest --runInBand --watchman=false              # hoy: 35 suites, 321 pruebas (ya sin --forceExit)
+npm run e2e                                         # Firefox, hoy 29/29 pasos
 ```
 
 ## Pendientes, en este orden
@@ -58,5 +58,6 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 0. Modelo de negocio (30-oct): (a) servicio de RRHH externo: cada empresa cliente se registra como empresa con sus empleados y es su propio empleador; (b) EST: trabajadores en misión a empresas usuarias; (c) servicios (aseo, meseros) con personal propio. En (b) y (c) el empleador es la empresa del dueño, se paga **por horas, mensual** (decidido el 31-oct), con horas por tipo desde la planilla del cliente, y se cobra al cliente por tarifa por hora o costo + % administración. Lo pendiente de este modelo está en "Por estudiar con el dueño".
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
-2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
+2. [x] Notas de ajuste de nómina (TipoXML 103, prefijo NA, 31-oct): reemplazar con la nómina corregida o eliminar, sobre lo que la DIAN ya aceptó (`routes/dianAdjustments.ts`). Confirmar en habilitación: CUNE de la eliminación (valores 0.00 y documento 0) y que el nombre del .zip (consecutivo del documento) no choque entre la serie NE y la NA.
+   Documento soporte de contratistas independientes: sigue sin firma ni envío (otro tipo de documento DIAN, UBL).
 3. [x] Acceso Firebase con `raipimo36@gmail.com` confirmado por el dueño (30-oct).

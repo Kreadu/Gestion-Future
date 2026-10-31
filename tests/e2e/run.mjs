@@ -197,6 +197,19 @@ try {
     if (!name.endsWith('-firmada.xml')) throw new Error('Descarga inesperada: ' + name);
   });
 
+  await step('Nota de ajuste: reemplazar la nómina aceptada por la DIAN', async () => {
+    await page.getByRole('button', { name: /Corregir \(reemplazar\)/ }).click();
+    // Llega con los valores liquidados; sin cambiarlos, el resto del recorrido no varía.
+    if (await page.locator('#adj-daysWorked').inputValue() === '') throw new Error('Sin días precargados');
+    await page.locator('#adj-reason').fill('Corrección de prueba');
+    await page.getByRole('button', { name: 'Preparar nota de ajuste' }).click();
+    await expectText(page, 'Nota de ajuste NA00000001 lista');
+    await page.getByRole('button', { name: /📤 Enviar$/ }).click();
+    await expectText(page, 'NA00000001: ⏳ En proceso en la DIAN');
+    await page.getByRole('button', { name: /🔄 Consultar$/ }).click();
+    await expectText(page, 'NA00000001: ✅ Aceptado por la DIAN');
+  });
+
   await step('Descargar archivo bancario', async () => {
     await page.getByRole('button', { name: /Archivo bancario del periodo/ }).click();
     const download = page.waitForEvent('download');
