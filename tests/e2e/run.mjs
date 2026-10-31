@@ -298,7 +298,7 @@ try {
     await expectText(page, '$ 1.504.000');
   });
 
-  await step('Temporales y servicios: cliente, camarero por horas con recargos y cobro', async () => {
+  await step('Temporales y servicios: cliente, camarero por horas, liquidación del mes y cobro', async () => {
     const weekEnd = shiftDays(currentPeriodStart, 6);
     await page.getByRole('button', { name: /Clientes/ }).click();
     let m = modal(page);
@@ -339,19 +339,13 @@ try {
     await m.getByRole('button').last().click();
     await expectText(page, 'Horas registradas correctamente.');
 
-    await page.getByRole('button', { name: /Liquidar periodo/ }).click();
-    m = modal(page);
-    await fill(m, 'Periodo desde', currentPeriodStart);
-    await fill(m, 'Periodo hasta', weekEnd);
-    await m.getByRole('button', { name: 'Calcular liquidación' }).click();
-    await expectText(page, 'Liquidación calculada correctamente.');
-
+    // El personal del cliente se liquida por mes, todos en un paso.
     await page.getByRole('button', { name: /Clientes/ }).click();
     m = modal(page);
     await m.getByRole('button', { name: /Cobro/ }).first().click();
-    await fill(m, 'Cobro desde', currentPeriodStart);
-    await fill(m, 'Cobro hasta', weekEnd);
-    await m.getByRole('button', { name: 'Calcular cobro' }).click();
+    await fill(m, 'Mes', `${testYear}-${testMonth}`);
+    await m.getByRole('button', { name: 'Liquidar el mes' }).click();
+    await expectText(m, 'Liquidados: 1');
     // 20.000 × (30 + 4 × 1,35 + 6 × 1,90) = 936.000
     await expectText(m, '$ 936.000');
     const download = page.waitForEvent('download');

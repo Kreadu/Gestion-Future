@@ -7,6 +7,7 @@
 // cobro, % administración y clase de riesgo ARL del sitio).
 // Autorización EST: /api/companies/:id/est-authorization.
 // Cobro: /api/service-clients/:id/billing?from=&to=
+// Liquidación del mes: POST /api/service-clients/:id/settle-month
 // ------------------------------------------------------------
 
 const CLIENT_FIGURE_LABELS = {
@@ -31,11 +32,39 @@ function csvCell(value) {
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 
+function monthRange(month) {
+  const parts = month.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(parts[0], parts[1], 0)).getUTCDate();
+  return { from: month + '-01', to: month + '-' + String(lastDay).padStart(2, '0') };
+}
+
+function SettleMonthResult({ result }) {
+  return (
+    <div style={{ marginTop: '10px' }}>
+      <div className="info-box">
+        Liquidados: {result.settled.length}
+        {result.alreadySettled.length > 0 ? ' · ya estaban liquidados: ' + result.alreadySettled.length : ''}
+      </div>
+      {result.missingTimesheet.length > 0 && (
+        <div className="inline-warning" style={{ marginTop: '8px' }}>
+          Sin planilla de horas (pídele al cliente que la llene y vuelve a liquidar):{' '}
+          {result.missingTimesheet.map(function(w) { return w.worker + (w.position ? ' (' + w.position + ')' : ''); }).join(', ')}
+        </div>
+      )}
+      {result.errors.map(function(e) {
+        return <div key={e.engagementId} className="inline-warning" style={{ marginTop: '8px' }}>{e.worker}: {e.error}</div>;
+      })}
+    </div>
+  );
+}
+
 function ClientBilling({ client }) {
   const today = new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10);
-  const [from, setFrom] = useState(today.slice(0, 8) + '01');
-  const [to, setTo] = useState(today);
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const { from, to } = monthRange(month);
   const [data, setData] = useState(null);
+  const [settleResult, setSettleResult] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   async function load() {
@@ -46,6 +75,24 @@ function ClientBilling({ client }) {
     } catch (err) {
       setData(null);
       setError(err.message);
+    }
+  }
+
+  async function settleMonth() {
+    setError('');
+    setSettleResult(null);
+    setBusy(true);
+    try {
+      const r = await api('/api/service-clients/' + encodeURIComponent(client.id) + '/settle-month', {
+        method: 'POST',
+        body: JSON.stringify({ month: month })
+      });
+      setSettleResult(r.data);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -64,20 +111,24 @@ function ClientBilling({ client }) {
       <h3>💲 Cobro a {client.name}</h3>
       <div className="form-grid">
         <div className="form-group">
-          <label htmlFor="billing-from">Cobro desde</label>
-          <input id="billing-from" type="date" value={from} onChange={function(e) { setFrom(e.target.value); }} />
-        </div>
-        <div className="form-group">
-          <label htmlFor="billing-to">Cobro hasta</label>
-          <input id="billing-to" type="date" value={to} onChange={function(e) { setTo(e.target.value); }} />
+          <label htmlFor="billing-month">Mes</label>
+          <input id="billing-month" type="month" value={month}
+            onChange={function(e) { if (/^\d{4}-\d{2}$/.test(e.target.value)) { setMonth(e.target.value); setData(null); setSettleResult(null); } }} />
         </div>
       </div>
       <div className="button-row">
-        <button className="btn btn-primary" onClick={load}>Calcular cobro</button>
+        <button className="btn btn-primary" onClick={settleMonth} disabled={busy}>
+          {busy ? 'Liquidando…' : 'Liquidar el mes'}
+        </button>
+        <button className="btn" onClick={load}>Calcular cobro</button>
         {data && data.lines.length > 0 && <button className="btn" onClick={download}>⬇️ Descargar CSV</button>}
       </div>
+      <p style={{ fontSize: '12px', color: '#8193aa', margin: '6px 0 0' }}>
+        Liquida del {from} al {to} a todos los trabajadores de este cliente que tengan planilla de horas.
+      </p>
 
       {error && <div className="inline-warning" role="alert" style={{ marginTop: '10px' }}>{error}</div>}
+      {settleResult && <SettleMonthResult result={settleResult} />}
 
       {data && (
         <div style={{ marginTop: '10px' }}>
@@ -89,7 +140,7 @@ function ClientBilling({ client }) {
               <thead>
                 <tr>
                   <th style={{ textAlign: 'left' }}>Trabajador</th>
-                  <th style={{ textAlign: 'left' }}>Semana</th>
+                  <th style={{ textAlign: 'left' }}>Periodo</th>
                   <th style={{ textAlign: 'right' }}>Horas</th>
                   <th style={{ textAlign: 'right' }}>Costo</th>
                   <th style={{ textAlign: 'right' }}>A cobrar</th>
