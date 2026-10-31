@@ -34,7 +34,7 @@ Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspond
 El dueño pidió estudiarlos antes; no programarlos hasta que él decida cómo deben funcionar:
 
 1. **Liquidación semanal en lote**: liquidar en un paso la semana de todos los trabajadores de un cliente (hoy es uno por uno).
-2. **XML DIAN con recargos y extras detallados** (HED, HEN, HRN, HDDF, HRDDF…): hoy el pago y los totales incluyen dominicales/festivos, pero el XML no los lista como partidas propias y la DIAN podría rechazar el documento por no cuadrar.
+2. [x] **XML DIAN con recargos y extras detallados**: hecho el 30-oct (HED, HEN, HRN, HEDDF, HRDDF, HENDF, HRNDF, incapacidades, licencias, vacaciones y retención). Confirmar en habilitación que la DIAN acepta los porcentajes con el dominical vigente (90 %).
 3. **PILA por semanas** para quien gana menos de un SMMLV en el mes (Decreto 2616 de 2013): definir con el contador (issue #9).
 
 ## Lo que sólo puede hacer el dueño
@@ -55,4 +55,4 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
 2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
-3. Confirmar con el dueño la prueba real de acceso Firebase para `raipimo36@gmail.com`.
+3. [x] Acceso Firebase con `raipimo36@gmail.com` confirmado por el dueño (30-oct).

@@ -729,6 +729,15 @@ export class ColombiaPayrollEngine {
       overtimeTotal:
         round(overtimeTotal),
 
+      // Cantidades de horas para el XML de nómina electrónica.
+      hoursBreakdown: {
+        night: recargoNocturnoHours,
+        sunday: horasDominicalFestivo,
+        extraDay: extraDiurnaHours,
+        extraNight: extraNocturnaHours,
+        extraSundayDay: horasExtraDominicalFestivo,
+      },
+
       grossEarnings:
         round(grossEarnings),
 

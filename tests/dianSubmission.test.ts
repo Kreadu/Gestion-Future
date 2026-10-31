@@ -269,3 +269,16 @@ describe('habilitación DIAN por empresa', () => {
     expect((await call(ADMIN_B, 'PUT', `/api/companies/${a.id}/dian-config`, HABILITACION)).status).toBe(403);
   });
 });
+
+describe('XML que no cuadra', () => {
+  test('la API responde 409 con la explicación, no un error 500', async () => {
+    const { id } = await generatedSettlement();
+    const row = db.prepare(`SELECT resultJson FROM payroll_settlements WHERE id = ?`).get(id);
+    const result = JSON.parse(row.resultJson);
+    result.grossEarnings += 50000;
+    db.prepare(`UPDATE payroll_settlements SET resultJson = ? WHERE id = ?`).run(JSON.stringify(result), id);
+    const res = await call(TENANT_A, 'POST', `/api/payroll-settlements/${id}/generate-xml`);
+    expect(res.status).toBe(409);
+    expect(res.json.error).toContain('no cuadran');
+  });
+});
