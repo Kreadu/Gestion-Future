@@ -29,7 +29,7 @@ npm run e2e                                         # Firefox, hoy 29/29 pasos
 
 Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspondiente.
 
-## Estado al cierre del 30-oct-2026 (noche)
+## Estado al 30-oct-2026 (noche)
 
 Todo está fusionado en `main` y desplegado (PR #23–#26; producción: https://gestion-future-api.raipimo37.workers.dev). Secreto `DIAN_CONFIG_KEY` creado en Cloudflare. Firebase confirmado. Pendientes del dueño: certificados y habilitación DIAN de cada empresa (botón "🏛️ DIAN"), revisión del contador (#9), datos PILA de empleados, cerrar issues #8, #13, #16 y #18 (ya resueltos; el sistema de permisos no dejó cerrarlos). Cuando cargue una habilitación: enviar el set de pruebas y corregir lo que rechace la DIAN.
 
@@ -43,10 +43,14 @@ El dueño pidió estudiarlos antes; no programarlos hasta que él decida cómo d
 
 ## Lo que sólo puede hacer el dueño
 
-GitHub Actions y despliegue ya funcionan (run 88). El dueño aún debe confirmar el acceso real con Firebase y revisar el dominio autorizado; facilitar certificado DIAN, Software ID/PIN y TestSetId para pruebas; coordinar con su contador la revisión del issue #9; y completar datos faltantes de empleados para PILA. Ver issue #17.
+Lista completa y al día en el issue #17 (actualizado el 31-oct-2026). En resumen:
 
-Estado al 30-oct-2026: tareas #1–#4 fusionadas y desplegadas en `main`; PR #22/run 88 pasó CI, incluida migración D1 0015 y Cloudflare Worker. Los commits de documentación también pasaron CI/deploy (run 90). Issue #15 cerrado. Issue #16 conserva únicamente la investigación del aviso local de Jest sobre handles abiertos; no aparece en CI.
+1. **Nómina electrónica**: certificado digital (.p12 y contraseña) y registro como software propio (Software ID, PIN, TestSetId) de cada empresa empleadora; se cargan en Empresas → "🏛️ DIAN".
+2. **Documento soporte** (contratistas): habilitación aparte (Software ID, PIN, TestSetId), resolución de numeración (número, vigencia, prefijo y rango) y responsabilidades fiscales del RUT; mismo botón, sección "Documento soporte".
+3. **Contador** (issue #9): retención, dominicales, prestaciones con incapacidad, IBC de jornada parcial, honorarios, liquidación definitiva y la PILA por semanas.
+4. **Datos para la PILA**: fecha de ingreso y códigos EPS/AFP/CCF de cada empleado, ARL de la empresa.
 
+Cuando el dueño cargue una habilitación: enviar el set de pruebas desde el dashboard y corregir lo que la DIAN rechace.
 
 ## Resultado PR #22
 
