@@ -14,8 +14,8 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 31 suites, 290 pruebas (ya sin --forceExit)
-npm run e2e                                         # Firefox, hoy 26/26 pasos
+npx jest --runInBand --watchman=false              # hoy: 31 suites, 294 pruebas (ya sin --forceExit)
+npm run e2e                                         # Firefox, hoy 27/27 pasos
 ```
 
 ## Pendientes, en este orden
@@ -43,6 +43,6 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 ## Continuación prioritaria para la siguiente IA
 
-1. Cuando el dueño cargue los secretos (`DIAN_CERT_P12`, `DIAN_CERT_PASSWORD`, `DIAN_SOFTWARE_ID`, `DIAN_SOFTWARE_PIN`, `DIAN_TEST_SET_ID`), generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
+1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
 2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
 3. Confirmar con el dueño la prueba real de acceso Firebase para `raipimo36@gmail.com`.

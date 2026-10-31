@@ -27,6 +27,7 @@ export interface DianCertificate {
   /** Certificado X.509 en DER, codificado en base64. */
   certificateBase64: string;
   issuerName: string;
+  subjectName: string;
   /** Número de serie en decimal. */
   serialNumber: string;
   notAfter: Date;
@@ -58,7 +59,11 @@ async function sha256Base64(data: string | Uint8Array<ArrayBuffer>): Promise<str
 
 /** Nombre del emisor al estilo RFC 2253 (del atributo más específico al más general). */
 function issuerNameOf(cert: forge.pki.Certificate): string {
-  return cert.issuer.attributes
+  return distinguishedName(cert.issuer.attributes);
+}
+
+function distinguishedName(attributes: forge.pki.CertificateField[]): string {
+  return attributes
     .slice()
     .reverse()
     .map(attr => `${attr.shortName || attr.type}=${String(attr.value).replace(/([,+"\\<>;])/g, '\\$1')}`)
@@ -104,6 +109,7 @@ export async function loadPkcs12(p12Base64: string, password: string): Promise<D
     privateKey,
     certificateBase64: forge.util.encode64(certDer),
     issuerName: issuerNameOf(cert),
+    subjectName: distinguishedName(cert.subject.attributes),
     serialNumber: BigInt('0x' + cert.serialNumber).toString(10),
     notAfter: cert.validity.notAfter,
   };

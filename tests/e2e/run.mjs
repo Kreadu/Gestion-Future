@@ -10,6 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDashboard, fill } from './browser.mjs';
@@ -160,6 +161,24 @@ try {
     await page.getByRole('button', { name: /Ver hoja de nómina/ }).click();
     await expectText(page, 'Nómina Individual');
     await page.getByRole('button', { name: /^\W*Cerrar$/ }).first().click();
+  });
+
+  await step('Habilitación DIAN de la empresa (certificado de prueba)', async () => {
+    const cert = JSON.parse(readFileSync(join(here, '..', 'fixtures', 'dian-test-cert.json'), 'utf8'));
+    await page.getByRole('button', { name: 'Habilitación DIAN de la empresa' }).click();
+    const m = modal(page);
+    await expectText(m, 'Sin configurar');
+    await m.getByLabel('Software ID').fill('software-e2e');
+    await m.getByLabel('PIN del software').fill('13579');
+    await m.getByLabel('TestSetId (habilitación)').fill('set-e2e');
+    await m.getByLabel('Certificado digital (.p12 / .pfx)').setInputFiles({
+      name: 'certificado.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(cert.p12Base64, 'base64'),
+    });
+    await m.getByLabel('Contraseña del certificado').fill(cert.password);
+    await m.getByRole('button', { name: 'Guardar habilitación' }).click();
+    await expectText(m, 'Habilitación DIAN guardada.');
+    await expectText(m, 'Empresa de prueba');
+    await m.getByRole('button', { name: 'Cerrar' }).last().click();
   });
 
   await step('Generar XML DIAN', async () => {

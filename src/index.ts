@@ -10,7 +10,8 @@ import type {
 } from './types/payroll';
 
 import { DianNominaXmlService } from './services/dianNominaXmlService';
-import { dianEnvironment, handleDianRoutes } from './routes/dian';
+import { handleDianRoutes } from './routes/dian';
+import { dianSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -94,13 +95,8 @@ interface Env {
   FIREBASE_PROJECT_ID: string;
   FIREBASE_API_KEY: string;
   FIREBASE_AUTH_DOMAIN: string;
-  DIAN_SOFTWARE_ID?: string;
-  DIAN_SOFTWARE_PIN?: string;
-  /** '1' = producción; cualquier otro valor o ausente = habilitación ('2'). */
-  DIAN_AMBIENTE?: string;
-  DIAN_CERT_P12?: string;
-  DIAN_CERT_PASSWORD?: string;
-  DIAN_TEST_SET_ID?: string;
+  /** Llave para cifrar la habilitación DIAN de cada empresa (company_dian_config). */
+  DIAN_CONFIG_KEY?: string;
 }
 
 interface Company {
@@ -443,6 +439,9 @@ export default {
 
       const dianResponse = await handleDianRoutes(request, url, env, user);
       if (dianResponse) return dianResponse;
+
+      const dianConfigResponse = await handleDianConfigRoutes(request, url, env, user);
+      if (dianConfigResponse) return dianConfigResponse;
 
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
@@ -2223,12 +2222,15 @@ export default {
           );
         }
 
+        // Habilitación DIAN de la empresa empleadora (valores de prueba si aún no la tiene).
+        const software = await dianSoftwareFor(env, String(settlementRow.companyId));
+
         const employerInfo: DianEmployerInfo = {
           nit: String(companyRow.nit || ''),
           dv: String(companyRow.dv || '0'),
           companyName: String(companyRow.name || ''),
-          softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
-          pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+          softwareId: software.softwareId,
+          pinSoftware: software.pin,
         };
 
         if (!employerInfo.nit || !employerInfo.companyName) {
@@ -2302,7 +2304,7 @@ export default {
           {
             periodStart: periodRow?.periodStart || undefined,
             periodEnd: periodRow?.periodEnd || undefined,
-            environment: dianEnvironment(env),
+            environment: software.environment,
           }
         );
 
@@ -3630,13 +3632,14 @@ export default {
             };
 
             const payrollResult = PartTimeEmployeeEngine.calculate(input);
+            const software = await dianSoftwareFor(env, engagement.companyId);
 
             const employerInfo = {
               nit: String(companyRow.nit || ''),
               dv: String(companyRow.dv || '0'),
               companyName: String(companyRow.name || ''),
-              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
-              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+              softwareId: software.softwareId,
+              pinSoftware: software.pin,
             };
 
             const nominaConsecutive = await getNextDianConsecutive(
@@ -3659,7 +3662,7 @@ export default {
               nominaConsecutive,
               undefined,
               undefined,
-              { periodStart, periodEnd, environment: dianEnvironment(env) }
+              { periodStart, periodEnd, environment: software.environment }
             );
 
             grossAmount = payrollResult.grossEarnings;
@@ -3720,12 +3723,14 @@ export default {
 
             const settlementResult = IndependentContractorEngine.calculate(input);
 
+            const software = await dianSoftwareFor(env, engagement.companyId);
+
             const payerInfo: DocumentoSoportePayerInfo = {
               nit: String(companyRow.nit || ''),
               dv: String(companyRow.dv || '0'),
               companyName: String(companyRow.name || ''),
-              softwareId: env.DIAN_SOFTWARE_ID || 'SOFT-KREADU-2026',
-              pinSoftware: env.DIAN_SOFTWARE_PIN || '12345',
+              softwareId: software.softwareId,
+              pinSoftware: software.pin,
             };
 
             const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {

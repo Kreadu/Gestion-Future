@@ -45,6 +45,7 @@ const DESCRIPTIONS: Record<string, string> = {
   'GENERATE_XML payroll_settlement': 'Generó el XML de nómina electrónica DIAN',
   'SEND_DIAN payroll_settlement': 'Firmó y envió la nómina electrónica a la DIAN',
   'SEND_DIAN settlement': 'Firmó y envió a la DIAN la nómina de jornada parcial',
+  'UPDATE dian_config': 'Actualizó la habilitación DIAN de la empresa',
   'EXPORT bank_file': 'Descargó el archivo bancario',
   'EXPORT pila': 'Descargó el archivo PILA',
   'EXPORT accounting': 'Descargó el comprobante contable',

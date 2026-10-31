@@ -15,19 +15,13 @@ FIREBASE_PROJECT_ID = "kreadu-dd0c9"
 FIREBASE_API_KEY = "AIzaSyCLWpzC7SGN_-t7SlrDiOf3rZqv59T8b0E"
 FIREBASE_AUTH_DOMAIN = "kreadu-dd0c9.firebaseapp.com"
 
-# DIAN_SOFTWARE_ID y DIAN_SOFTWARE_PIN sí son secretos: no van aquí.
-# Configúralos con:
-#   npx wrangler secret put DIAN_SOFTWARE_ID
-#   npx wrangler secret put DIAN_SOFTWARE_PIN
-# Mientras no se configuren, el Worker usa los valores de prueba
-# 'SOFT-KREADU-2026' / '12345' (sólo válidos para el ambiente de
-# habilitación de la DIAN, nunca para producción).
-#
-# Envío a la DIAN (firma XAdES + servicio web), también como secretos:
-#   DIAN_CERT_P12       certificado digital .p12 en base64 (base64 -w0 cert.p12)
-#   DIAN_CERT_PASSWORD  contraseña del .p12
-#   DIAN_TEST_SET_ID    TestSetId del set de pruebas (sólo en habilitación)
-# DIAN_AMBIENTE = "1" envía a producción; sin definir, a habilitación.
+# Nómina electrónica DIAN: cada empresa carga su propia habilitación
+# (certificado .p12, Software ID, PIN, TestSetId y ambiente) en el
+# dashboard, botón "🏛️ DIAN". Se guarda cifrada en D1 con este secreto:
+#   openssl rand -base64 32 | npx wrangler secret put DIAN_CONFIG_KEY
+# Si se pierde o cambia, hay que volver a cargar la habilitación de cada
+# empresa. Mientras una empresa no esté habilitada, sus XML usan valores
+# de prueba y no se pueden enviar.
 
 [[d1_databases]]
 binding = "DB"
