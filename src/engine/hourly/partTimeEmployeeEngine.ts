@@ -16,7 +16,7 @@
 
 import { CONSTANTS_2026 } from '../countries/constants2026';
 import { RiskClass, type ColombiaPayrollResult } from '../../types/payroll';
-import type { PartTimeEmployeeInput } from '../../types/hourly';
+import { HOUR_TYPES, type HourBreakdown, type PartTimeEmployeeInput } from '../../types/hourly';
 
 // ============================================================
 // JORNADA LEGAL EQUIVALENTE
@@ -80,23 +80,42 @@ export class PartTimeEmployeeEngine {
       );
     }
 
-    if (input.hoursWorked < 0) {
-      throw new PartTimeEmployeeEngineError(
-        'Las horas trabajadas no pueden ser negativas.'
-      );
+    const hours = {} as HourBreakdown;
+    for (const type of HOUR_TYPES) {
+      const value = input.hours ? Number(input.hours[type] ?? 0) : type === 'ordinary' ? Number(input.hoursWorked) : 0;
+      if (!Number.isFinite(value) || value < 0) {
+        throw new PartTimeEmployeeEngineError(
+          'Las horas trabajadas no pueden ser negativas.'
+        );
+      }
+      hours[type] = value;
     }
 
-    // --------------------------------------------------------
-    // DEVENGADOS
-    // --------------------------------------------------------
+    const rate = input.hourlyRate;
+    const N = CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
+    const D = CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE;
 
-    const baseSalaryEarned =
-      input.hourlyRate * input.hoursWorked;
+    // Toda hora ordinaria (diurna, nocturna o dominical) paga la tarifa
+    // base; encima va su recargo. Las extra se pagan completas con su
+    // factor, y en domingo/festivo los recargos se suman (igual que en
+    // la nómina mensual: 1,25 + 0,90 y 1,75 + 0,90).
+    const ordinaryHours = hours.ordinary + hours.night + hours.sunday + hours.sundayNight;
+
+    const baseSalaryEarned = rate * ordinaryHours;
+    const recargoNocturnoValue = rate * N * (hours.night + hours.sundayNight);
+    const extraDiurnaValue = rate * CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER * hours.extraDay;
+    const extraNocturnaValue = rate * CONSTANTS_2026.EXTRA_NOCTURNA_MULTIPLIER * hours.extraNight;
+    const dominicalFestivoValue =
+      rate * D * (hours.sunday + hours.sundayNight) +
+      rate * (CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER + D) * hours.extraSundayDay +
+      rate * (CONSTANTS_2026.EXTRA_NOCTURNA_MULTIPLIER + D) * hours.extraSundayNight;
+    const overtimeTotal = extraDiurnaValue + extraNocturnaValue + recargoNocturnoValue;
 
     /*
      * Salario mensual equivalente (proyectado a jornada completa
      * dentro de sus horas semanales pactadas) para decidir si aplica
-     * auxilio de transporte, igual umbral que en nómina mensual.
+     * auxilio de transporte, igual umbral que en nómina mensual. Se
+     * reconoce por las horas ordinarias (las extra no suman días).
      */
     const monthlyEquivalentSalary =
       input.hourlyRate * MONTHLY_LEGAL_HOURS;
@@ -106,14 +125,14 @@ export class PartTimeEmployeeEngine {
     if (monthlyEquivalentSalary <= CONSTANTS_2026.SMMLV_LIMIT_AUX) {
       earnedAuxTransporte =
         (CONSTANTS_2026.AUXILIO_TRANSPORTE / MONTHLY_LEGAL_HOURS) *
-        input.hoursWorked;
+        ordinaryHours;
     }
 
     const grossEarnings =
-      baseSalaryEarned + earnedAuxTransporte;
+      baseSalaryEarned + earnedAuxTransporte + overtimeTotal + dominicalFestivoValue;
 
     // El auxilio de transporte no hace parte del IBC.
-    const ibcSecuritySocial = baseSalaryEarned;
+    const ibcSecuritySocial = baseSalaryEarned + overtimeTotal + dominicalFestivoValue;
 
     // --------------------------------------------------------
     // DEDUCCIONES TRABAJADOR
@@ -175,7 +194,8 @@ export class PartTimeEmployeeEngine {
     const cesantias = grossEarnings * CONSTANTS_2026.CESANTIAS_RATE;
     const interesesCesantias = cesantias * CONSTANTS_2026.INTERESES_CESANTIAS_RATE;
     const primaServicios = grossEarnings * CONSTANTS_2026.PRIMA_RATE;
-    const vacaciones = ibcSecuritySocial * CONSTANTS_2026.VACACIONES_RATE;
+    // Vacaciones: sólo salario ordinario, sin extras ni recargos (art. 192 CST).
+    const vacaciones = baseSalaryEarned * CONSTANTS_2026.VACACIONES_RATE;
 
     const totalProvisions =
       cesantias + interesesCesantias + primaServicios + vacaciones;
@@ -202,7 +222,7 @@ export class PartTimeEmployeeEngine {
      * que da la DIAN a trabajadores por horas antes de producción.
      */
     const legalDailyHours = CONSTANTS_2026.LEGAL_WEEKLY_HOURS / 7;
-    const daysWorkedEquivalent = Math.round(input.hoursWorked / legalDailyHours);
+    const daysWorkedEquivalent = Math.round(ordinaryHours / legalDailyHours);
 
     return {
       companyId: input.companyId,
@@ -222,17 +242,16 @@ export class PartTimeEmployeeEngine {
 
       baseSalaryEarned: round(baseSalaryEarned),
       earnedAuxTransporte: round(earnedAuxTransporte),
-      extraDiurnaValue: 0,
-      extraNocturnaValue: 0,
-      recargoNocturnoValue: 0,
-      // Recargo dominical/festivo, tope de IBC, salario integral,
-      // retención en la fuente e incapacidades/licencias aún no se
-      // implementan para jornada parcial (sólo para nómina mensual,
-      // ColombiaPayrollEngine) — pendiente como seguimiento.
-      dominicalFestivoValue: 0,
+      extraDiurnaValue: round(extraDiurnaValue),
+      extraNocturnaValue: round(extraNocturnaValue),
+      recargoNocturnoValue: round(recargoNocturnoValue),
+      // Tope de IBC, salario integral, retención en la fuente e
+      // incapacidades/licencias aún no se implementan para el pago por
+      // horas (sólo para nómina mensual, ColombiaPayrollEngine).
+      dominicalFestivoValue: round(dominicalFestivoValue),
       leaveValue: 0,
       reimbursableAmount: 0,
-      overtimeTotal: 0,
+      overtimeTotal: round(overtimeTotal),
       grossEarnings: round(grossEarnings),
 
       ibcSecuritySocial: round(ibcSecuritySocial),
@@ -270,6 +289,7 @@ export class PartTimeEmployeeEngine {
       },
 
       hourlyRate: round(input.hourlyRate),
+      hoursBreakdown: { ...hours },
     };
   }
 }

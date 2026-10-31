@@ -401,6 +401,9 @@ export interface ColombiaPayrollResult {
   // VALOR HORA
   // ----------------------------------------------------------
 
+  /** Sólo pago por horas: horas del periodo por tipo. */
+  hoursBreakdown?: Record<string, number>;
+
   hourlyRate: number;
 }
 

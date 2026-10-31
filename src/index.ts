@@ -83,7 +83,9 @@ import type {
   IndependentContractorInput,
   DocumentoSoportePayerInfo,
   DocumentoSoporteBeneficiaryInfo,
+  HourBreakdown,
 } from './types/hourly';
+import { HOUR_COLUMNS, HOUR_TYPES } from './types/hourly';
 
 import type {
   PayrollPeriod,
@@ -3242,7 +3244,22 @@ export default {
         const engagementId = String(body.engagementId || '').trim();
         const periodStart = String(body.periodStart || '').trim();
         const periodEnd = String(body.periodEnd || '').trim();
-        const hours = Number(body.hours);
+
+        // Horas por tipo (planilla del cliente) o, como antes, un total
+        // de horas ordinarias diurnas en `hours`.
+        const byType = body.hoursByType && typeof body.hoursByType === 'object' ? body.hoursByType : { ordinary: body.hours };
+        const breakdown = {} as HourBreakdown;
+        for (const type of HOUR_TYPES) {
+          const value = byType[type] === undefined || byType[type] === '' ? 0 : Number(byType[type]);
+          if (!Number.isFinite(value) || value < 0 || value > 744) {
+            return sendJson(
+              { success: false, error: 'Cada tipo de hora debe ser un número entre 0 y 744.' },
+              400
+            );
+          }
+          breakdown[type] = value;
+        }
+        const hours = HOUR_TYPES.reduce((sum, type) => sum + breakdown[type], 0);
 
         if (!engagementId || !periodStart || !periodEnd) {
           return sendJson(
@@ -3288,18 +3305,19 @@ export default {
         await env.DB
           .prepare(`
             INSERT INTO time_entries (
-              id, engagementId, periodStart, periodEnd, hours, notes, createdAt
+              id, engagementId, periodStart, periodEnd, notes, createdAt,
+              ${HOUR_TYPES.map(type => HOUR_COLUMNS[type]).join(', ')}
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ${HOUR_TYPES.map((_, i) => `?${i + 7}`).join(', ')})
           `)
           .bind(
             id,
             engagementId,
             periodStart,
             periodEnd,
-            hours,
             body.notes || null,
-            createdAt
+            createdAt,
+            ...HOUR_TYPES.map(type => breakdown[type])
           )
           .run();
 
@@ -3321,6 +3339,7 @@ export default {
               periodStart,
               periodEnd,
               hours,
+              hoursByType: breakdown,
               notes: body.notes || null,
               createdAt,
             },
@@ -3563,7 +3582,7 @@ export default {
 
         const hoursResult = await env.DB
           .prepare(`
-            SELECT COALESCE(SUM(hours), 0) AS totalHours
+            SELECT ${HOUR_TYPES.map(type => `COALESCE(SUM(${HOUR_COLUMNS[type]}), 0) AS ${type}`).join(', ')}
             FROM time_entries
             WHERE engagementId = ?1
               AND periodStart >= ?2
@@ -3572,7 +3591,9 @@ export default {
           .bind(engagementId, periodStart, periodEnd)
           .first();
 
-        const totalHours = Number((hoursResult as any)?.totalHours ?? 0);
+        const hoursByType = {} as HourBreakdown;
+        for (const type of HOUR_TYPES) hoursByType[type] = Number((hoursResult as any)?.[type] ?? 0);
+        const totalHours = HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0);
 
         if (totalHours <= 0) {
           return sendJson(
@@ -3629,6 +3650,7 @@ export default {
               hourlyRate: engagement.hourlyRate,
               weeklyHours: Number(engagement.weeklyHours || 0),
               hoursWorked: totalHours,
+              hours: hoursByType,
             };
 
             const payrollResult = PartTimeEmployeeEngine.calculate(input);

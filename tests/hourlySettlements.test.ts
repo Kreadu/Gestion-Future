@@ -57,3 +57,33 @@ describe('POST /api/hourly/settlements/calculate · una liquidación por periodo
     expect((await liquidate('2026-10-01', '2026-10-31')).status).toBe(201);
   });
 });
+
+describe('horas por tipo (planilla del cliente)', () => {
+  test('se registran por tipo y la liquidación aplica los recargos', async () => {
+    const company = await createCompany();
+    db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-2', 'Iván', 'Lara', '1061000777', 'Camarero')`).run();
+    db.prepare(`INSERT INTO engagements (id, professionalId, companyId, vinculationType, hourlyRate, startDate, weeklyHours, contractType)
+                VALUES ('ENG-2', 'PRO-2', ?, 'PART_TIME_EMPLOYEE', 10000, '2026-01-01', 42, '2')`).run(company.id);
+
+    const entry = await call(SUPER, 'POST', '/api/time-entries', {
+      engagementId: 'ENG-2', periodStart: '2026-10-05', periodEnd: '2026-10-11',
+      hoursByType: { ordinary: 20, night: 8, sunday: 6, extraNight: 2 },
+    });
+    expect(entry.status).toBe(201);
+    expect(entry.json.data.hours).toBe(36);
+
+    const bad = await call(SUPER, 'POST', '/api/time-entries', {
+      engagementId: 'ENG-2', periodStart: '2026-10-05', periodEnd: '2026-10-11', hoursByType: { night: -2 },
+    });
+    expect(bad.status).toBe(400);
+
+    const res = await call(SUPER, 'POST', '/api/hourly/settlements/calculate', { engagementId: 'ENG-2', periodStart: '2026-10-05', periodEnd: '2026-10-11' });
+    expect(res.status).toBe(201);
+    const calc = res.json.data.calculation;
+    expect(calc.baseSalaryEarned).toBeCloseTo(10000 * 34, 2);
+    expect(calc.recargoNocturnoValue).toBeCloseTo(10000 * 0.35 * 8, 2);
+    expect(calc.dominicalFestivoValue).toBeCloseTo(10000 * 0.90 * 6, 2);
+    expect(calc.extraNocturnaValue).toBeCloseTo(10000 * 1.75 * 2, 2);
+    expect(res.json.data.totalHours).toBe(36);
+  });
+});

@@ -280,3 +280,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - El dueño pone personal en misión (su empresa es el empleador) y lleva la nómina de clientes (cada una es empleadora): cada empresa guarda su certificado, Software ID, PIN, TestSetId y ambiente (`company_dian_config`, migración 0018), cifrados con AES-GCM y el secreto `DIAN_CONFIG_KEY`. Botón "🏛️ DIAN" junto a la empresa. Se retiraron los secretos DIAN globales.
 - Verificación: Jest 31 suites / 294 pruebas (cifrado, una habilitación por NIT, acceso); E2E Firefox 27/27 cargando el certificado desde la pantalla.
+
+## Pago por horas con recargos (2026-10-30)
+
+- El dueño también es empresa de servicios temporales y presta servicios (aseo, camareros): sus trabajadores tienen contrato laboral y se pagan **por horas, cada semana**. El registro de horas ahora va por tipo (ordinarias diurnas/nocturnas, dominical/festiva, extras; migración 0019) y el motor de jornada parcial aplica recargo nocturno 35 %, dominical/festivo 90 % y extras 1,25/1,75 (2,15/2,65 en festivo), con vacaciones sólo sobre lo ordinario y auxilio de transporte sólo por horas ordinarias.
+- Verificación: `tests/hourlySurcharges.test.ts` y prueba de API; Jest 32 suites / 300 pruebas; E2E Firefox 27/27.

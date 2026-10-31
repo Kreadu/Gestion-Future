@@ -16,6 +16,19 @@ const VINCULATION_LABELS = {
   EST_MISSION: 'Trabajador en misión (EST)'
 };
 
+// Horas por tipo del personal por horas con contrato laboral (camareros,
+// aseo, temporales), en el orden de la planilla. Coinciden con HOUR_TYPES.
+const HOUR_TYPE_FIELDS = [
+  ['ordinary', 'Ordinarias diurnas'],
+  ['night', 'Ordinarias nocturnas (+35%)'],
+  ['sunday', 'Dominical/festiva diurna (+90%)'],
+  ['sundayNight', 'Dominical/festiva nocturna (+125%)'],
+  ['extraDay', 'Extra diurnas (×1,25)'],
+  ['extraNight', 'Extra nocturnas (×1,75)'],
+  ['extraSundayDay', 'Extra dominical diurna (×2,15)'],
+  ['extraSundayNight', 'Extra dominical nocturna (×2,65)']
+];
+
 const LEAVE_TYPE_LABELS = {
   GENERAL_INCAPACITY: 'Incapacidad general (enfermedad común)',
   WORK_INCAPACITY: 'Incapacidad laboral (ARL)',
@@ -555,6 +568,7 @@ function App({ me, onSignOut }) {
     periodStart: '',
     periodEnd: '',
     hours: '',
+    byType: {},
     notes: ''
   });
 
@@ -1871,6 +1885,7 @@ function App({ me, onSignOut }) {
       periodStart: '',
       periodEnd: '',
       hours: '',
+      byType: {},
       notes: ''
     });
 
@@ -1885,7 +1900,14 @@ function App({ me, onSignOut }) {
         throw new Error('Selecciona una vinculación.');
       }
 
-      const hours = Number(timeEntryForm.hours);
+      // Con contrato laboral (no contratista) las horas van por tipo, con recargos.
+      const byType = selectedEngagement.vinculationType === 'INDEPENDENT_SERVICES'
+        ? { ordinary: Number(timeEntryForm.hours) || 0 }
+        : HOUR_TYPE_FIELDS.reduce(function(acc, field) {
+            acc[field[0]] = Number(timeEntryForm.byType[field[0]]) || 0;
+            return acc;
+          }, {});
+      const hours = Object.keys(byType).reduce(function(sum, key) { return sum + byType[key]; }, 0);
 
       if (!timeEntryForm.periodStart || !timeEntryForm.periodEnd) {
         throw new Error('El periodo (inicio y fin) es obligatorio.');
@@ -1906,7 +1928,7 @@ function App({ me, onSignOut }) {
           engagementId: selectedEngagement.id,
           periodStart: timeEntryForm.periodStart,
           periodEnd: timeEntryForm.periodEnd,
-          hours,
+          hoursByType: byType,
           notes: timeEntryForm.notes
         })
       });
@@ -5475,6 +5497,7 @@ function App({ me, onSignOut }) {
                   />
                 </div>
 
+                {selectedEngagement.vinculationType === 'INDEPENDENT_SERVICES' ? (
                 <div className="form-group">
                   <label htmlFor="gf-field-82-horas-trabajadas" className="required">Horas trabajadas</label>
                   <input id="gf-field-82-horas-trabajadas"
@@ -5490,6 +5513,25 @@ function App({ me, onSignOut }) {
                     }} required
                   />
                 </div>
+                ) : HOUR_TYPE_FIELDS.map(function(field) {
+                  return (
+                    <div className="form-group" key={field[0]}>
+                      <label htmlFor={'gf-hours-' + field[0]}>{field[1]}</label>
+                      <input id={'gf-hours-' + field[0]}
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={timeEntryForm.byType[field[0]] || ''}
+                        onChange={function(e) {
+                          const value = e.target.value;
+                          setTimeEntryForm(function(prev) {
+                            return { ...prev, byType: { ...prev.byType, [field[0]]: value } };
+                          });
+                        }}
+                      />
+                    </div>
+                  );
+                })}
 
                 <div className="form-group full">
                   <label htmlFor="gf-field-83-notas-opcional">Notas (opcional)</label>
