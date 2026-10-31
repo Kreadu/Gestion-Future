@@ -297,3 +297,7 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 - El XML lista cada recargo y hora extra en su nodo del anexo (HED, HEN, HRN, HEDDF, HRDDF, HENDF, HRNDF con Cantidad, Porcentaje y Pago), las incapacidades, licencias y vacaciones (`leaveDetails`) y la retención en la fuente; `Transporte` en vez del nodo inexistente `AuxilioTransporte`; FondoSP con su porcentaje. Si lo detallado no suma lo pagado (más de $1), no se genera el XML (409 con explicación). Porcentajes con dominical 90 %: confirmar en habilitación.
 - Verificación: `tests/dianDevengados.test.ts`; Jest 34 suites / 314 pruebas; E2E Firefox 28/28.
 - El dueño confirmó el acceso con Firebase (raipimo36@gmail.com).
+
+## Cierre del 30-oct-2026
+
+- Fusionado y desplegado todo (PR #23–#26). Siguiente: habilitación DIAN real cuando el dueño cargue certificado y datos; puntos por estudiar en `SIGUIENTE.md`.

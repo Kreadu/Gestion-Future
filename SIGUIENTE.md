@@ -29,6 +29,10 @@ npm run e2e                                         # Firefox, hoy 28/28 pasos
 
 Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspondiente.
 
+## Estado al cierre del 30-oct-2026 (noche)
+
+Todo está fusionado en `main` y desplegado (PR #23–#26; producción: https://gestion-future-api.raipimo37.workers.dev). Secreto `DIAN_CONFIG_KEY` creado en Cloudflare. Firebase confirmado. Pendientes del dueño: certificados y habilitación DIAN de cada empresa (botón "🏛️ DIAN"), revisión del contador (#9), datos PILA de empleados, cerrar issues #8, #13, #16 y #18 (ya resueltos; el sistema de permisos no dejó cerrarlos). Cuando cargue una habilitación: enviar el set de pruebas y corregir lo que rechace la DIAN.
+
 ## Por estudiar con el dueño (NO implementar todavía)
 
 El dueño pidió estudiarlos antes; no programarlos hasta que él decida cómo deben funcionar:
