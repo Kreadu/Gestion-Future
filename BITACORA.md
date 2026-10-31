@@ -245,3 +245,33 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 - Issue #16: quedan corregidos aviso PILA, pie móvil, toast y validación empresa/empleado. Sigue abierto sólo para revisar el aviso local de worker/handles de Jest, que no apareció en CI.
 - Siguiente: revisar `wip/dian-firma-envio` contra `main`, portar por partes, auditar CUNE, completar firma XAdES y SOAP (#10). No afirmar que DIAN real está listo sin probarlo con certificado de firma, Software ID/PIN y test set entregados por el dueño (#17).
 - Pendiente operativo del dueño: confirmar que `raipimo36@gmail.com` entra con Firebase; en la conversación se modificó el email en D1 pero no quedó confirmada una sesión exitosa.
+
+## DIAN 1/4: CUNE del anexo técnico (2026-10-30)
+
+- CUNE = SHA-384(... + TipoXML 102 + PIN + TipAmb); SoftwareSC = SHA-384(SoftwareID + PIN + número); sin CUNE simulado; hora de Colombia, periodo real (antes día 30 fijo), fecha de ingreso, ambiente por `DIAN_AMBIENTE` (2 = habilitación por defecto) y nodo `ext:UBLExtensions` para la firma. Se portó `xmlC14n.ts` de `wip/dian-firma-envio`.
+- Verificación: `tests/dianCune.test.ts`; Jest 28 suites / 269 pruebas.
+
+## DIAN 2/4: firma XAdES-EPES (2026-10-30)
+
+- `src/services/dianSigner.ts`: abre el `.p12` (node-forge), firma con WebCrypto RSA-SHA256, C14N inclusivo, tres referencias (documento enveloped, KeyInfo, SignedProperties) y política de firma DIAN v2 con su hash.
+- Verificación: `tests/dianSigner.test.ts` comprueba la firma con `xml-crypto` (verificador independiente) y que una alteración la invalida; certificado autofirmado de prueba en `tests/fixtures`.
+
+## DIAN 3/4: envío por servicio web (2026-10-30)
+
+- `dianWebService.ts` (ZIP deflate, sobre SOAP 1.2 firmado con WS-Security, SendTestSetAsync/SendNominaSync/GetStatusZip) y rutas `POST /api/payroll-settlements/:id/dian/send|status`, `GET .../dian/signed-xml`; migración 0016 con estado del envío (SENT/ACCEPTED/REJECTED), ZipKey, XML firmado y respuesta. Tras un rechazo se regenera con el mismo consecutivo; no se envía un XML hecho con otras credenciales o en otro ambiente.
+- Secretos nuevos: `DIAN_CERT_P12`, `DIAN_CERT_PASSWORD`, `DIAN_TEST_SET_ID` (`DIAN_AMBIENTE=1` para producción). Verificación: Jest 31 suites / 288 pruebas.
+
+## DIAN 4/4: envío desde el dashboard (2026-10-30)
+
+- Panel "📤 Envío a la DIAN" bajo la liquidación (`components/dian.jsx`): firmar y enviar, consultar estado, mensajes de rechazo y descarga del XML firmado; "Volver a generar XML" mientras la DIAN no lo tenga.
+- Verificación: E2E Firefox 26/26 con el envío simulado (el servidor E2E responde por la DIAN); firma, ZIP y sobre comprobados también en workerd (`wrangler dev`). Jest 31 suites / 288 pruebas.
+
+## Aviso de Jest del issue #16 (2026-10-30)
+
+- "A worker process has failed to exit gracefully" salía sólo en paralelo: `resetDb()` dejaba abiertas cientos de bases SQLite en memoria; ahora cierra la anterior. Dos corridas paralelas limpias, 288/288.
+- El envío DIAN reutiliza el certificado ya abierto (abrir el .p12 cuesta cientos de ms) y la suite de envío tiene 30 s de margen.
+
+## DIAN: jornada parcial del personal por horas (2026-10-30)
+
+- Las rutas `/api/hourly/settlements/:id/dian/send|status|signed-xml` envían la nómina de jornada parcial (migración 0017); no se anula una liquidación que la DIAN tiene o aceptó. El documento soporte de contratistas no se envía por aquí. Panel de envío también en la liquidación por horas.
+- Verificación: Jest 31 suites / 290 pruebas; E2E Firefox 26/26.

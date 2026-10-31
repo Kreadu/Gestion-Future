@@ -86,6 +86,9 @@ export let env: ReturnType<typeof freshEnv>['env'];
 
 /** Base nueva; llamarlo en beforeEach. */
 export function resetDb() {
+  // Cerrar la base anterior: cientos de bases en memoria abiertas hacían que
+  // el worker de Jest tardara en salir ("failed to exit gracefully").
+  if (db) db.close();
   ({ db, env } = freshEnv());
 }
 

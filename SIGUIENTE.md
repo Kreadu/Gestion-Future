@@ -14,8 +14,8 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false --forceExit   # hoy: 27 suites, 264 pruebas
-npm run e2e                                         # Firefox, hoy 25/25 pasos
+npx jest --runInBand --watchman=false              # hoy: 31 suites, 290 pruebas (ya sin --forceExit)
+npm run e2e                                         # Firefox, hoy 26/26 pasos
 ```
 
 ## Pendientes, en este orden
@@ -24,7 +24,8 @@ npm run e2e                                         # Firefox, hoy 25/25 pasos
 2. [x] **E2E con fechas relativas a hoy** (`tests/e2e/run.mjs`): calendario de Colombia, mes actual/siguiente y año actual sin fechas de 2026 fijas.
 3. [x] **SheetJS empaquetado** en el proyecto en vez de cargarlo desde cdnjs; la importación de Excel no debe depender de un CDN.
 4. [x] **Rama `wip/logos-accesibilidad`** (`4dcaec0`): portadas a la base actual las funciones de logos, etiquetas accesibles y ajustes de interfaz; no se fusionó la rama vieja completa.
-5. **Rama `wip/dian-firma-envio`** (`53f61bd`): revisar y portar por partes sobre `main` (también es una rama WIP vieja; no fusionarla entera). Completar CUNE según anexo, firma XAdES y SOAP (issue #10). No se puede probar el envío DIAN sin certificado digital, Software ID/PIN y test set del dueño (issue #17); pedirlos sólo cuando la implementación local esté lista.
+5. [x] **Rama `wip/dian-firma-envio`** (`53f61bd`): revisar y portar por partes sobre `main` (también es una rama WIP vieja; no fusionarla entera). Completar CUNE según anexo, firma XAdES y SOAP (issue #10). No se puede probar el envío DIAN sin certificado digital, Software ID/PIN y test set del dueño (issue #17); pedirlos sólo cuando la implementación local esté lista.
+   Hecho el 30-oct: CUNE/SoftwareSC del anexo, firma XAdES-EPES, envío SOAP con WS-Security, consulta de estado y panel en el dashboard (nómina mensual y jornada parcial). Falta sólo la prueba real en habilitación con los datos del dueño.
 
 Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspondiente.
 
@@ -42,8 +43,6 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 ## Continuación prioritaria para la siguiente IA
 
-1. Revisar `wip/dian-firma-envio` frente a `main` y portar sólo cambios vigentes (no fusionar la rama WIP completa).
-2. Auditar CUNE conforme al anexo DIAN; completar firma XAdES y envío SOAP. No declarar integración real lista hasta obtener credenciales y probar en set de habilitación.
-3. El dueño debe facilitar el certificado digital, Software ID/PIN y test set DIAN; no pegar secretos en issues ni commits.
-4. Investigar el aviso local de worker Jest que issue #16 menciona. El issue queda abierto por ese único punto; CI del PR #22 sí pasó.
-5. Confirmar con el dueño la prueba real de acceso Firebase para `raipimo36@gmail.com`: en la conversación previa se actualizó el correo en D1, pero no se confirmó un login exitoso.
+1. Cuando el dueño cargue los secretos (`DIAN_CERT_P12`, `DIAN_CERT_PASSWORD`, `DIAN_SOFTWARE_ID`, `DIAN_SOFTWARE_PIN`, `DIAN_TEST_SET_ID`), generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
+2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
+3. Confirmar con el dueño la prueba real de acceso Firebase para `raipimo36@gmail.com`.

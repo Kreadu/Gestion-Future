@@ -22,6 +22,12 @@ FIREBASE_AUTH_DOMAIN = "kreadu-dd0c9.firebaseapp.com"
 # Mientras no se configuren, el Worker usa los valores de prueba
 # 'SOFT-KREADU-2026' / '12345' (sólo válidos para el ambiente de
 # habilitación de la DIAN, nunca para producción).
+#
+# Envío a la DIAN (firma XAdES + servicio web), también como secretos:
+#   DIAN_CERT_P12       certificado digital .p12 en base64 (base64 -w0 cert.p12)
+#   DIAN_CERT_PASSWORD  contraseña del .p12
+#   DIAN_TEST_SET_ID    TestSetId del set de pruebas (sólo en habilitación)
+# DIAN_AMBIENTE = "1" envía a producción; sin definir, a habilitación.
 
 [[d1_databases]]
 binding = "DB"

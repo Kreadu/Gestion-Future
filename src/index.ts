@@ -10,6 +10,7 @@ import type {
 } from './types/payroll';
 
 import { DianNominaXmlService } from './services/dianNominaXmlService';
+import { dianEnvironment, handleDianRoutes } from './routes/dian';
 interface DianEmployerInfo {
   nit: string;
   dv: string;
@@ -26,6 +27,7 @@ interface DianEmployeeExtraInfo {
   bankName?: string;
   accountNumber?: string;
   accountType?: 'AHORROS' | 'CORRIENTE';
+  startDate?: string;
 }
 
 import { BankDisbursementService } from './services/bankDisbursement';
@@ -94,6 +96,11 @@ interface Env {
   FIREBASE_AUTH_DOMAIN: string;
   DIAN_SOFTWARE_ID?: string;
   DIAN_SOFTWARE_PIN?: string;
+  /** '1' = producción; cualquier otro valor o ausente = habilitación ('2'). */
+  DIAN_AMBIENTE?: string;
+  DIAN_CERT_P12?: string;
+  DIAN_CERT_PASSWORD?: string;
+  DIAN_TEST_SET_ID?: string;
 }
 
 interface Company {
@@ -327,6 +334,17 @@ function normalizePayrollPeriod(row: any): PayrollPeriod {
   };
 }
 
+/** Mensajes de la última respuesta de la DIAN guardada. */
+function dianErrorsOf(responseJson: unknown): string[] {
+  if (!responseJson) return [];
+  try {
+    const parsed = JSON.parse(String(responseJson));
+    return Array.isArray(parsed.errors) ? parsed.errors.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizePayrollSettlement(row: any): PayrollSettlement {
   return {
     id: String(row.id),
@@ -347,6 +365,9 @@ function normalizePayrollSettlement(row: any): PayrollSettlement {
         : Number(row.dianConsecutive),
     dianCune: row.dianCune ?? null,
     dianGeneratedAt: row.dianGeneratedAt ?? null,
+    dianSubmissionStatus: row.dianSubmissionStatus ?? null,
+    dianSentAt: row.dianSentAt ?? null,
+    dianErrors: dianErrorsOf(row.dianResponseJson),
     createdAt: row.createdAt ?? null,
     updatedAt: row.updatedAt ?? null,
   };
@@ -419,6 +440,9 @@ export default {
 
       const logoResponse = await handleLogoRoutes(request, url, env, user);
       if (logoResponse) return logoResponse;
+
+      const dianResponse = await handleDianRoutes(request, url, env, user);
+      if (dianResponse) return dianResponse;
 
       // Portal del empleado; además niega a un EMPLOYEE cualquier otra ruta.
       const portalResponse = await handlePortalRoutes(request, url, env, user);
@@ -2163,11 +2187,16 @@ export default {
         requireRole(user, ['TENANT_ADMIN']);
         requireCompanyAccess(user, String(settlementRow.companyId));
 
-        if ((settlementRow as any).dianStatus === 'GENERATED') {
+        // Se puede volver a generar (p. ej. tras un rechazo o al cambiar
+        // las credenciales) mientras la DIAN no lo tenga: conserva el número.
+        const submission = (settlementRow as any).dianSubmissionStatus;
+        if (submission === 'SENT' || submission === 'ACCEPTED') {
           return sendJson(
             {
               success: false,
-              error: 'Esta liquidación ya tiene un XML DIAN generado.',
+              error: submission === 'ACCEPTED'
+                ? 'La DIAN ya aceptó el XML de esta liquidación.'
+                : 'El XML de esta liquidación está en proceso en la DIAN.',
             },
             400
           );
@@ -2219,11 +2248,16 @@ export default {
         // no del navegador (antes el dashboard mandaba siempre '1').
         const employeeRow = await env.DB
           .prepare(`
-            SELECT contractType, bankName, bankAccountType, bankAccountNumber
+            SELECT contractType, bankName, bankAccountType, bankAccountNumber, hireDate
             FROM employees
             WHERE id = ?1
           `)
           .bind(settlementRow.employeeId)
+          .first<any>();
+
+        const periodRow = await env.DB
+          .prepare(`SELECT periodStart, periodEnd FROM payroll_periods WHERE id = ?1`)
+          .bind(settlementRow.periodId)
           .first<any>();
 
         const contractType = ['1', '2', '3', '4', '5'].includes(String(employeeRow?.contractType))
@@ -2243,23 +2277,33 @@ export default {
           bankName: employeeRow?.bankName || undefined,
           accountNumber: employeeRow?.bankAccountNumber || undefined,
           accountType: employeeRow?.bankAccountType || undefined,
+          startDate: employeeRow?.hireDate || undefined,
         };
 
         const payrollResult: ColombiaPayrollResult = JSON.parse(
           String((settlementRow as any).resultJson)
         );
 
-        const consecutiveNumber = await getNextDianConsecutive(
-          env.DB,
-          String(settlementRow.companyId),
-          'NOMINA'
-        );
+        const consecutiveNumber = (settlementRow as any).dianConsecutive
+          ? Number((settlementRow as any).dianConsecutive)
+          : await getNextDianConsecutive(
+            env.DB,
+            String(settlementRow.companyId),
+            'NOMINA'
+          );
 
         const xmlResult = await DianNominaXmlService.generateDSPNE(
           payrollResult,
           employerInfo,
           employeeExtra,
-          consecutiveNumber
+          consecutiveNumber,
+          undefined,
+          undefined,
+          {
+            periodStart: periodRow?.periodStart || undefined,
+            periodEnd: periodRow?.periodEnd || undefined,
+            environment: dianEnvironment(env),
+          }
         );
 
         const now = new Date().toISOString();
@@ -2273,6 +2317,11 @@ export default {
               dianCune = ?2,
               dianXmlContent = ?3,
               dianGeneratedAt = ?4,
+              dianSubmissionStatus = NULL,
+              dianTrackId = NULL,
+              dianSignedXml = NULL,
+              dianResponseJson = NULL,
+              dianSentAt = NULL,
               updatedAt = ?4
             WHERE id = ?5
           `)
@@ -3605,8 +3654,12 @@ export default {
                   ? String(engagement.contractType)
                   : '2') as DianEmployeeExtraInfo['typeContract'],
                 paymentMethod: '42',
+                startDate: engagement.startDate || undefined,
               },
-              nominaConsecutive
+              nominaConsecutive,
+              undefined,
+              undefined,
+              { periodStart, periodEnd, environment: dianEnvironment(env) }
             );
 
             grossAmount = payrollResult.grossEarnings;
@@ -3790,7 +3843,7 @@ export default {
         const settlementId = decodeURIComponent(hourlySettlementMatch[1]);
         const row = await env.DB
           .prepare(`
-            SELECT s.id, g.companyId
+            SELECT s.id, s.dianSubmissionStatus, g.companyId
             FROM settlements s
             JOIN engagements g ON g.id = s.engagementId
             WHERE s.id = ?1
@@ -3803,6 +3856,16 @@ export default {
         }
 
         requireCompanyAccess(user, String(row.companyId));
+
+        // Lo que la DIAN ya tiene no se borra: se corrige con una nota de ajuste.
+        if (row.dianSubmissionStatus === 'SENT' || row.dianSubmissionStatus === 'ACCEPTED') {
+          return sendJson({
+            success: false,
+            error: row.dianSubmissionStatus === 'ACCEPTED'
+              ? 'La DIAN ya aceptó esta nómina electrónica: no se puede anular.'
+              : 'La nómina electrónica está en proceso en la DIAN: consulta su estado antes de anular.',
+          }, 409);
+        }
 
         await env.DB.prepare(`DELETE FROM settlements WHERE id = ?1`).bind(settlementId).run();
         await audit(env, user, 'DELETE', 'settlement', settlementId, String(row.companyId));
