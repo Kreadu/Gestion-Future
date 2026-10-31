@@ -375,6 +375,358 @@ function normalizePayrollSettlement(row: any): PayrollSettlement {
   };
 }
 
+/**
+ * Liquida una vinculación por horas en un periodo: suma las horas
+ * registradas, enruta al motor y al documento DIAN de su modalidad y
+ * guarda la liquidación. La usan el cálculo individual y la
+ * liquidación del mes por cliente.
+ */
+async function settleHourlyEngagement(env: Env, user: AuthUser, body: any): Promise<Response> {
+
+  const engagementId = String(body.engagementId || '').trim();
+  const periodStart = String(body.periodStart || '').trim();
+  const periodEnd = String(body.periodEnd || '').trim();
+
+  if (!engagementId || !periodStart || !periodEnd) {
+    return sendJson(
+      {
+        success: false,
+        error: 'engagementId, periodStart y periodEnd son obligatorios.',
+      },
+      400
+    );
+  }
+
+  const engagementRow = await env.DB
+    .prepare(`
+      SELECT
+        e.*,
+        p.firstName AS p_firstName,
+        p.firstName2 AS p_firstName2,
+        p.lastName AS p_lastName,
+        p.lastName2 AS p_lastName2,
+        p.taxId AS p_taxId,
+        p.documentType AS p_documentType,
+        sc.arlRiskClass AS client_arlRiskClass
+      FROM engagements e
+      JOIN professionals p ON p.id = e.professionalId
+      LEFT JOIN service_clients sc ON sc.id = e.clientId
+      WHERE e.id = ?1
+        AND e.active = 1
+    `)
+    .bind(engagementId)
+    .first();
+
+  if (!engagementRow) {
+    return sendJson(
+      {
+        success: false,
+        error: 'Vinculación no encontrada o inactiva.',
+      },
+      404
+    );
+  }
+
+  const engagement = normalizeEngagement(engagementRow);
+
+  requireRole(user, ['TENANT_ADMIN']);
+  requireCompanyAccess(user, engagement.companyId);
+
+  // Cada liquidación gasta un consecutivo DIAN (nómina electrónica o
+  // documento soporte): un mismo tramo no se liquida dos veces.
+  const overlapping = await env.DB
+    .prepare(`
+      SELECT periodStart, periodEnd
+      FROM settlements
+      WHERE engagementId = ?1
+        AND periodStart <= ?3
+        AND periodEnd >= ?2
+      LIMIT 1
+    `)
+    .bind(engagementId, periodStart, periodEnd)
+    .first();
+
+  if (overlapping) {
+    return sendJson(
+      {
+        success: false,
+        error:
+          `Esta vinculación ya tiene una liquidación del ${(overlapping as any).periodStart} ` +
+          `al ${(overlapping as any).periodEnd}; no se puede liquidar dos veces el mismo periodo.`,
+      },
+      409
+    );
+  }
+
+  const hoursResult = await env.DB
+    .prepare(`
+      SELECT ${HOUR_TYPES.map(type => `COALESCE(SUM(${HOUR_COLUMNS[type]}), 0) AS ${type}`).join(', ')}
+      FROM time_entries
+      WHERE engagementId = ?1
+        AND periodStart >= ?2
+        AND periodEnd <= ?3
+    `)
+    .bind(engagementId, periodStart, periodEnd)
+    .first();
+
+  const hoursByType = {} as HourBreakdown;
+  for (const type of HOUR_TYPES) hoursByType[type] = Number((hoursResult as any)?.[type] ?? 0);
+  const totalHours = HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0);
+
+  if (totalHours <= 0) {
+    return sendJson(
+      {
+        success: false,
+        error: 'No hay horas registradas para ese periodo.',
+      },
+      400
+    );
+  }
+
+  const companyRow = await env.DB
+    .prepare(`SELECT nit, dv, name FROM companies WHERE id = ?1 AND active = 1`)
+    .bind(engagement.companyId)
+    .first();
+
+  if (!companyRow) {
+    return sendJson(
+      {
+        success: false,
+        error: 'Empresa no encontrada o inactiva.',
+      },
+      404
+    );
+  }
+
+
+  let grossAmount: number;
+  let retentionAmount: number;
+  let netAmount: number;
+  let calculation: unknown;
+  let dianDocument: unknown;
+
+  try {
+    // Trabajadores en misión (EST) y de servicios: empleados por horas.
+    if (engagement.vinculationType === 'PART_TIME_EMPLOYEE' || engagement.vinculationType === 'EST_MISSION') {
+      const input: PartTimeEmployeeInput = {
+        companyId: engagement.companyId,
+        engagementId: engagement.id,
+        professionalId: engagement.professionalId,
+        firstName: String(engagementRow.p_firstName || ''),
+        firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+        lastName: String(engagementRow.p_lastName || ''),
+        lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+        taxId: String(engagementRow.p_taxId || ''),
+        hourlyRate: engagement.hourlyRate,
+        weeklyHours: Number(engagement.weeklyHours || 0),
+        hoursWorked: totalHours,
+        hours: hoursByType,
+        // La clase de riesgo ARL es la del sitio del cliente al que fue asignado.
+        riskClass: ARL_RISK_CLASS_RATES[Number(engagementRow.client_arlRiskClass) || 1],
+      };
+
+      const payrollResult = PartTimeEmployeeEngine.calculate(input);
+      const software = await dianSoftwareFor(env, engagement.companyId);
+
+      const employerInfo = {
+        nit: String(companyRow.nit || ''),
+        dv: String(companyRow.dv || '0'),
+        companyName: String(companyRow.name || ''),
+        softwareId: software.softwareId,
+        pinSoftware: software.pin,
+      };
+
+      const nominaConsecutive = await getNextDianConsecutive(
+        env.DB,
+        engagement.companyId,
+        'NOMINA'
+      );
+
+      const xmlResult = await DianNominaXmlService.generateDSPNE(
+        payrollResult,
+        employerInfo,
+        {
+          typeDocument: '13',
+          typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
+            ? String(engagement.contractType)
+            : '2') as DianEmployeeExtraInfo['typeContract'],
+          paymentMethod: '42',
+          startDate: engagement.startDate || undefined,
+        },
+        nominaConsecutive,
+        undefined,
+        undefined,
+        { periodStart, periodEnd, environment: software.environment }
+      );
+
+      grossAmount = payrollResult.grossEarnings;
+      retentionAmount = payrollResult.employeeDeductions.totalDeductions;
+      netAmount = payrollResult.netPay;
+      calculation = payrollResult;
+      dianDocument = xmlResult;
+
+    } else {
+      // INDEPENDENT_SERVICES
+      const period = periodStart.substring(0, 7);
+
+      const verification = await env.DB
+        .prepare(`
+          SELECT verified
+          FROM pila_verifications
+          WHERE engagementId = ?1
+            AND period = ?2
+        `)
+        .bind(engagementId, period)
+        .first();
+
+      if (!verification || !(verification as any).verified) {
+        return sendJson(
+          {
+            success: false,
+            error:
+              'Debes verificar el pago de seguridad social del ' +
+              `contratista para el periodo ${period} antes de liquidar ` +
+              '(deber legal del contratante, Ley 1955/2019 art. 244).',
+          },
+          400
+        );
+      }
+
+      const input: IndependentContractorInput = {
+        companyId: engagement.companyId,
+        engagementId: engagement.id,
+        professionalId: engagement.professionalId,
+        firstName: String(engagementRow.p_firstName || ''),
+        firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
+        lastName: String(engagementRow.p_lastName || ''),
+        lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
+        taxId: String(engagementRow.p_taxId || ''),
+        hourlyRate: engagement.hourlyRate,
+        hoursWorked: totalHours,
+        retentionConcept:
+          (engagement.retentionConcept as RetentionConcept) || 'SERVICIOS',
+        isIncomeTaxFiler: !!engagement.isIncomeTaxFiler,
+        // Sólo aplica (y es obligatoria) para concepto HONORARIOS:
+        // la tabla es progresiva por tramos de UVT, así que la
+        // captura quien liquida en vez de calcularla el sistema.
+        manualRetentionRate:
+          body.retentionRate === undefined || body.retentionRate === null
+            ? undefined
+            : Number(body.retentionRate),
+      };
+
+      const settlementResult = IndependentContractorEngine.calculate(input);
+
+      const software = await dianSoftwareFor(env, engagement.companyId);
+
+      const payerInfo: DocumentoSoportePayerInfo = {
+        nit: String(companyRow.nit || ''),
+        dv: String(companyRow.dv || '0'),
+        companyName: String(companyRow.name || ''),
+        softwareId: software.softwareId,
+        pinSoftware: software.pin,
+      };
+
+      const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
+        typeDocument:
+          (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
+          '13',
+        concept: settlementResult.retentionConcept,
+      };
+
+      const soporteConsecutive = await getNextDianConsecutive(
+        env.DB,
+        engagement.companyId,
+        'DOCUMENTO_SOPORTE'
+      );
+
+      const documentoSoporte = await DocumentoSoporteService.generate(
+        settlementResult,
+        payerInfo,
+        beneficiaryInfo,
+        soporteConsecutive
+      );
+
+      grossAmount = settlementResult.grossAmount;
+      retentionAmount = settlementResult.retentionAmount;
+      netAmount = settlementResult.netAmount;
+      calculation = settlementResult;
+      dianDocument = documentoSoporte;
+    }
+  } catch (engineError) {
+    if (
+      engineError instanceof PartTimeEmployeeEngineError ||
+      engineError instanceof IndependentContractorEngineError
+    ) {
+      return sendJson(
+        { success: false, error: engineError.message },
+        400
+      );
+    }
+
+    throw engineError;
+  }
+
+  const settlementId = `SET-${crypto.randomUUID()}`;
+  const createdAt = new Date().toISOString();
+
+  // Cliente y tarifa de cobro vigentes al liquidar (reporte de cobro por cliente).
+  const assignmentSnapshot = engagement.clientId
+    ? { clientId: engagement.clientId, position: engagement.position ?? null, billRate: engagement.billRate ?? null, hours: hoursByType }
+    : null;
+  const resultJson = JSON.stringify({ calculation, dianDocument, assignment: assignmentSnapshot });
+
+  await env.DB
+    .prepare(`
+      INSERT INTO settlements (
+        id, engagementId, periodStart, periodEnd, totalHours,
+        grossAmount, retentionAmount, netAmount, resultJson, createdAt
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+    `)
+    .bind(
+      settlementId,
+      engagementId,
+      periodStart,
+      periodEnd,
+      totalHours,
+      grossAmount,
+      retentionAmount,
+      netAmount,
+      resultJson,
+      createdAt
+    )
+    .run();
+
+  await audit(
+    env,
+    user,
+    'CREATE',
+    'settlement',
+    settlementId,
+    engagement.companyId
+  );
+
+  return sendJson(
+    {
+      success: true,
+      data: {
+        id: settlementId,
+        engagementId,
+        periodStart,
+        periodEnd,
+        totalHours,
+        grossAmount,
+        retentionAmount,
+        netAmount,
+        calculation,
+        dianDocument,
+      },
+    },
+    201
+  );
+}
+
 export default {
   async fetch(
     request: Request,
@@ -3303,6 +3655,18 @@ export default {
           );
         }
 
+        // El personal por horas se liquida por mes: una planilla que
+        // cruce de un mes a otro no entraría en ninguna liquidación.
+        if (periodStart > periodEnd || periodStart.substring(0, 7) !== periodEnd.substring(0, 7)) {
+          return sendJson(
+            {
+              success: false,
+              error: 'La planilla debe quedar dentro de un mismo mes; si la semana cruza de mes, regístrala en dos partes.',
+            },
+            400
+          );
+        }
+
         const engagement = await env.DB
           .prepare(`SELECT id, companyId FROM engagements WHERE id = ?1 AND active = 1`)
           .bind(engagementId)
@@ -3527,350 +3891,94 @@ export default {
         url.pathname === '/api/hourly/settlements/calculate' &&
         request.method === 'POST'
       ) {
-        const body = await request.json() as any;
+        return settleHourlyEngagement(env, user, await request.json() as any);
+      }
 
-        const engagementId = String(body.engagementId || '').trim();
-        const periodStart = String(body.periodStart || '').trim();
-        const periodEnd = String(body.periodEnd || '').trim();
+      /*
+       * ============================================================
+       * PERSONAL POR HORAS - LIQUIDACIÓN DEL MES POR CLIENTE
+       *
+       * El personal asignado a un cliente se paga por mes: liquida en
+       * un paso a todos los trabajadores con planilla. Quien no tiene
+       * horas registradas queda en `missingTimesheet` para pedirle al
+       * cliente que la llene; no se liquida.
+       * ============================================================
+       */
 
-        if (!engagementId || !periodStart || !periodEnd) {
-          return sendJson(
-            {
-              success: false,
-              error: 'engagementId, periodStart y periodEnd son obligatorios.',
-            },
-            400
-          );
+      const settleMonthMatch = url.pathname.match(/^\/api\/service-clients\/([^/]+)\/settle-month$/);
+
+      if (settleMonthMatch && request.method === 'POST') {
+        requireRole(user, ['TENANT_ADMIN']);
+        const clientId = decodeURIComponent(settleMonthMatch[1]);
+        const body = await request.json().catch(() => ({})) as any;
+        const month = String(body.month || '').trim();
+
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+          return sendJson({ success: false, error: 'Indica el mes en formato AAAA-MM.' }, 400);
         }
 
-        const engagementRow = await env.DB
+        const client = await env.DB
+          .prepare(`SELECT id, companyId FROM service_clients WHERE id = ?1`)
+          .bind(clientId)
+          .first<any>();
+        if (!client) {
+          return sendJson({ success: false, error: 'Cliente no encontrado.' }, 404);
+        }
+        requireCompanyAccess(user, String(client.companyId));
+
+        const [year, monthNumber] = month.split('-').map(Number);
+        const periodStart = `${month}-01`;
+        const periodEnd = `${month}-${String(new Date(Date.UTC(year, monthNumber, 0)).getUTCDate()).padStart(2, '0')}`;
+
+        const rows = await env.DB
           .prepare(`
-            SELECT
-              e.*,
-              p.firstName AS p_firstName,
-              p.firstName2 AS p_firstName2,
-              p.lastName AS p_lastName,
-              p.lastName2 AS p_lastName2,
-              p.taxId AS p_taxId,
-              p.documentType AS p_documentType,
-              sc.arlRiskClass AS client_arlRiskClass
+            SELECT e.id, e.position, p.firstName, p.lastName,
+              (SELECT COUNT(*) FROM settlements s
+                WHERE s.engagementId = e.id AND s.periodStart <= ?3 AND s.periodEnd >= ?2) AS settledCount,
+              (SELECT COALESCE(SUM(${HOUR_TYPES.map(type => `t.${HOUR_COLUMNS[type]}`).join(' + ')}), 0) FROM time_entries t
+                WHERE t.engagementId = e.id AND t.periodStart >= ?2 AND t.periodEnd <= ?3) AS monthHours
             FROM engagements e
             JOIN professionals p ON p.id = e.professionalId
-            LEFT JOIN service_clients sc ON sc.id = e.clientId
-            WHERE e.id = ?1
+            WHERE e.clientId = ?1
               AND e.active = 1
+              AND e.vinculationType IN ('PART_TIME_EMPLOYEE', 'EST_MISSION')
+              AND e.startDate <= ?3
+              AND (e.endDate IS NULL OR e.endDate = '' OR e.endDate >= ?2)
+            ORDER BY p.lastName ASC, p.firstName ASC
           `)
-          .bind(engagementId)
-          .first();
+          .bind(clientId, periodStart, periodEnd)
+          .all<any>();
 
-        if (!engagementRow) {
-          return sendJson(
-            {
-              success: false,
-              error: 'Vinculación no encontrada o inactiva.',
-            },
-            404
-          );
-        }
+        const settled: unknown[] = [];
+        const missingTimesheet: unknown[] = [];
+        const alreadySettled: unknown[] = [];
+        const errors: unknown[] = [];
 
-        const engagement = normalizeEngagement(engagementRow);
+        for (const row of rows.results || []) {
+          const worker = { engagementId: String(row.id), worker: `${row.firstName} ${row.lastName}`.trim(), position: row.position ?? null };
 
-        requireRole(user, ['TENANT_ADMIN']);
-        requireCompanyAccess(user, engagement.companyId);
+          if (Number(row.settledCount) > 0) {
+            alreadySettled.push(worker);
+            continue;
+          }
+          if (Number(row.monthHours) <= 0) {
+            missingTimesheet.push(worker);
+            continue;
+          }
 
-        // Cada liquidación gasta un consecutivo DIAN (nómina electrónica o
-        // documento soporte): un mismo tramo no se liquida dos veces.
-        const overlapping = await env.DB
-          .prepare(`
-            SELECT periodStart, periodEnd
-            FROM settlements
-            WHERE engagementId = ?1
-              AND periodStart <= ?3
-              AND periodEnd >= ?2
-            LIMIT 1
-          `)
-          .bind(engagementId, periodStart, periodEnd)
-          .first();
-
-        if (overlapping) {
-          return sendJson(
-            {
-              success: false,
-              error:
-                `Esta vinculación ya tiene una liquidación del ${(overlapping as any).periodStart} ` +
-                `al ${(overlapping as any).periodEnd}; no se puede liquidar dos veces el mismo periodo.`,
-            },
-            409
-          );
-        }
-
-        const hoursResult = await env.DB
-          .prepare(`
-            SELECT ${HOUR_TYPES.map(type => `COALESCE(SUM(${HOUR_COLUMNS[type]}), 0) AS ${type}`).join(', ')}
-            FROM time_entries
-            WHERE engagementId = ?1
-              AND periodStart >= ?2
-              AND periodEnd <= ?3
-          `)
-          .bind(engagementId, periodStart, periodEnd)
-          .first();
-
-        const hoursByType = {} as HourBreakdown;
-        for (const type of HOUR_TYPES) hoursByType[type] = Number((hoursResult as any)?.[type] ?? 0);
-        const totalHours = HOUR_TYPES.reduce((sum, type) => sum + hoursByType[type], 0);
-
-        if (totalHours <= 0) {
-          return sendJson(
-            {
-              success: false,
-              error: 'No hay horas registradas para ese periodo.',
-            },
-            400
-          );
-        }
-
-        const companyRow = await env.DB
-          .prepare(`SELECT nit, dv, name FROM companies WHERE id = ?1 AND active = 1`)
-          .bind(engagement.companyId)
-          .first();
-
-        if (!companyRow) {
-          return sendJson(
-            {
-              success: false,
-              error: 'Empresa no encontrada o inactiva.',
-            },
-            404
-          );
-        }
-
-
-        let grossAmount: number;
-        let retentionAmount: number;
-        let netAmount: number;
-        let calculation: unknown;
-        let dianDocument: unknown;
-
-        try {
-          // Trabajadores en misión (EST) y de servicios: empleados por horas.
-          if (engagement.vinculationType === 'PART_TIME_EMPLOYEE' || engagement.vinculationType === 'EST_MISSION') {
-            const input: PartTimeEmployeeInput = {
-              companyId: engagement.companyId,
-              engagementId: engagement.id,
-              professionalId: engagement.professionalId,
-              firstName: String(engagementRow.p_firstName || ''),
-              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
-              lastName: String(engagementRow.p_lastName || ''),
-              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
-              taxId: String(engagementRow.p_taxId || ''),
-              hourlyRate: engagement.hourlyRate,
-              weeklyHours: Number(engagement.weeklyHours || 0),
-              hoursWorked: totalHours,
-              hours: hoursByType,
-              // La clase de riesgo ARL es la del sitio del cliente al que fue asignado.
-              riskClass: ARL_RISK_CLASS_RATES[Number(engagementRow.client_arlRiskClass) || 1],
-            };
-
-            const payrollResult = PartTimeEmployeeEngine.calculate(input);
-            const software = await dianSoftwareFor(env, engagement.companyId);
-
-            const employerInfo = {
-              nit: String(companyRow.nit || ''),
-              dv: String(companyRow.dv || '0'),
-              companyName: String(companyRow.name || ''),
-              softwareId: software.softwareId,
-              pinSoftware: software.pin,
-            };
-
-            const nominaConsecutive = await getNextDianConsecutive(
-              env.DB,
-              engagement.companyId,
-              'NOMINA'
-            );
-
-            const xmlResult = await DianNominaXmlService.generateDSPNE(
-              payrollResult,
-              employerInfo,
-              {
-                typeDocument: '13',
-                typeContract: (['1', '2', '3', '4', '5'].includes(String(engagement.contractType))
-                  ? String(engagement.contractType)
-                  : '2') as DianEmployeeExtraInfo['typeContract'],
-                paymentMethod: '42',
-                startDate: engagement.startDate || undefined,
-              },
-              nominaConsecutive,
-              undefined,
-              undefined,
-              { periodStart, periodEnd, environment: software.environment }
-            );
-
-            grossAmount = payrollResult.grossEarnings;
-            retentionAmount = payrollResult.employeeDeductions.totalDeductions;
-            netAmount = payrollResult.netPay;
-            calculation = payrollResult;
-            dianDocument = xmlResult;
-
+          const response = await settleHourlyEngagement(env, user, { engagementId: row.id, periodStart, periodEnd });
+          const result = await response.json() as any;
+          if (response.status === 201) {
+            settled.push({ ...worker, settlementId: result.data.id, totalHours: result.data.totalHours, netAmount: result.data.netAmount });
           } else {
-            // INDEPENDENT_SERVICES
-            const period = periodStart.substring(0, 7);
-
-            const verification = await env.DB
-              .prepare(`
-                SELECT verified
-                FROM pila_verifications
-                WHERE engagementId = ?1
-                  AND period = ?2
-              `)
-              .bind(engagementId, period)
-              .first();
-
-            if (!verification || !(verification as any).verified) {
-              return sendJson(
-                {
-                  success: false,
-                  error:
-                    'Debes verificar el pago de seguridad social del ' +
-                    `contratista para el periodo ${period} antes de liquidar ` +
-                    '(deber legal del contratante, Ley 1955/2019 art. 244).',
-                },
-                400
-              );
-            }
-
-            const input: IndependentContractorInput = {
-              companyId: engagement.companyId,
-              engagementId: engagement.id,
-              professionalId: engagement.professionalId,
-              firstName: String(engagementRow.p_firstName || ''),
-              firstName2: engagementRow.p_firstName2 ? String(engagementRow.p_firstName2) : undefined,
-              lastName: String(engagementRow.p_lastName || ''),
-              lastName2: engagementRow.p_lastName2 ? String(engagementRow.p_lastName2) : undefined,
-              taxId: String(engagementRow.p_taxId || ''),
-              hourlyRate: engagement.hourlyRate,
-              hoursWorked: totalHours,
-              retentionConcept:
-                (engagement.retentionConcept as RetentionConcept) || 'SERVICIOS',
-              isIncomeTaxFiler: !!engagement.isIncomeTaxFiler,
-              // Sólo aplica (y es obligatoria) para concepto HONORARIOS:
-              // la tabla es progresiva por tramos de UVT, así que la
-              // captura quien liquida en vez de calcularla el sistema.
-              manualRetentionRate:
-                body.retentionRate === undefined || body.retentionRate === null
-                  ? undefined
-                  : Number(body.retentionRate),
-            };
-
-            const settlementResult = IndependentContractorEngine.calculate(input);
-
-            const software = await dianSoftwareFor(env, engagement.companyId);
-
-            const payerInfo: DocumentoSoportePayerInfo = {
-              nit: String(companyRow.nit || ''),
-              dv: String(companyRow.dv || '0'),
-              companyName: String(companyRow.name || ''),
-              softwareId: software.softwareId,
-              pinSoftware: software.pin,
-            };
-
-            const beneficiaryInfo: DocumentoSoporteBeneficiaryInfo = {
-              typeDocument:
-                (engagementRow.p_documentType as DocumentoSoporteBeneficiaryInfo['typeDocument']) ||
-                '13',
-              concept: settlementResult.retentionConcept,
-            };
-
-            const soporteConsecutive = await getNextDianConsecutive(
-              env.DB,
-              engagement.companyId,
-              'DOCUMENTO_SOPORTE'
-            );
-
-            const documentoSoporte = await DocumentoSoporteService.generate(
-              settlementResult,
-              payerInfo,
-              beneficiaryInfo,
-              soporteConsecutive
-            );
-
-            grossAmount = settlementResult.grossAmount;
-            retentionAmount = settlementResult.retentionAmount;
-            netAmount = settlementResult.netAmount;
-            calculation = settlementResult;
-            dianDocument = documentoSoporte;
+            errors.push({ ...worker, error: String(result.error || 'No se pudo liquidar.') });
           }
-        } catch (engineError) {
-          if (
-            engineError instanceof PartTimeEmployeeEngineError ||
-            engineError instanceof IndependentContractorEngineError
-          ) {
-            return sendJson(
-              { success: false, error: engineError.message },
-              400
-            );
-          }
-
-          throw engineError;
         }
 
-        const settlementId = `SET-${crypto.randomUUID()}`;
-        const createdAt = new Date().toISOString();
-
-        // Cliente y tarifa de cobro vigentes al liquidar (reporte de cobro por cliente).
-        const assignmentSnapshot = engagement.clientId
-          ? { clientId: engagement.clientId, position: engagement.position ?? null, billRate: engagement.billRate ?? null, hours: hoursByType }
-          : null;
-        const resultJson = JSON.stringify({ calculation, dianDocument, assignment: assignmentSnapshot });
-
-        await env.DB
-          .prepare(`
-            INSERT INTO settlements (
-              id, engagementId, periodStart, periodEnd, totalHours,
-              grossAmount, retentionAmount, netAmount, resultJson, createdAt
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-          `)
-          .bind(
-            settlementId,
-            engagementId,
-            periodStart,
-            periodEnd,
-            totalHours,
-            grossAmount,
-            retentionAmount,
-            netAmount,
-            resultJson,
-            createdAt
-          )
-          .run();
-
-        await audit(
-          env,
-          user,
-          'CREATE',
-          'settlement',
-          settlementId,
-          engagement.companyId
-        );
-
-        return sendJson(
-          {
-            success: true,
-            data: {
-              id: settlementId,
-              engagementId,
-              periodStart,
-              periodEnd,
-              totalHours,
-              grossAmount,
-              retentionAmount,
-              netAmount,
-              calculation,
-              dianDocument,
-            },
-          },
-          201
-        );
+        return sendJson({
+          success: true,
+          data: { month, periodStart, periodEnd, settled, missingTimesheet, alreadySettled, errors },
+        });
       }
 
       /*

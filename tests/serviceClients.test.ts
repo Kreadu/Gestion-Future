@@ -183,3 +183,59 @@ describe('cobro al cliente', () => {
     expect((await call(SUPER, 'GET', `/api/service-clients/${clientId}/billing?from=x&to=y`)).status).toBe(400);
   });
 });
+
+describe('liquidación del mes por cliente', () => {
+  test('liquida el mes de todos los trabajadores con planilla y avisa quién no la tiene', async () => {
+    const company = await setup();
+    db.prepare(`INSERT INTO professionals (id, firstName, lastName, taxId, profession) VALUES ('PRO-2', 'Ana', 'Paz', '1061000666', 'Mesera')`).run();
+    const c = await client(company.id);
+    const clientId = c.json.data.id;
+    const ivan = await engagement(company.id, { clientId, position: 'Camarero' });
+    const ana = await engagement(company.id, { clientId, professionalId: 'PRO-2', position: 'Mesera' });
+
+    // Dos planillas semanales de Iván en octubre; Ana no entregó la suya.
+    for (const [start, end] of [['2026-10-05', '2026-10-11'], ['2026-10-12', '2026-10-18']]) {
+      expect((await call(SUPER, 'POST', '/api/time-entries', {
+        engagementId: ivan.json.data.id, periodStart: start, periodEnd: end, hoursByType: { ordinary: 20 },
+      })).status).toBe(201);
+    }
+
+    const res = await call(SUPER, 'POST', `/api/service-clients/${clientId}/settle-month`, { month: '2026-10' });
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({ periodStart: '2026-10-01', periodEnd: '2026-10-31' });
+    expect(res.json.data.settled).toHaveLength(1);
+    expect(res.json.data.settled[0]).toMatchObject({ worker: 'Iván Lara', totalHours: 40 });
+    expect(res.json.data.missingTimesheet).toEqual([{ engagementId: ana.json.data.id, worker: 'Ana Paz', position: 'Mesera' }]);
+
+    // Cuando el cliente llena la planilla de Ana, se liquida sólo ella.
+    await call(SUPER, 'POST', '/api/time-entries', {
+      engagementId: ana.json.data.id, periodStart: '2026-10-01', periodEnd: '2026-10-31', hoursByType: { ordinary: 60 },
+    });
+    const again = await call(SUPER, 'POST', `/api/service-clients/${clientId}/settle-month`, { month: '2026-10' });
+    expect(again.json.data.settled.map((s: any) => s.worker)).toEqual(['Ana Paz']);
+    expect(again.json.data.alreadySettled.map((s: any) => s.worker)).toEqual(['Iván Lara']);
+
+    const billing = await call(SUPER, 'GET', `/api/service-clients/${clientId}/billing?from=2026-10-01&to=2026-10-31`);
+    expect(billing.json.data.lines).toHaveLength(2);
+
+    expect((await call(SUPER, 'POST', `/api/service-clients/${clientId}/settle-month`, { month: '2026-13' })).status).toBe(400);
+  });
+
+  test('otra empresa no liquida el mes de un cliente ajeno', async () => {
+    const company = await setup();
+    const other = await createCompany({ name: 'Otra', nit: '900555444' });
+    insertUser('admin@otra.co', 'TENANT_ADMIN', other.id);
+    const c = await client(company.id);
+    expect((await call('admin@otra.co', 'POST', `/api/service-clients/${c.json.data.id}/settle-month`, { month: '2026-10' })).status).toBe(403);
+  });
+
+  test('una planilla no puede cruzar de un mes a otro', async () => {
+    const company = await setup();
+    const e = await engagement(company.id);
+    const res = await call(SUPER, 'POST', '/api/time-entries', {
+      engagementId: e.json.data.id, periodStart: '2026-10-26', periodEnd: '2026-11-01', hoursByType: { ordinary: 40 },
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error).toContain('mismo mes');
+  });
+});

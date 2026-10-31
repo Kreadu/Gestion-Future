@@ -14,7 +14,7 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 33 suites, 309 pruebas (ya sin --forceExit)
+npx jest --runInBand --watchman=false              # hoy: 34 suites, 317 pruebas (ya sin --forceExit)
 npm run e2e                                         # Firefox, hoy 28/28 pasos
 ```
 
@@ -29,11 +29,15 @@ npm run e2e                                         # Firefox, hoy 28/28 pasos
 
 Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspondiente.
 
+## Estado al cierre del 30-oct-2026 (noche)
+
+Todo está fusionado en `main` y desplegado (PR #23–#26; producción: https://gestion-future-api.raipimo37.workers.dev). Secreto `DIAN_CONFIG_KEY` creado en Cloudflare. Firebase confirmado. Pendientes del dueño: certificados y habilitación DIAN de cada empresa (botón "🏛️ DIAN"), revisión del contador (#9), datos PILA de empleados, cerrar issues #8, #13, #16 y #18 (ya resueltos; el sistema de permisos no dejó cerrarlos). Cuando cargue una habilitación: enviar el set de pruebas y corregir lo que rechace la DIAN.
+
 ## Por estudiar con el dueño (NO implementar todavía)
 
 El dueño pidió estudiarlos antes; no programarlos hasta que él decida cómo deben funcionar:
 
-1. **Liquidación semanal en lote**: liquidar en un paso la semana de todos los trabajadores de un cliente (hoy es uno por uno).
+1. [x] **Liquidación en lote**: decidido el 31-oct: se paga **por mes** (el cliente paga mensual). Hecho: botón "Liquidar el mes" en Clientes → Cobro; liquida a todos los trabajadores del cliente con planilla y lista a quien no la tiene para pedírsela al cliente. Una planilla no puede cruzar de un mes a otro.
 2. [x] **XML DIAN con recargos y extras detallados**: hecho el 30-oct (HED, HEN, HRN, HEDDF, HRDDF, HENDF, HRNDF, incapacidades, licencias, vacaciones y retención). Confirmar en habilitación que la DIAN acepta los porcentajes con el dominical vigente (90 %).
 3. **PILA por semanas** para quien gana menos de un SMMLV en el mes (Decreto 2616 de 2013): definir con el contador (issue #9).
 
@@ -51,7 +55,7 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 
 ## Continuación prioritaria para la siguiente IA
 
-0. Modelo de negocio (30-oct): (a) servicio de RRHH externo: cada empresa cliente se registra como empresa con sus empleados y es su propio empleador; (b) EST: trabajadores en misión a empresas usuarias; (c) servicios (aseo, meseros) con personal propio. En (b) y (c) el empleador es la empresa del dueño, se paga **por horas, semanal**, con horas por tipo desde la planilla del cliente, y se cobra al cliente por tarifa por hora o costo + % administración. Lo pendiente de este modelo está en "Por estudiar con el dueño".
+0. Modelo de negocio (30-oct): (a) servicio de RRHH externo: cada empresa cliente se registra como empresa con sus empleados y es su propio empleador; (b) EST: trabajadores en misión a empresas usuarias; (c) servicios (aseo, meseros) con personal propio. En (b) y (c) el empleador es la empresa del dueño, se paga **por horas, mensual** (decidido el 31-oct), con horas por tipo desde la planilla del cliente, y se cobra al cliente por tarifa por hora o costo + % administración. Lo pendiente de este modelo está en "Por estudiar con el dueño".
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
 2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
