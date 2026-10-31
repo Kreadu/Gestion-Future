@@ -3165,6 +3165,8 @@ function App({ me, onSignOut }) {
               ✏️
             </button>
 
+            {selectedCompany && <DianConfigButton company={selectedCompany} />}
+
             {isSuperAdmin && (
               <button
                 className="btn btn-primary"

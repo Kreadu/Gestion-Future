@@ -275,3 +275,8 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 
 - Las rutas `/api/hourly/settlements/:id/dian/send|status|signed-xml` envían la nómina de jornada parcial (migración 0017); no se anula una liquidación que la DIAN tiene o aceptó. El documento soporte de contratistas no se envía por aquí. Panel de envío también en la liquidación por horas.
 - Verificación: Jest 31 suites / 290 pruebas; E2E Firefox 26/26.
+
+## Habilitación DIAN por empresa (2026-10-30)
+
+- El dueño pone personal en misión (su empresa es el empleador) y lleva la nómina de clientes (cada una es empleadora): cada empresa guarda su certificado, Software ID, PIN, TestSetId y ambiente (`company_dian_config`, migración 0018), cifrados con AES-GCM y el secreto `DIAN_CONFIG_KEY`. Botón "🏛️ DIAN" junto a la empresa. Se retiraron los secretos DIAN globales.
+- Verificación: Jest 31 suites / 294 pruebas (cifrado, una habilitación por NIT, acceso); E2E Firefox 27/27 cargando el certificado desde la pantalla.

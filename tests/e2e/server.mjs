@@ -91,10 +91,9 @@ db.prepare(
    VALUES ('USR-super', ?, 'SUPER_ADMIN', 1, '2026-01-01')`
 ).run(SUPER_ADMIN_EMAIL);
 
-// Certificado autofirmado de prueba (tests/fixtures) y datos de
-// habilitación ficticios. La DIAN también se simula: ninguna petición
-// sale a sus servidores.
-const dianCert = JSON.parse(readFileSync(join(root, 'tests/fixtures/dian-test-cert.json'), 'utf8'));
+// La habilitación DIAN de la empresa se carga en el recorrido (run.mjs)
+// con el certificado de prueba. La DIAN se simula: ninguna petición sale
+// a sus servidores.
 
 const env = {
   DB: createD1(db),
@@ -102,11 +101,7 @@ const env = {
   FIREBASE_PROJECT_ID: 'e2e-project',
   FIREBASE_API_KEY: 'e2e-key',
   FIREBASE_AUTH_DOMAIN: 'e2e.firebaseapp.com',
-  DIAN_CERT_P12: dianCert.p12Base64,
-  DIAN_CERT_PASSWORD: dianCert.password,
-  DIAN_SOFTWARE_ID: 'software-e2e',
-  DIAN_SOFTWARE_PIN: '13579',
-  DIAN_TEST_SET_ID: 'set-e2e',
+  DIAN_CONFIG_KEY: 'llave-e2e-de-32-caracteres-minimo!',
 };
 
 const realFetch = globalThis.fetch;

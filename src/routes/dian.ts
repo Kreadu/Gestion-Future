@@ -10,39 +10,22 @@
  * contratistas independientes llevan documento soporte, que no se envía
  * por aquí).
  *
- * Configuración del Worker (secretos): DIAN_CERT_P12 (.p12 en base64),
- * DIAN_CERT_PASSWORD, DIAN_SOFTWARE_ID, DIAN_SOFTWARE_PIN y, en
- * habilitación (DIAN_AMBIENTE distinto de '1'), DIAN_TEST_SET_ID.
+ * Cada empresa envía con su propia habilitación (certificado, Software
+ * ID, PIN, TestSetId y ambiente): ver routes/dianConfig.ts.
  */
 
 import { sendJson } from '../http';
-import { HttpError, audit, requireCompanyAccess, requireRole, type AuthEnv, type AuthUser } from '../auth/authz';
+import { HttpError, audit, requireCompanyAccess, requireRole, type AuthUser } from '../auth/authz';
 import { DianNominaXmlService, type DianEnvironment } from '../services/dianNominaXmlService';
-import { DianCertificateError, loadPkcs12, signDianXml, type DianCertificate } from '../services/dianSigner';
+import { DianCertificateError, signDianXml } from '../services/dianSigner';
+import { SecretBoxError } from '../services/secretBox';
+import { dianCertificateFor, dianSoftwareFor, type DianConfigEnv } from './dianConfig';
 import { DianServiceError, dianFileNames, getStatusZip, sendNomina, type DianResult } from '../services/dianWebService';
 import { findElements, getAttribute, parseXml } from '../services/xmlC14n';
 
-export interface DianRouteEnv extends AuthEnv {
-  DIAN_SOFTWARE_ID?: string;
-  DIAN_SOFTWARE_PIN?: string;
-  DIAN_AMBIENTE?: string;
-  DIAN_CERT_P12?: string;
-  DIAN_CERT_PASSWORD?: string;
-  DIAN_TEST_SET_ID?: string;
-}
+export type DianRouteEnv = DianConfigEnv;
 
 const NOMINA_NS = 'dian:gov:co:facturaelectronica:NominaIndividual';
-
-export function dianEnvironment(env: DianRouteEnv): DianEnvironment {
-  return env.DIAN_AMBIENTE === '1' ? '1' : '2';
-}
-
-/** Secretos que faltan para poder enviar en el ambiente configurado. */
-export function missingDianSecrets(env: DianRouteEnv): string[] {
-  const required: (keyof DianRouteEnv)[] = ['DIAN_CERT_P12', 'DIAN_CERT_PASSWORD', 'DIAN_SOFTWARE_ID', 'DIAN_SOFTWARE_PIN'];
-  if (dianEnvironment(env) === '2') required.push('DIAN_TEST_SET_ID');
-  return required.filter(name => !env[name]);
-}
 
 type SubmissionStatus = 'SENT' | 'ACCEPTED' | 'REJECTED';
 
@@ -54,23 +37,6 @@ export function submissionStatusFor(result: DianResult, environment: DianEnviron
   const status = `${result.statusDescription || ''} ${result.statusMessage || ''}`.toLowerCase();
   if (result.statusCode === '98' || status.includes('en proceso')) return 'SENT';
   return result.isValid === false || result.errors.length ? 'REJECTED' : 'SENT';
-}
-
-// Abrir el .p12 (PBKDF + 3DES en JS) tarda cientos de ms: se reutiliza
-// mientras el isolate siga vivo y no cambien el archivo o la contraseña.
-let certificateCache: { key: string; value: Promise<DianCertificate> } | null = null;
-
-function cachedCertificate(p12Base64: string, password: string): Promise<DianCertificate> {
-  const key = `${password}\u0000${p12Base64}`;
-  if (certificateCache?.key !== key) {
-    const value = loadPkcs12(p12Base64, password);
-    certificateCache = { key, value };
-    // Un fallo (contraseña errada) no se queda en caché.
-    value.catch(() => {
-      if (certificateCache?.value === value) certificateCache = null;
-    });
-  }
-  return certificateCache.value;
 }
 
 /** Liquidación con XML de nómina, venga de la nómina mensual o del personal por horas. */
@@ -143,7 +109,7 @@ async function loadSource(env: DianRouteEnv, user: AuthUser, kind: 'payroll' | '
 }
 
 function dianError(error: unknown): never {
-  if (error instanceof DianCertificateError) throw new HttpError(409, error.message);
+  if (error instanceof DianCertificateError || error instanceof SecretBoxError) throw new HttpError(409, error.message);
   if (error instanceof DianServiceError) throw new HttpError(502, error.message);
   throw error;
 }
@@ -201,7 +167,6 @@ export async function handleDianRoutes(
   const [, prefix, rawId, action] = match;
   const kind = prefix === 'payroll-settlements' ? 'payroll' : 'hourly';
   const id = decodeURIComponent(rawId);
-  const environment = dianEnvironment(env);
 
   if (action === 'signed-xml') {
     if (request.method !== 'GET') return null;
@@ -223,23 +188,29 @@ export async function handleDianRoutes(
     throw new HttpError(400, 'Primero genera el XML DIAN de esta liquidación.');
   }
 
-  const missing = missingDianSecrets(env);
-  if (missing.length) {
-    throw new HttpError(
-      409,
-      `Falta configurar en el servidor: ${missing.join(', ')}. ` +
-        'Se necesitan el certificado digital y los datos de habilitación de la DIAN.'
-    );
-  }
-
+  let software;
   let certificate;
   try {
-    certificate = await cachedCertificate(env.DIAN_CERT_P12!, env.DIAN_CERT_PASSWORD!);
+    software = await dianSoftwareFor(env, source.companyId);
+    certificate = await dianCertificateFor(env, source.companyId);
   } catch (error) {
     dianError(error);
   }
+  const environment: DianEnvironment = software.environment;
+  const missing = [
+    !software.configured && 'Software ID y PIN',
+    !certificate && 'certificado digital',
+    environment === '2' && !software.testSetId && 'TestSetId de habilitación',
+  ].filter(Boolean);
+  if (missing.length || !certificate) {
+    throw new HttpError(
+      409,
+      `Falta la habilitación DIAN de esta empresa (${missing.join(', ')}). ` +
+        'Cárgala en Empresas → DIAN.'
+    );
+  }
   if (certificate.notAfter.getTime() < Date.now()) {
-    throw new HttpError(409, 'El certificado digital está vencido.');
+    throw new HttpError(409, 'El certificado digital de esta empresa está vencido.');
   }
 
   if (action === 'status') {
@@ -271,8 +242,8 @@ export async function handleDianRoutes(
   const provider = findElements(root, NOMINA_NS, 'ProveedorXML')[0];
   const number = findElements(root, NOMINA_NS, 'NumeroSecuenciaXML')[0];
   const expectedSC = await DianNominaXmlService.calculateSoftwareSC(
-    env.DIAN_SOFTWARE_ID!,
-    env.DIAN_SOFTWARE_PIN!,
+    software.softwareId,
+    software.pin,
     String(number && getAttribute(number, 'Numero'))
   );
   const info = findElements(root, NOMINA_NS, 'InformacionGeneral')[0];
@@ -292,7 +263,7 @@ export async function handleDianRoutes(
       environment,
       signedXml,
       fileNames: dianFileNames(source.companyNit, issueYear, source.consecutive),
-      testSetId: env.DIAN_TEST_SET_ID,
+      testSetId: software.testSetId || undefined,
       certificate,
     });
   } catch (error) {
