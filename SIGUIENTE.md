@@ -14,8 +14,8 @@ Objetivo: que Gestión-Future (nómina Colombia multiempresa para outsourcing) q
 
 ```bash
 npx tsc --noEmit
-npx jest --runInBand --watchman=false              # hoy: 34 suites, 317 pruebas (ya sin --forceExit)
-npm run e2e                                         # Firefox, hoy 28/28 pasos
+npx jest --runInBand --watchman=false              # hoy: 35 suites, 322 pruebas (ya sin --forceExit)
+npm run e2e                                         # Firefox, hoy 29/29 pasos
 ```
 
 ## Pendientes, en este orden
@@ -29,7 +29,7 @@ npm run e2e                                         # Firefox, hoy 28/28 pasos
 
 Al terminar cada uno, marcarlo como hecho en esta lista y en el issue correspondiente.
 
-## Estado al cierre del 30-oct-2026 (noche)
+## Estado al 30-oct-2026 (noche)
 
 Todo está fusionado en `main` y desplegado (PR #23–#26; producción: https://gestion-future-api.raipimo37.workers.dev). Secreto `DIAN_CONFIG_KEY` creado en Cloudflare. Firebase confirmado. Pendientes del dueño: certificados y habilitación DIAN de cada empresa (botón "🏛️ DIAN"), revisión del contador (#9), datos PILA de empleados, cerrar issues #8, #13, #16 y #18 (ya resueltos; el sistema de permisos no dejó cerrarlos). Cuando cargue una habilitación: enviar el set de pruebas y corregir lo que rechace la DIAN.
 
@@ -43,10 +43,14 @@ El dueño pidió estudiarlos antes; no programarlos hasta que él decida cómo d
 
 ## Lo que sólo puede hacer el dueño
 
-GitHub Actions y despliegue ya funcionan (run 88). El dueño aún debe confirmar el acceso real con Firebase y revisar el dominio autorizado; facilitar certificado DIAN, Software ID/PIN y TestSetId para pruebas; coordinar con su contador la revisión del issue #9; y completar datos faltantes de empleados para PILA. Ver issue #17.
+Lista completa y al día en el issue #17 (actualizado el 31-oct-2026). En resumen:
 
-Estado al 30-oct-2026: tareas #1–#4 fusionadas y desplegadas en `main`; PR #22/run 88 pasó CI, incluida migración D1 0015 y Cloudflare Worker. Los commits de documentación también pasaron CI/deploy (run 90). Issue #15 cerrado. Issue #16 conserva únicamente la investigación del aviso local de Jest sobre handles abiertos; no aparece en CI.
+1. **Nómina electrónica**: certificado digital (.p12 y contraseña) y registro como software propio (Software ID, PIN, TestSetId) de cada empresa empleadora; se cargan en Empresas → "🏛️ DIAN".
+2. **Documento soporte** (contratistas): habilitación aparte (Software ID, PIN, TestSetId), resolución de numeración (número, vigencia, prefijo y rango) y responsabilidades fiscales del RUT; mismo botón, sección "Documento soporte".
+3. **Contador** (issue #9): retención, dominicales, prestaciones con incapacidad, IBC de jornada parcial, honorarios, liquidación definitiva y la PILA por semanas.
+4. **Datos para la PILA**: fecha de ingreso y códigos EPS/AFP/CCF de cada empleado, ARL de la empresa.
 
+Cuando el dueño cargue una habilitación: enviar el set de pruebas desde el dashboard y corregir lo que la DIAN rechace.
 
 ## Resultado PR #22
 
@@ -58,5 +62,6 @@ El primer E2E remoto detectó `404 GET /api/pila-verifications`; se añadió la 
 0. Modelo de negocio (30-oct): (a) servicio de RRHH externo: cada empresa cliente se registra como empresa con sus empleados y es su propio empleador; (b) EST: trabajadores en misión a empresas usuarias; (c) servicios (aseo, meseros) con personal propio. En (b) y (c) el empleador es la empresa del dueño, se paga **por horas, mensual** (decidido el 31-oct), con horas por tipo desde la planilla del cliente, y se cobra al cliente por tarifa por hora o costo + % administración. Lo pendiente de este modelo está en "Por estudiar con el dueño".
 
 1. Negocio: el dueño es una empresa de RRHH que pone personal en misión en otras empresas (él es el empleador) y además lleva la nómina de empresas clientes (cada una es su propio empleador). Cada empresa tiene su habilitación DIAN (botón "🏛️ DIAN"; secreto global sólo `DIAN_CONFIG_KEY`). Cuando el dueño cargue la de su empresa, generar y enviar el set de pruebas de habilitación desde el dashboard y corregir lo que la DIAN rechace (reglas NIE...). Puntos a confirmar con la DIAN: hash de la política de firma v2, nombre del emisor del certificado y `ClaimedRole`.
-2. El documento soporte de contratistas independientes sigue sin firma ni envío (otro tipo de documento DIAN, UBL); no hay notas de ajuste de nómina (TipoXML 103).
+2. [x] Notas de ajuste de nómina (TipoXML 103, prefijo NA, 31-oct): reemplazar con la nómina corregida o eliminar, sobre lo que la DIAN ya aceptó (`routes/dianAdjustments.ts`). Confirmar en habilitación: CUNE de la eliminación (valores 0.00 y documento 0) y que el nombre del .zip (consecutivo del documento) no choque entre la serie NE y la NA.
+3. [x] Documento soporte de contratistas independientes (31-oct): UBL 2.1 Invoice del anexo (CustomizationID 10, tipo 05, CUDS SHA-384), numeración autorizada y habilitación propias por empresa (Empresas → DIAN → "Documento soporte", migración 0022), firma y envío por las rutas de /api/hourly/settlements (SendTestSetAsync / SendBillSync). Confirmar en habilitación: TaxScheme y responsabilidades del adquiriente, unidad HUR, prefijo de archivo `ds`, ClaimedRole de la firma y dirección/municipio del contratista (hoy usa la ciudad del profesional y el código DANE de la empresa).
 3. [x] Acceso Firebase con `raipimo36@gmail.com` confirmado por el dueño (30-oct).

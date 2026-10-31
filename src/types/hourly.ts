@@ -264,26 +264,52 @@ export interface IndependentContractorResult {
 // DIAN — DOCUMENTO SOPORTE (PAGOS A NO OBLIGADOS A FACTURAR)
 // ============================================================
 
+/** Numeración autorizada por la DIAN para el documento soporte. */
+export interface DocumentoSoporteNumbering {
+  resolutionNumber: string;
+  startDate: string;
+  endDate: string;
+  prefix: string;
+  from: number;
+  to: number;
+}
+
+/** La empresa que paga (adquiriente), que es quien emite el documento soporte. */
 export interface DocumentoSoportePayerInfo {
   nit: string;
   dv: string;
   companyName: string;
   softwareId: string;
   pinSoftware: string;
+  /** 1 = producción, 2 = habilitación (pruebas). Por defecto 2. */
+  environment?: '1' | '2';
+  numbering: DocumentoSoporteNumbering;
+  /** Responsabilidades fiscales del RUT, p. ej. 'O-13;O-15'. */
+  taxLevelCode?: string;
+  address?: string | null;
+  city?: string | null;
+  department?: string | null;
+  /** Código DANE del municipio (5 dígitos). */
+  divipolaCode?: string | null;
 }
 
+/** El contratista no obligado a facturar (vendedor). */
 export interface DocumentoSoporteBeneficiaryInfo {
   typeDocument: PersonDocumentType;
   concept: RetentionConcept;
+  /** Dígito de verificación, sólo con NIT. */
+  dv?: string | null;
+  address?: string | null;
+  city?: string | null;
+  department?: string | null;
+  divipolaCode?: string | null;
+  /** Periodo de los servicios que se pagan. */
+  periodStart?: string;
+  periodEnd?: string;
 }
 
 export interface DocumentoSoporteResult {
-  /**
-   * Código único del documento, calculado con la misma estrategia
-   * (hash SHA-384 de los campos clave) que el CUNE de nómina
-   * electrónica. NO es el "CUDS" oficial de la DIAN para este tipo
-   * de documento: no se ha validado contra el anexo técnico oficial.
-   */
+  /** CUDS (SHA-384) del anexo técnico del documento soporte. */
   documentKey: string;
   consecutive: string;
   issueDate: string;

@@ -15,9 +15,11 @@
  * de personal por horas) comparten el mismo contador `'NOMINA'`. El
  * documento soporte a contratistas independientes es un tipo de
  * documento distinto y lleva su propia serie `'DOCUMENTO_SOPORTE'`.
+ * Las notas de ajuste de nómina (prefijo NA) llevan la serie
+ * `'NOMINA_AJUSTE'`.
  */
 
-export type DianDocumentType = 'NOMINA' | 'DOCUMENTO_SOPORTE';
+export type DianDocumentType = 'NOMINA' | 'NOMINA_AJUSTE' | 'DOCUMENTO_SOPORTE';
 
 export async function getNextDianConsecutive(
   db: D1Database,

@@ -121,13 +121,19 @@ function bytesToBase64(bytes: Uint8Array): string {
  * proveedor (000 = software propio) + año (2 dígitos) + consecutivo
  * en hexadecimal (8 dígitos); el .zip empieza por "z".
  */
-export function dianFileNames(nit: string, year: number, sequence: number): { xml: string; zip: string } {
+export function dianFileNames(
+  nit: string,
+  year: number,
+  sequence: number,
+  /** nie = nómina individual; nia = nota de ajuste; ds = documento soporte. */
+  prefix: 'nie' | 'nia' | 'ds' = 'nie'
+): { xml: string; zip: string } {
   const base =
     nit.replace(/\D/g, '').padStart(10, '0').slice(-10) +
     '000' +
     String(year % 100).padStart(2, '0') +
     sequence.toString(16).padStart(8, '0');
-  return { xml: `nie${base}.xml`, zip: `z${base}.zip` };
+  return { xml: `${prefix}${base}.xml`, zip: `z${base}.zip` };
 }
 
 // ------------------------------------------------------------
@@ -315,6 +321,8 @@ export interface SendNominaInput {
   testSetId?: string;
   certificate: DianCertificate;
   fetchImpl?: FetchLike;
+  /** Documento soporte: en producción va por SendBillSync, como la factura. */
+  documentoSoporte?: boolean;
 }
 
 export async function sendNomina(input: SendNominaInput): Promise<DianResult> {
@@ -328,6 +336,17 @@ export async function sendNomina(input: SendNominaInput): Promise<DianResult> {
       'SendTestSetAsync',
       `<wcf:SendTestSetAsync><wcf:fileName>${escapeXml(input.fileNames.zip)}</wcf:fileName>` +
         `<wcf:contentFile>${zip}</wcf:contentFile><wcf:testSetId>${escapeXml(input.testSetId)}</wcf:testSetId></wcf:SendTestSetAsync>`,
+      input.certificate,
+      fetchImpl
+    );
+  }
+
+  if (input.documentoSoporte) {
+    return callDian(
+      '1',
+      'SendBillSync',
+      `<wcf:SendBillSync><wcf:fileName>${escapeXml(input.fileNames.zip)}</wcf:fileName>` +
+        `<wcf:contentFile>${zip}</wcf:contentFile></wcf:SendBillSync>`,
       input.certificate,
       fetchImpl
     );
