@@ -4,6 +4,7 @@ import type {
   DianEmployeeExtraInfo,
   DianXmlGenerationResult,
 } from '../types/payroll';
+import { CONSTANTS_2026 } from '../engine/countries/constants2026';
 
 /** 1 = producción, 2 = pruebas (habilitación). */
 export type DianEnvironment = '1' | '2';
@@ -39,6 +40,154 @@ function lastDayOfMonth(isoDate: string): string {
 function daysBetweenInclusive(from: string, to: string): number {
   const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
   return Math.floor(ms / 86400000) + 1;
+}
+
+// ------------------------------------------------------------
+// DEVENGADOS Y DEDUCCIONES DETALLADOS (anexo técnico, Devengados)
+// ------------------------------------------------------------
+
+const N = CONSTANTS_2026.RECARGO_NOCTURNO_FACTOR;
+const D = CONSTANTS_2026.DOMINICAL_FESTIVO_SURCHARGE;
+const ED = CONSTANTS_2026.EXTRA_DIURNA_MULTIPLIER;
+const EN = CONSTANTS_2026.EXTRA_NOCTURNA_MULTIPLIER;
+
+/**
+ * Horas extra y recargos en el orden del esquema. `factor` es lo que se
+ * paga sobre el valor hora (los recargos sobre horas ordinarias, cuyo
+ * básico ya está en <Basico>, pagan sólo el recargo); `pct` es el
+ * Porcentaje del anexo. En domingo/festivo los recargos se suman, como
+ * en el motor (dominical 90 % desde el 1-jul-2026, Ley 2466 de 2025).
+ */
+const SURCHARGE_ITEMS = [
+  { group: 'HEDs', tag: 'HED', hours: 'extraDay', factor: ED, pct: ED - 1 },
+  { group: 'HENs', tag: 'HEN', hours: 'extraNight', factor: EN, pct: EN - 1 },
+  { group: 'HRNs', tag: 'HRN', hours: 'night', factor: N, pct: N },
+  { group: 'HEDDFs', tag: 'HEDDF', hours: 'extraSundayDay', factor: ED + D, pct: ED - 1 + D },
+  { group: 'HRDDFs', tag: 'HRDDF', hours: 'sunday', factor: D, pct: D },
+  { group: 'HENDFs', tag: 'HENDF', hours: 'extraSundayNight', factor: EN + D, pct: EN - 1 + D },
+  { group: 'HRNDFs', tag: 'HRNDF', hours: 'sundayNight', factor: N + D, pct: N + D },
+] as const;
+
+const cents = (value: number) => Math.round(value * 100) / 100;
+const money = (value: number) => cents(value).toFixed(2);
+
+export class DianXmlBalanceError extends Error {}
+
+/**
+ * Cantidad de horas de cada tipo. Las liquidaciones guardadas antes del
+ * desglose sólo traen valores: se deducen las horas del valor y la tarifa.
+ */
+function hoursOf(payroll: ColombiaPayrollResult): Record<string, number> {
+  if (payroll.hoursBreakdown) return payroll.hoursBreakdown;
+  const rate = Number(payroll.hourlyRate) || 0;
+  if (!rate) return {};
+  const back = (value: number, factor: number) => Math.round((value / (rate * factor)) * 100) / 100;
+  return {
+    extraDay: back(Number(payroll.extraDiurnaValue) || 0, ED),
+    extraNight: back(Number(payroll.extraNocturnaValue) || 0, EN),
+    night: back(Number(payroll.recargoNocturnoValue) || 0, N),
+    sunday: back(Number(payroll.dominicalFestivoValue) || 0, D),
+  };
+}
+
+function buildDevengados(payroll: ColombiaPayrollResult): string {
+  const rate = Number(payroll.hourlyRate) || 0;
+  const hours = hoursOf(payroll);
+  const lines: string[] = [];
+
+  let basico = cents(payroll.baseSalaryEarned);
+  const transporte = cents(payroll.earnedAuxTransporte);
+
+  const surcharges = SURCHARGE_ITEMS
+    .map(item => ({ ...item, qty: Number(hours[item.hours] || 0) }))
+    .filter(item => item.qty > 0)
+    .map(item => ({ ...item, pago: cents(item.qty * rate * item.factor) }));
+
+  // El valor hora va redondeado a centavos: se cuadra contra lo que pagó el motor.
+  const surchargeTarget = cents((Number(payroll.overtimeTotal) || 0) + (Number(payroll.dominicalFestivoValue) || 0));
+  const surchargeSum = surcharges.reduce((sum, item) => sum + item.pago, 0);
+  const surchargeTolerance = 1 + 0.01 * surcharges.reduce((sum, item) => sum + item.qty * item.factor, 0);
+  const surchargeGap = cents(surchargeTarget - surchargeSum);
+  if (Math.abs(surchargeGap) > surchargeTolerance || (surchargeGap !== 0 && surcharges.length === 0)) {
+    throw new DianXmlBalanceError(
+      'Los recargos y horas extra no cuadran con las horas registradas; revisa la liquidación antes de generar el XML.'
+    );
+  }
+  if (surcharges.length) {
+    const largest = surcharges.reduce((a, b) => (b.pago > a.pago ? b : a));
+    largest.pago = cents(largest.pago + surchargeGap);
+  }
+
+  const leaves = payroll.leaveDetails || [];
+  const leavesSum = cents(leaves.reduce((sum, leave) => sum + leave.value, 0));
+
+  // Lo que quede (centavos de redondeo) va al básico; más de $1 es un error.
+  const detailed = cents(basico + transporte + surchargeTarget + leavesSum);
+  const gap = cents(payroll.grossEarnings - detailed);
+  if (Math.abs(gap) > 1) {
+    throw new DianXmlBalanceError(
+      `Los devengados del XML no cuadran con el total pagado (diferencia de $${gap.toFixed(2)}): ` +
+        'hay un concepto pagado que el XML no detalla.'
+    );
+  }
+  basico = cents(basico + gap);
+
+  lines.push(`    <Basico DiasTrabajados="${payroll.daysWorked}" SueldoTrabajado="${money(basico)}"/>`);
+  if (transporte > 0) lines.push(`    <Transporte AuxilioTransporte="${money(transporte)}"/>`);
+  for (const item of surcharges) {
+    lines.push(
+      `    <${item.group}><${item.tag} Cantidad="${item.qty}" Porcentaje="${(item.pct * 100).toFixed(2)}" Pago="${money(item.pago)}"/></${item.group}>`
+    );
+  }
+
+  const leaveAttrs = (leave: (typeof leaves)[number]) =>
+    (leave.startDate ? ` FechaInicio="${leave.startDate}"` : '') +
+    (leave.endDate ? ` FechaFin="${leave.endDate}"` : '') +
+    ` Cantidad="${leave.days}"`;
+  const vacations = leaves.filter(l => l.type === 'VACATION');
+  const incapacities = leaves.filter(l => l.type === 'GENERAL_INCAPACITY' || l.type === 'WORK_INCAPACITY');
+  const licenses = leaves.filter(l => l.type === 'MATERNITY_LEAVE' || l.type === 'PATERNITY_LEAVE');
+
+  if (vacations.length) {
+    lines.push(`    <Vacaciones>${vacations.map(l => `<VacacionesComunes${leaveAttrs(l)} Pago="${money(l.value)}"/>`).join('')}</Vacaciones>`);
+  }
+  if (incapacities.length) {
+    // Tipo: 1 = común, 3 = laboral (accidente o enfermedad de origen laboral).
+    lines.push(`    <Incapacidades>${incapacities
+      .map(l => `<Incapacidad${leaveAttrs(l)} Tipo="${l.type === 'WORK_INCAPACITY' ? '3' : '1'}" Pago="${money(l.value)}"/>`)
+      .join('')}</Incapacidades>`);
+  }
+  if (licenses.length) {
+    lines.push(`    <Licencias>${licenses.map(l => `<LicenciaMP${leaveAttrs(l)} Pago="${money(l.value)}"/>`).join('')}</Licencias>`);
+  }
+
+  return lines.join('\n');
+}
+
+function buildDeducciones(payroll: ColombiaPayrollResult): string {
+  const d = payroll.employeeDeductions;
+  const fsp = cents(d.fspValue || 0);
+  const retencion = cents(d.retencionFuente || 0);
+  let salud = cents(d.health4pct);
+  const pension = cents(d.pension4pct);
+
+  const gap = cents(d.totalDeductions - (salud + pension + fsp + retencion));
+  if (Math.abs(gap) > 1) {
+    throw new DianXmlBalanceError(
+      `Las deducciones del XML no cuadran con el total descontado (diferencia de $${gap.toFixed(2)}).`
+    );
+  }
+  salud = cents(salud + gap);
+
+  const lines = [
+    `    <Salud Porcentaje="4.00" ValorBase="${money(payroll.ibcSecuritySocial)}" Deduccion="${money(salud)}"/>`,
+    `    <FondoPension Porcentaje="4.00" ValorBase="${money(payroll.ibcSecuritySocial)}" Deduccion="${money(pension)}"/>`,
+  ];
+  if (fsp > 0) {
+    lines.push(`    <FondoSP Porcentaje="${((d.fspPct || 0) * 100).toFixed(2)}" DeduccionSP="${money(fsp)}"/>`);
+  }
+  if (retencion > 0) lines.push(`    <RetencionFuente>${money(retencion)}</RetencionFuente>`);
+  return lines.join('\n');
 }
 
 export class DianNominaXmlService {
@@ -164,6 +313,9 @@ export class DianNominaXmlService {
         consecutive
       );
 
+    const devengadosXml = buildDevengados(payroll);
+    const deduccionesXml = buildDeducciones(payroll);
+
     const qrBase = ambiente === '1'
       ? 'https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey='
       : 'https://catalogo-vpfe-hab.dian.gov.co/document/searchqr?documentkey=';
@@ -285,65 +437,11 @@ export class DianNominaXmlService {
   </FechasPagos>
 
   <Devengados>
-
-    <Basico
-      DiasTrabajados="${payroll.daysWorked}"
-      SueldoTrabajado="${payroll.baseSalaryEarned.toFixed(2)}"/>
-
-    ${
-      payroll.earnedAuxTransporte > 0
-        ? `
-    <AuxilioTransporte
-      AuxilioTransporte="${payroll.earnedAuxTransporte.toFixed(2)}"/>`
-        : ''
-    }
-
-    ${
-      payroll.extraDiurnaValue > 0
-        ? `
-    <HorasExtrasDiurnas
-      Valor="${payroll.extraDiurnaValue.toFixed(2)}"/>`
-        : ''
-    }
-
-    ${
-      payroll.extraNocturnaValue > 0
-        ? `
-    <HorasExtrasNocturnas
-      Valor="${payroll.extraNocturnaValue.toFixed(2)}"/>`
-        : ''
-    }
-
-    ${
-      payroll.recargoNocturnoValue > 0
-        ? `
-    <RecargoNocturno
-      Valor="${payroll.recargoNocturnoValue.toFixed(2)}"/>`
-        : ''
-    }
-
+${devengadosXml}
   </Devengados>
 
   <Deducciones>
-
-    <Salud
-      Porcentaje="4.00"
-      ValorBase="${payroll.ibcSecuritySocial.toFixed(2)}"
-      Deduccion="${payroll.employeeDeductions.health4pct.toFixed(2)}"/>
-
-    <FondoPension
-      Porcentaje="4.00"
-      ValorBase="${payroll.ibcSecuritySocial.toFixed(2)}"
-      Deduccion="${payroll.employeeDeductions.pension4pct.toFixed(2)}"/>
-
-    ${
-      payroll.employeeDeductions.fspValue > 0
-        ? `
-    <FondoSP
-      DeduccionSP="${payroll.employeeDeductions.fspValue.toFixed(2)}"/>`
-        : ''
-    }
-
+${deduccionesXml}
   </Deducciones>
 
   <DevengadosTotal>${totalDevengado.toFixed(2)}</DevengadosTotal>

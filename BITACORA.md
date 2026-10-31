@@ -291,3 +291,9 @@ Cuarta brecha del issue #11: la tabla `audit_log` ya existía, pero no había d�
 - `service_clients` (migración 0020): clientes de la empresa con figura EST (empresa usuaria) o SERVICIO (aseo, meseros), forma de cobro (tarifa por hora o costo + % administración) y clase de riesgo ARL del sitio. Las vinculaciones por horas se asignan a un cliente (cargo y tarifa de cobro) y liquidan con su riesgo ARL.
 - EST habilitado: exige la resolución del Ministerio (`/api/companies/:id/est-authorization`), cliente EST y misión con fin ≤ 1 año (6 + 6 meses). Reporte `GET /api/service-clients/:id/billing` con costo de nómina, valor a cobrar y margen; la liquidación guarda cliente y tarifa vigentes.
 - Pantalla: botón "🤝 Clientes" en personal por horas (clientes, autorización EST, cobro con CSV); la vinculación permite elegir cliente, cargo y tarifa de cobro, y la modalidad "Trabajador en misión (EST)"; las horas se registran por tipo. Verificación: Jest 33 suites / 309 pruebas; E2E Firefox 28/28.
+
+## XML DIAN con devengados y deducciones detallados (2026-10-30)
+
+- El XML lista cada recargo y hora extra en su nodo del anexo (HED, HEN, HRN, HEDDF, HRDDF, HENDF, HRNDF con Cantidad, Porcentaje y Pago), las incapacidades, licencias y vacaciones (`leaveDetails`) y la retención en la fuente; `Transporte` en vez del nodo inexistente `AuxilioTransporte`; FondoSP con su porcentaje. Si lo detallado no suma lo pagado (más de $1), no se genera el XML (409 con explicación). Porcentajes con dominical 90 %: confirmar en habilitación.
+- Verificación: `tests/dianDevengados.test.ts`; Jest 34 suites / 314 pruebas; E2E Firefox 28/28.
+- El dueño confirmó el acceso con Firebase (raipimo36@gmail.com).

@@ -9,7 +9,7 @@ import type {
   EmployeeLeaveType,
 } from './types/payroll';
 
-import { DianNominaXmlService } from './services/dianNominaXmlService';
+import { DianNominaXmlService, DianXmlBalanceError } from './services/dianNominaXmlService';
 import { handleDianRoutes } from './routes/dian';
 import { dianSoftwareFor, handleDianConfigRoutes } from './routes/dianConfig';
 import { handleServiceClientRoutes, resolveAssignment } from './routes/serviceClients';
@@ -4249,6 +4249,11 @@ export default {
           },
           error.status
         );
+      }
+
+      // El XML de nómina no cuadra con lo pagado: se explica en vez de un 500.
+      if (error instanceof DianXmlBalanceError) {
+        return sendJson({ success: false, error: error.message }, 409);
       }
 
       console.error('Worker error:', error);
