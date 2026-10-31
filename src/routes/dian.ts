@@ -13,7 +13,7 @@
 import { sendJson } from '../http';
 import { HttpError, audit, requireCompanyAccess, requireRole, type AuthEnv, type AuthUser } from '../auth/authz';
 import { DianNominaXmlService, type DianEnvironment } from '../services/dianNominaXmlService';
-import { DianCertificateError, loadPkcs12, signDianXml } from '../services/dianSigner';
+import { DianCertificateError, loadPkcs12, signDianXml, type DianCertificate } from '../services/dianSigner';
 import { DianServiceError, dianFileNames, getStatusZip, sendNomina, type DianResult } from '../services/dianWebService';
 import { findElements, getAttribute, parseXml } from '../services/xmlC14n';
 
@@ -49,6 +49,23 @@ export function submissionStatusFor(result: DianResult, environment: DianEnviron
   const status = `${result.statusDescription || ''} ${result.statusMessage || ''}`.toLowerCase();
   if (result.statusCode === '98' || status.includes('en proceso')) return 'SENT';
   return result.isValid === false || result.errors.length ? 'REJECTED' : 'SENT';
+}
+
+// Abrir el .p12 (PBKDF + 3DES en JS) tarda cientos de ms: se reutiliza
+// mientras el isolate siga vivo y no cambien el archivo o la contraseña.
+let certificateCache: { key: string; value: Promise<DianCertificate> } | null = null;
+
+function cachedCertificate(p12Base64: string, password: string): Promise<DianCertificate> {
+  const key = `${password}\u0000${p12Base64}`;
+  if (certificateCache?.key !== key) {
+    const value = loadPkcs12(p12Base64, password);
+    certificateCache = { key, value };
+    // Un fallo (contraseña errada) no se queda en caché.
+    value.catch(() => {
+      if (certificateCache?.value === value) certificateCache = null;
+    });
+  }
+  return certificateCache.value;
 }
 
 async function loadSettlement(env: DianRouteEnv, user: AuthUser, id: string): Promise<any> {
@@ -148,7 +165,7 @@ export async function handleDianRoutes(
 
   let certificate;
   try {
-    certificate = await loadPkcs12(env.DIAN_CERT_P12!, env.DIAN_CERT_PASSWORD!);
+    certificate = await cachedCertificate(env.DIAN_CERT_P12!, env.DIAN_CERT_PASSWORD!);
   } catch (error) {
     dianError(error);
   }

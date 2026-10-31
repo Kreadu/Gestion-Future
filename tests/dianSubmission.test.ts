@@ -11,6 +11,9 @@ jest.mocked(verifyFirebaseIdToken).mockImplementation(async token => ({
   emailVerified: true,
 }));
 
+// Firmar con RSA y abrir el .p12 es lento cuando Jest corre suites en paralelo.
+jest.setTimeout(30000);
+
 const ADMIN_B = 'admin@empresa-b.com';
 
 const ZIP_KEY = `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><SendTestSetAsyncResponse xmlns="http://wcf.dian.colombia">
